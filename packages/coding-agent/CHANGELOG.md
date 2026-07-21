@@ -8,8 +8,13 @@
 - Added extension registration for complete pi-ai providers, including native authentication, model refresh, filtering, and streaming behavior.
 - Added usage accounting for tools, compaction, and branch summaries in persisted sessions, footer totals, and session statistics ([#6671](https://github.com/earendil-works/pi/pull/6671) by [@davidbrai](https://github.com/davidbrai)).
 
+### Changed
+
+- Unified list navigation across profiles, sessions, model selectors, extension dialogs, themes, thinking levels, trust, message forking, and first-time setup, with Space toggles and two-step `x` deletion for entity lists.
+
 ### Fixed
 
+- Fixed profile model refreshes to leave new models disabled and preserve manually edited model metadata.
 - Moved automatic model catalog network refresh out of startup initialization and into the running interactive and RPC modes.
 - Fixed persisted sessions being read and parsed twice when opened, reducing startup latency for large sessions ([#6793](https://github.com/earendil-works/pi/issues/6793)).
 - Fixed prompt-template defaults for all arguments (`${@:-default}` and `${ARGUMENTS:-default}`) ([#6695](https://github.com/earendil-works/pi/issues/6695)).

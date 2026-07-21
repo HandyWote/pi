@@ -125,6 +125,19 @@ export async function enrichWithModelsDev(modelIds: Array<{ id: string; name: st
 	return modelIds.map((m) => enrichOne(m.id, m.name, catalog));
 }
 
+export function mergeProfileModels(
+	existingModels: readonly UserModel[],
+	enrichedModels: readonly UserModel[],
+): UserModel[] {
+	const existingById = new Map(existingModels.map((model) => [model.id, model]));
+	return enrichedModels.map((model) => {
+		const existing = existingById.get(model.id);
+		if (!existing) return { ...model, enabled: false };
+		if (existing.metadataSource === "manual") return { ...existing };
+		return { ...model, enabled: existing.enabled };
+	});
+}
+
 export async function fetchModelsFromEndpoint(profile: Profile): Promise<Array<{ id: string; name: string }>> {
 	if (profile.protocol === "anthropic") {
 		const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;

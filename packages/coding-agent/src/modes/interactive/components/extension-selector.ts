@@ -3,11 +3,12 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { Container, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, EntityList, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+import { getEntityListTheme } from "./entity-list-theme.ts";
+import { keyHint } from "./keybinding-hints.ts";
 
 export interface ExtensionSelectorOptions {
 	tui?: TUI;
@@ -16,15 +17,12 @@ export interface ExtensionSelectorOptions {
 }
 
 export class ExtensionSelectorComponent extends Container {
-	private options: string[];
-	private selectedIndex = 0;
-	private listContainer: Container;
-	private onSelectCallback: (option: string) => void;
-	private onCancelCallback: () => void;
-	private titleText: Text;
-	private baseTitle: string;
+	private readonly list: EntityList;
+	private readonly onCancelCallback: () => void;
+	private readonly titleText: Text;
+	private readonly baseTitle: string;
 	private countdown: CountdownTimer | undefined;
-	private onToggleToolsExpanded: (() => void) | undefined;
+	private readonly onToggleToolsExpanded: (() => void) | undefined;
 
 	constructor(
 		title: string,
@@ -35,8 +33,6 @@ export class ExtensionSelectorComponent extends Container {
 	) {
 		super();
 
-		this.options = options;
-		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
 		this.baseTitle = title;
@@ -57,52 +53,38 @@ export class ExtensionSelectorComponent extends Container {
 			);
 		}
 
-		this.listContainer = new Container();
-		this.addChild(this.listContainer);
+		this.list = new EntityList(
+			options.map((option, index) => ({ id: String(index), label: option })),
+			{ theme: getEntityListTheme(), maxVisible: Math.max(5, options.length) },
+		);
+		this.list.onActivate = (item) => {
+			const option = options[Number(item.id)];
+			if (option !== undefined) onSelect(option);
+		};
+		this.list.onCancel = onCancel;
+		this.addChild(this.list);
 		this.addChild(new Spacer(1));
 		this.addChild(
 			new Text(
-				rawKeyHint("↑↓", "navigate") +
+				keyHint("tui.entity.up", "navigate") +
 					"  " +
-					keyHint("tui.select.confirm", "select") +
+					keyHint("tui.entity.activate", "select") +
 					"  " +
-					keyHint("tui.select.cancel", "cancel"),
+					keyHint("tui.entity.cancel", "cancel"),
 				1,
 				0,
 			),
 		);
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
-
-		this.updateList();
-	}
-
-	private updateList(): void {
-		this.listContainer.clear();
-		for (let i = 0; i < this.options.length; i++) {
-			const isSelected = i === this.selectedIndex;
-			const text = isSelected
-				? theme.fg("accent", "→ ") + theme.fg("accent", this.options[i])
-				: `  ${theme.fg("text", this.options[i])}`;
-			this.listContainer.addChild(new Text(text, 1, 0));
-		}
 	}
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
 		if (kb.matches(keyData, "app.tools.expand")) {
 			this.onToggleToolsExpanded?.();
-		} else if (kb.matches(keyData, "tui.select.up") || keyData === "k") {
-			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-			this.updateList();
-		} else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
-			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
-			this.updateList();
-		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
-			const selected = this.options[this.selectedIndex];
-			if (selected) this.onSelectCallback(selected);
-		} else if (kb.matches(keyData, "tui.select.cancel")) {
-			this.onCancelCallback();
+		} else {
+			this.list.handleInput(keyData);
 		}
 	}
 

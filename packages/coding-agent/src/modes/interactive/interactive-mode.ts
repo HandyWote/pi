@@ -24,6 +24,9 @@ import {
 	CombinedAutocompleteProvider,
 	type Component,
 	Container,
+	EntityList,
+	type EntityListItem,
+	type EntityListOptions,
 	fuzzyFilter,
 	getCapabilities,
 	hyperlink,
@@ -73,7 +76,7 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import { enrichWithModelsDev, fetchModelsFromEndpoint } from "../../core/model-metadata.ts";
+import { enrichWithModelsDev, fetchModelsFromEndpoint, mergeProfileModels } from "../../core/model-metadata.ts";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { Profile, ProfileProtocol, UserModel } from "../../core/profiles-types.ts";
@@ -107,6 +110,7 @@ import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
+import { getEntityListTheme } from "./components/entity-list-theme.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -182,6 +186,14 @@ type CompactionQueuedMessage = {
 };
 
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
+
+type EntityListDialogOptions = Omit<EntityListOptions, "theme" | "title">;
+
+interface EntityListDialogResult {
+	action: "activate" | "toggle" | "delete";
+	item: EntityListItem;
+	query: string;
+}
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -2098,6 +2110,60 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
+	}
+
+	private showEntityListDialog(
+		title: string,
+		items: EntityListItem[],
+		options: EntityListDialogOptions = {},
+	): Promise<EntityListDialogResult | undefined> {
+		return new Promise((resolve) => {
+			const list = new EntityList(items, { ...options, title, theme: getEntityListTheme() });
+			const dialog = new Container();
+			dialog.addChild(new DynamicBorder());
+			dialog.addChild(new Spacer(1));
+			dialog.addChild(list);
+			dialog.addChild(new Spacer(1));
+
+			const hints = [keyHint("tui.entity.up", "navigate"), keyHint("tui.entity.activate", "open")];
+			if (items.some((item) => item.toggleable === true || item.toggled !== undefined)) {
+				hints.push(keyHint("tui.entity.toggle", "toggle"));
+			}
+			if (items.some((item) => item.deletable === true)) {
+				hints.push(keyHint("tui.entity.delete", "delete"));
+			}
+			if (options.searchable) {
+				hints.push(keyHint("tui.entity.search", "search"));
+			}
+			hints.push(keyHint("tui.entity.cancel", "cancel"));
+			dialog.addChild(new Text(hints.join(theme.fg("muted", " · ")), 1, 0));
+			dialog.addChild(new Spacer(1));
+			dialog.addChild(new DynamicBorder());
+
+			let closed = false;
+			const finish = (result: EntityListDialogResult | undefined) => {
+				if (closed) return;
+				closed = true;
+				this.editorContainer.clear();
+				this.editorContainer.addChild(this.editor);
+				this.ui.setFocus(this.editor);
+				this.ui.requestRender();
+				resolve(result);
+			};
+			const finishAction = (action: EntityListDialogResult["action"], item: EntityListItem) => {
+				finish({ action, item, query: list.getQuery() });
+			};
+
+			list.onActivate = (item) => finishAction("activate", item);
+			list.onToggle = (item) => finishAction("toggle", item);
+			list.onDelete = (item) => finishAction("delete", item);
+			list.onCancel = () => finish(undefined);
+
+			this.editorContainer.clear();
+			this.editorContainer.addChild(dialog);
+			this.ui.setFocus(list);
+			this.ui.requestRender();
+		});
 	}
 
 	/**
@@ -4727,29 +4793,54 @@ export class InteractiveMode {
 	}
 
 	private async showProfileMenu(): Promise<void> {
+		let selectedId: string | undefined;
 		while (true) {
 			const profiles = this.session.modelRuntime.getProfiles();
 			const active = this.session.modelRuntime.getActiveProfile();
-			const profileOptions = new Map<string, Profile>();
-			const options = ["Create profile"];
-			for (const profile of profiles) {
+			const items: EntityListItem[] = profiles.map((profile) => {
 				const enabledCount = profile.models.filter((model) => model.enabled).length;
-				const activeMarker = active?.id === profile.id ? "* " : "";
-				const label = `${activeMarker}${profile.name} (${profile.protocol}, ${enabledCount}/${profile.models.length} enabled)`;
-				profileOptions.set(label, profile);
-				options.push(label);
-			}
-			options.push("Cancel");
+				return {
+					id: profile.id,
+					label: profile.name,
+					description: `${profile.protocol}, ${enabledCount}/${profile.models.length} enabled`,
+					toggled: active?.id === profile.id,
+					toggleable: true,
+					deletable: true,
+				};
+			});
+			items.push({ id: "__create__", label: "[ Create new profile ]" });
 
-			const selected = await this.showExtensionSelector("Profiles", options);
-			if (!selected || selected === "Cancel") return;
-			if (selected === "Create profile") {
+			const result = await this.showEntityListDialog("Profiles", items, {
+				initialSelectedId: selectedId,
+				renderToggle: (item) => (item.toggled ? theme.fg("success", "* ") : "  "),
+			});
+			if (!result) return;
+			selectedId = result.item.id;
+
+			if (result.action === "activate" && result.item.id === "__create__") {
 				await this.createProfileFromMenu();
 				continue;
 			}
 
-			const profile = profileOptions.get(selected);
-			if (profile) await this.showExistingProfileMenu(profile.id);
+			const profile = this.session.modelRuntime.getProfile(result.item.id);
+			if (!profile) continue;
+
+			try {
+				if (result.action === "toggle") {
+					const isActive = this.session.modelRuntime.getActiveProfile()?.id === profile.id;
+					this.session.modelRuntime.setActiveProfile(isActive ? undefined : profile.id);
+					await this.reloadProfileRuntime();
+					this.showStatus(isActive ? `Deactivated profile: ${profile.name}` : `Active profile: ${profile.name}`);
+				} else if (result.action === "delete") {
+					await this.session.modelRuntime.deleteProfile(profile.id);
+					await this.reloadProfileRuntime();
+					this.showStatus(`Deleted profile: ${profile.name}`);
+				} else {
+					await this.showExistingProfileMenu(profile.id);
+				}
+			} catch (error) {
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
 		}
 	}
 
@@ -4777,6 +4868,7 @@ export class InteractiveMode {
 	}
 
 	private async showExistingProfileMenu(profileId: string): Promise<void> {
+		let selectedId: string | undefined;
 		while (true) {
 			const profile = this.session.modelRuntime.getProfile(profileId);
 			if (!profile) {
@@ -4784,51 +4876,27 @@ export class InteractiveMode {
 				return;
 			}
 
-			const active = this.session.modelRuntime.getActiveProfile();
 			const enabledCount = profile.models.filter((model) => model.enabled).length;
-			const options = [
-				active?.id === profile.id ? "Active profile" : "Set active",
-				"Edit connection",
-				`Models (${enabledCount}/${profile.models.length})`,
-				"Delete profile",
-				"Back",
-			];
-			const selected = await this.showExtensionSelector(`Profile: ${profile.name}`, options);
-			if (!selected || selected === "Back") return;
+			const result = await this.showEntityListDialog(
+				`Profile: ${profile.name}`,
+				[
+					{ id: "connection", label: "Edit connection" },
+					{
+						id: "models",
+						label: "Models",
+						description: `${enabledCount}/${profile.models.length} enabled`,
+					},
+				],
+				{ initialSelectedId: selectedId },
+			);
+			if (!result) return;
+			selectedId = result.item.id;
+			if (result.action !== "activate") continue;
 
-			if (selected === "Set active") {
-				this.session.modelRuntime.setActiveProfile(profile.id);
-				await this.session.modelRuntime.reloadConfig();
-				await this.updateAvailableProviderCount();
-				this.footer.invalidate();
-				this.showStatus(`Active profile: ${profile.name}`);
-				continue;
-			}
-
-			if (selected === "Edit connection") {
+			if (result.item.id === "connection") {
 				await this.showProfileEditor(profile, false);
-				continue;
-			}
-
-			if (selected.startsWith("Models ")) {
-				const models = await this.showProfileModelsEditor(profile.models);
-				await this.saveProfile({ ...profile, models, updatedAt: new Date().toISOString() }, false);
-				continue;
-			}
-
-			if (selected === "Delete profile") {
-				const confirmed = await this.showExtensionConfirm(
-					"Delete profile",
-					`Delete "${profile.name}"? This cannot be undone.`,
-				);
-				if (confirmed) {
-					await this.session.modelRuntime.deleteProfile(profile.id);
-					await this.session.modelRuntime.reloadConfig();
-					await this.updateAvailableProviderCount();
-					this.footer.invalidate();
-					this.showStatus(`Deleted profile: ${profile.name}`);
-					return;
-				}
+			} else if (result.item.id === "models") {
+				await this.showProfileModelsEditor(profile.id);
 			}
 		}
 	}
@@ -4838,28 +4906,28 @@ export class InteractiveMode {
 			...profile,
 			models: profile.models.map((model) => ({ ...model })),
 		};
+		let selectedId: string | undefined;
 
 		while (true) {
-			const enabledCount = draft.models.filter((model) => model.enabled).length;
-			const keyLabel = draft.apiKey ? "configured" : "empty";
-			const options = [
-				`Protocol: ${draft.protocol}`,
-				`Name: ${draft.name}`,
-				`URL: ${draft.baseUrl}`,
-				`Key: ${keyLabel}`,
-				"Test",
-				`Models (${enabledCount}/${draft.models.length})`,
-				"Save",
-				isNew ? "Cancel" : "Back",
-			];
-
-			const selected = await this.showExtensionSelector(
+			const result = await this.showEntityListDialog(
 				isNew ? "Create profile" : `Edit profile: ${draft.name}`,
-				options,
+				[
+					{ id: "protocol", label: "Protocol", description: draft.protocol },
+					{ id: "name", label: "Name", description: draft.name },
+					{ id: "url", label: "URL", description: draft.baseUrl },
+					{ id: "key", label: "Key", description: draft.apiKey ? "configured" : "empty" },
+					{ id: "test", label: "Test connection" },
+					{ id: "save", label: "Save" },
+				],
+				{
+					initialSelectedId: selectedId,
+				},
 			);
-			if (!selected || selected === "Cancel" || selected === "Back") return;
+			if (!result) return;
+			selectedId = result.item.id;
+			if (result.action !== "activate") continue;
 
-			if (selected.startsWith("Protocol: ")) {
+			if (result.item.id === "protocol") {
 				const protocolSelection = await this.showExtensionSelector("Select profile format", [
 					"Anthropic format",
 					"OpenAI format",
@@ -4873,35 +4941,30 @@ export class InteractiveMode {
 				continue;
 			}
 
-			if (selected.startsWith("Name: ")) {
+			if (result.item.id === "name") {
 				const value = await this.showExtensionEditor("Profile name", draft.name);
 				if (value !== undefined) draft = { ...draft, name: value.trim() || draft.name };
 				continue;
 			}
 
-			if (selected.startsWith("URL: ")) {
+			if (result.item.id === "url") {
 				const value = await this.showExtensionEditor("Base URL", draft.baseUrl);
 				if (value !== undefined) draft = { ...draft, baseUrl: value.trim() };
 				continue;
 			}
 
-			if (selected.startsWith("Key: ")) {
+			if (result.item.id === "key") {
 				const value = await this.showExtensionEditor("API key", draft.apiKey);
 				if (value !== undefined) draft = { ...draft, apiKey: value.trim() };
 				continue;
 			}
 
-			if (selected === "Test") {
+			if (result.item.id === "test") {
 				draft = await this.testProfileAndLoadModels(draft);
 				continue;
 			}
 
-			if (selected.startsWith("Models ")) {
-				draft = { ...draft, models: await this.showProfileModelsEditor(draft.models) };
-				continue;
-			}
-
-			if (selected === "Save") {
+			if (result.item.id === "save") {
 				if (!draft.baseUrl.trim()) {
 					this.showError("Profile URL is required.");
 					continue;
@@ -4930,11 +4993,7 @@ export class InteractiveMode {
 		try {
 			const fetchedModels = await fetchModelsFromEndpoint(profile);
 			const enrichedModels = await enrichWithModelsDev(fetchedModels);
-			const existingById = new Map(profile.models.map((model) => [model.id, model]));
-			const models = enrichedModels.map((model) => {
-				const existing = existingById.get(model.id);
-				return existing ? { ...model, enabled: existing.enabled } : model;
-			});
+			const models = mergeProfileModels(profile.models, enrichedModels);
 			this.showStatus(`Loaded ${models.length} models for ${profile.name}.`);
 			return { ...profile, models, updatedAt: new Date().toISOString() };
 		} catch (error) {
@@ -4943,80 +5002,101 @@ export class InteractiveMode {
 		}
 	}
 
-	private async showProfileModelsEditor(models: readonly UserModel[]): Promise<UserModel[]> {
-		let draft = models.map((model) => ({ ...model }));
-
+	private async showProfileModelsEditor(profileId: string): Promise<void> {
+		let selectedId: string | undefined;
+		let query = "";
 		while (true) {
-			if (draft.length === 0) {
-				const selected = await this.showExtensionSelector("Models", ["No models loaded. Run Test first.", "Back"]);
-				if (!selected || selected === "Back" || selected === "No models loaded. Run Test first.") return draft;
-			}
-
-			const modelOptions = new Map<string, UserModel>();
-			const options: string[] = [];
-			for (const model of draft) {
-				const label = `${model.enabled ? "[x]" : "[ ]"} ${model.id} — ${model.name}`;
-				modelOptions.set(label, model);
-				options.push(label);
-			}
-			options.push("Back");
-
-			const selected = await this.showExtensionSelector("Models", options);
-			if (!selected || selected === "Back") return draft;
-
-			const model = modelOptions.get(selected);
+			const profile = this.session.modelRuntime.getProfile(profileId);
+			if (!profile) return;
+			const items = profile.models.map((model) => ({
+				id: model.id,
+				label: model.id,
+				description: model.name,
+				toggled: model.enabled,
+				toggleable: true,
+			}));
+			const result = await this.showEntityListDialog(`Models: ${profile.name}`, items, {
+				searchable: true,
+				initialSelectedId: selectedId,
+				initialQuery: query,
+				getSearchText: (item) => `${item.id} ${item.label} ${item.description ?? ""}`,
+				renderEmpty: () => [theme.fg("muted", "  No models loaded. Run Test first.")],
+			});
+			if (!result) return;
+			selectedId = result.item.id;
+			query = result.query;
+			const model = profile.models.find((entry) => entry.id === result.item.id);
 			if (!model) continue;
-			const updated = await this.showProfileModelEditor(model);
-			draft = draft.map((entry) => (entry.id === updated.id ? updated : entry));
+
+			if (result.action === "toggle") {
+				const models = profile.models.map((entry) =>
+					entry.id === model.id ? { ...entry, enabled: !entry.enabled } : entry,
+				);
+				await this.saveProfile({ ...profile, models }, false);
+			} else if (result.action === "activate") {
+				const updated = await this.showProfileModelEditor(model);
+				const models = profile.models.map((entry) => (entry.id === updated.id ? updated : entry));
+				await this.saveProfile({ ...profile, models }, false);
+			}
 		}
 	}
 
 	private async showProfileModelEditor(model: UserModel): Promise<UserModel> {
 		let draft = { ...model };
+		let selectedId: string | undefined;
 
 		while (true) {
-			const options = [
-				draft.enabled ? "Disable model" : "Enable model",
-				`Name: ${draft.name}`,
-				`Context window: ${draft.contextWindow}`,
-				`Max tokens: ${draft.maxTokens}`,
-				`Reasoning: ${draft.supportsReasoning ? "yes" : "no"}`,
-				`Vision: ${draft.supportsVision ? "yes" : "no"}`,
-				`Tool calls: ${draft.supportsToolCall ? "yes" : "no"}`,
-				"Back",
-			];
-			const selected = await this.showExtensionSelector(`Model: ${draft.id}`, options);
-			if (!selected || selected === "Back") return draft;
+			const result = await this.showEntityListDialog(
+				`Model: ${draft.id}`,
+				[
+					{ id: "enabled", label: "Enabled", toggled: draft.enabled, toggleable: true },
+					{ id: "name", label: "Name", description: draft.name },
+					{ id: "context", label: "Context window", description: String(draft.contextWindow) },
+					{ id: "maxTokens", label: "Max tokens", description: String(draft.maxTokens) },
+					{
+						id: "reasoning",
+						label: "Reasoning",
+						toggled: draft.supportsReasoning,
+						toggleable: true,
+					},
+					{ id: "vision", label: "Vision", toggled: draft.supportsVision, toggleable: true },
+					{ id: "toolCall", label: "Tool calls", toggled: draft.supportsToolCall, toggleable: true },
+				],
+				{
+					initialSelectedId: selectedId,
+				},
+			);
+			if (!result) return draft;
+			selectedId = result.item.id;
 
-			if (selected === "Disable model" || selected === "Enable model") {
-				draft = { ...draft, enabled: !draft.enabled };
+			if (result.action === "toggle") {
+				if (result.item.id === "enabled") draft = { ...draft, enabled: !draft.enabled };
+				if (result.item.id === "reasoning") {
+					draft = { ...draft, supportsReasoning: !draft.supportsReasoning, metadataSource: "manual" };
+				}
+				if (result.item.id === "vision") {
+					draft = { ...draft, supportsVision: !draft.supportsVision, metadataSource: "manual" };
+				}
+				if (result.item.id === "toolCall") {
+					draft = { ...draft, supportsToolCall: !draft.supportsToolCall, metadataSource: "manual" };
+				}
 				continue;
 			}
-			if (selected.startsWith("Name: ")) {
+			if (result.action !== "activate") continue;
+
+			if (result.item.id === "name") {
 				const value = await this.showExtensionEditor("Model name", draft.name);
 				if (value !== undefined) draft = { ...draft, name: value.trim() || draft.name, metadataSource: "manual" };
 				continue;
 			}
-			if (selected.startsWith("Context window: ")) {
+			if (result.item.id === "context") {
 				const value = await this.promptPositiveInteger("Context window", draft.contextWindow);
 				if (value !== undefined) draft = { ...draft, contextWindow: value, metadataSource: "manual" };
 				continue;
 			}
-			if (selected.startsWith("Max tokens: ")) {
+			if (result.item.id === "maxTokens") {
 				const value = await this.promptPositiveInteger("Max tokens", draft.maxTokens);
 				if (value !== undefined) draft = { ...draft, maxTokens: value, metadataSource: "manual" };
-				continue;
-			}
-			if (selected.startsWith("Reasoning: ")) {
-				draft = { ...draft, supportsReasoning: !draft.supportsReasoning, metadataSource: "manual" };
-				continue;
-			}
-			if (selected.startsWith("Vision: ")) {
-				draft = { ...draft, supportsVision: !draft.supportsVision, metadataSource: "manual" };
-				continue;
-			}
-			if (selected.startsWith("Tool calls: ")) {
-				draft = { ...draft, supportsToolCall: !draft.supportsToolCall, metadataSource: "manual" };
 			}
 		}
 	}
@@ -5042,15 +5122,18 @@ export class InteractiveMode {
 		};
 		if (isNew) {
 			await this.session.modelRuntime.createProfile(next);
-			this.session.modelRuntime.setActiveProfile(next.id);
 		} else {
 			await this.session.modelRuntime.updateProfile(next.id, () => next);
 		}
+		await this.reloadProfileRuntime();
+		this.showStatus(`${isNew ? "Created" : "Saved"} profile: ${next.name}`);
+	}
+
+	private async reloadProfileRuntime(): Promise<void> {
 		await this.session.modelRuntime.reloadConfig();
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
-		this.showStatus(`${isNew ? "Created" : "Saved"} profile: ${next.name}`);
 	}
 
 	// =========================================================================

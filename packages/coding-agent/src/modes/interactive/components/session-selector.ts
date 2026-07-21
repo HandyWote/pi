@@ -5,6 +5,7 @@ import * as os from "node:os";
 import {
 	type Component,
 	Container,
+	EntityList,
 	type Focusable,
 	getKeybindings,
 	Input,
@@ -18,6 +19,7 @@ import type { SessionInfo, SessionListProgress } from "../../../core/session-man
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
+import { getEntityListTheme } from "./entity-list-theme.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 
@@ -156,7 +158,7 @@ class SessionSelectorHeader implements Component {
 		let hintLine1: string;
 		let hintLine2: string;
 		if (this.confirmingDeletePath !== null) {
-			const confirmHint = `Delete session? ${keyHint("tui.select.confirm", "confirm")} · ${keyHint("tui.select.cancel", "cancel")}`;
+			const confirmHint = `Delete session? ${keyHint("tui.entity.delete", "confirm")} · any other key cancels`;
 			hintLine1 = theme.fg("error", truncateToWidth(confirmHint, width, "…"));
 			hintLine2 = "";
 		} else if (this.statusMessage) {
@@ -167,11 +169,15 @@ class SessionSelectorHeader implements Component {
 			const pathState = this.showPath ? "(on)" : "(off)";
 			const sep = theme.fg("muted", " · ");
 			const hint1 =
-				keyHint("tui.input.tab", "scope") + sep + theme.fg("muted", 're:<pattern> regex · "phrase" exact');
+				keyHint("tui.input.tab", "scope") +
+				sep +
+				keyHint("tui.entity.search", "search") +
+				sep +
+				theme.fg("muted", 're:<pattern> regex · "phrase" exact');
 			const hint2Parts = [
 				keyHint("app.session.toggleSort", "sort"),
 				keyHint("app.session.toggleNamedFilter", "named"),
-				keyHint("app.session.delete", "delete"),
+				keyHint("tui.entity.delete", "delete"),
 				keyHint("app.session.togglePath", `path ${pathState}`),
 			];
 			if (this.showRenameHint) {
@@ -282,20 +288,17 @@ function flattenSessionTree(roots: SessionTreeNode[]): FlatSessionNode[] {
  */
 class SessionList implements Component, Focusable {
 	public getSelectedSessionPath(): string | undefined {
-		const selected = this.filteredSessions[this.selectedIndex];
-		return selected?.session.path;
+		return this.entityList.getSelectedItem()?.id;
 	}
 	private allSessions: SessionInfo[] = [];
 	private filteredSessions: FlatSessionNode[] = [];
-	private selectedIndex: number = 0;
-	private searchInput: Input;
+	private readonly entityList: EntityList;
 	private showCwd = false;
 	private sortMode: SortMode = "threaded";
 	private nameFilter: NameFilter = "all";
-	private keybindings: KeybindingsManager;
+	private readonly keybindings: KeybindingsManager;
 	private showPath = false;
-	private confirmingDeletePath: string | null = null;
-	private currentSessionCanonicalPath?: string;
+	private readonly currentSessionCanonicalPath?: string;
 	public onSelect?: (sessionPath: string) => void;
 	public onCancel?: () => void;
 	public onExit: () => void = () => {};
@@ -307,16 +310,15 @@ class SessionList implements Component, Focusable {
 	public onDeleteSession?: (sessionPath: string) => Promise<void>;
 	public onRenameSession?: (sessionPath: string) => void;
 	public onError?: (message: string) => void;
-	private maxVisible: number = 10; // Max sessions visible (one line each)
-
-	// Focusable implementation - propagate to searchInput for IME cursor positioning
 	private _focused = false;
+
 	get focused(): boolean {
 		return this._focused;
 	}
+
 	set focused(value: boolean) {
 		this._focused = value;
-		this.searchInput.focused = value;
+		this.entityList.focused = value;
 	}
 
 	constructor(
@@ -328,40 +330,56 @@ class SessionList implements Component, Focusable {
 		currentSessionFilePath?: string,
 	) {
 		this.allSessions = sessions;
-		this.filteredSessions = [];
-		this.searchInput = new Input();
 		this.showCwd = showCwd;
 		this.sortMode = sortMode;
 		this.nameFilter = nameFilter;
 		this.keybindings = keybindings;
 		this.currentSessionCanonicalPath = canonicalizePath(currentSessionFilePath);
 		this.filterSessions("");
-
-		// Handle Enter in search input - select current item
-		this.searchInput.onSubmit = () => {
-			if (this.filteredSessions[this.selectedIndex]) {
-				const selected = this.filteredSessions[this.selectedIndex];
-				if (this.onSelect) {
-					this.onSelect(selected.session.path);
-				}
-			}
+		this.entityList = new EntityList(this.buildEntityItems(), {
+			theme: getEntityListTheme(),
+			maxVisible: 10,
+			searchable: true,
+			filterItems: (items) => [...items],
+			renderItem: ({ item, selected, confirmingDelete, width }) => {
+				const node = this.filteredSessions.find((candidate) => candidate.session.path === item.id);
+				return node ? this.renderSessionItem(node, selected, confirmingDelete, width) : "";
+			},
+			renderEmpty: (width) => [theme.fg("muted", truncateToWidth(this.getEmptyMessage(), width, "…"))],
+		});
+		this.entityList.onActivate = (item) => this.onSelect?.(item.id);
+		this.entityList.onCancel = () => this.onCancel?.();
+		this.entityList.onDelete = (item) => {
+			void this.onDeleteSession?.(item.id);
+		};
+		this.entityList.onDeleteConfirmationChange = (item) => {
+			this.onDeleteConfirmationChange?.(item?.id ?? null);
+		};
+		this.entityList.onSearchChange = (query) => {
+			this.filterSessions(query);
+			this.entityList.setItems(this.buildEntityItems());
 		};
 	}
 
 	setSortMode(sortMode: SortMode): void {
 		this.sortMode = sortMode;
-		this.filterSessions(this.searchInput.getValue());
+		this.refreshItems();
 	}
 
 	setNameFilter(nameFilter: NameFilter): void {
 		this.nameFilter = nameFilter;
-		this.filterSessions(this.searchInput.getValue());
+		this.refreshItems();
 	}
 
 	setSessions(sessions: SessionInfo[], showCwd: boolean): void {
 		this.allSessions = sessions;
 		this.showCwd = showCwd;
-		this.filterSessions(this.searchInput.getValue());
+		this.refreshItems();
+	}
+
+	private refreshItems(): void {
+		this.filterSessions(this.entityList.getQuery());
+		this.entityList.setItems(this.buildEntityItems());
 	}
 
 	private filterSessions(query: string): void {
@@ -383,25 +401,26 @@ class SessionList implements Component, Focusable {
 				ancestorContinues: [],
 			}));
 		}
-		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
 	}
 
-	private setConfirmingDeletePath(path: string | null): void {
-		this.confirmingDeletePath = path;
-		this.onDeleteConfirmationChange?.(path);
+	private buildEntityItems() {
+		return this.filteredSessions.map((node) => ({
+			id: node.session.path,
+			label: node.session.name ?? node.session.firstMessage,
+			deletable: true,
+		}));
 	}
 
 	private startDeleteConfirmationForSelectedSession(): void {
-		const selected = this.filteredSessions[this.selectedIndex];
-		if (!selected) return;
+		const selectedPath = this.getSelectedSessionPath();
+		if (!selectedPath) return;
 
-		// Prevent deleting current session
-		if (this.isCurrentSessionPath(selected.session.path)) {
+		if (this.isCurrentSessionPath(selectedPath)) {
 			this.onError?.("Cannot delete the currently active session");
 			return;
 		}
 
-		this.setConfirmingDeletePath(selected.session.path);
+		this.entityList.requestDeleteSelected();
 	}
 
 	private isCurrentSessionPath(path: string): boolean {
@@ -409,114 +428,51 @@ class SessionList implements Component, Focusable {
 		return (canonicalizePath(path) ?? path) === this.currentSessionCanonicalPath;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.entityList.invalidate();
+	}
 
 	render(width: number): string[] {
-		const lines: string[] = [];
+		return this.entityList.render(width);
+	}
 
-		// Render search input
-		lines.push(...this.searchInput.render(width));
-		lines.push(""); // Blank line after search
-
-		if (this.filteredSessions.length === 0) {
-			let emptyMessage: string;
-			if (this.nameFilter === "named") {
-				const toggleKey = keyText("app.session.toggleNamedFilter");
-				if (this.showCwd) {
-					emptyMessage = `  No named sessions found. Press ${toggleKey} to show all.`;
-				} else {
-					emptyMessage = `  No named sessions in current folder. Press ${toggleKey} to show all, or Tab to view all.`;
-				}
-			} else if (this.showCwd) {
-				// "All" scope - no sessions anywhere that match filter
-				emptyMessage = "  No sessions found";
-			} else {
-				// "Current folder" scope - hint to try "all"
-				emptyMessage = "  No sessions in current folder. Press Tab to view all.";
-			}
-			lines.push(theme.fg("muted", truncateToWidth(emptyMessage, width, "…")));
-			return lines;
+	private getEmptyMessage(): string {
+		if (this.nameFilter === "named") {
+			const toggleKey = keyText("app.session.toggleNamedFilter");
+			return this.showCwd
+				? `  No named sessions found. Press ${toggleKey} to show all.`
+				: `  No named sessions in current folder. Press ${toggleKey} to show all, or Tab to view all.`;
 		}
+		return this.showCwd ? "  No sessions found" : "  No sessions in current folder. Press Tab to view all.";
+	}
 
-		// Calculate visible range with scrolling
-		const startIndex = Math.max(
-			0,
-			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredSessions.length - this.maxVisible),
-		);
-		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredSessions.length);
-
-		// Render visible sessions (one line each with tree structure)
-		for (let i = startIndex; i < endIndex; i++) {
-			const node = this.filteredSessions[i]!;
-			const session = node.session;
-			const isSelected = i === this.selectedIndex;
-			const isConfirmingDelete = session.path === this.confirmingDeletePath;
-			const isCurrent = this.isCurrentSessionPath(session.path);
-
-			// Build tree prefix
-			const prefix = this.buildTreePrefix(node);
-
-			// Session display text (name or first message)
-			const hasName = !!session.name;
-			const displayText = session.name ?? session.firstMessage;
-			const normalizedMessage = displayText.replace(/[\x00-\x1f\x7f]/g, " ").trim();
-
-			// Right side: message count and age
-			const age = formatSessionDate(session.modified);
-			const msgCount = String(session.messageCount);
-			let rightPart = `${msgCount} ${age}`;
-			if (this.showCwd && session.cwd) {
-				rightPart = `${shortenPath(session.cwd)} ${rightPart}`;
-			}
-			if (this.showPath) {
-				rightPart = `${shortenPath(session.path)} ${rightPart}`;
-			}
-
-			// Cursor
-			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
-
-			// Calculate available width for message
-			const prefixWidth = visibleWidth(prefix);
-			const rightWidth = visibleWidth(rightPart) + 2; // +2 for spacing
-			const availableForMsg = width - 2 - prefixWidth - rightWidth; // -2 for cursor
-
-			const truncatedMsg = truncateToWidth(normalizedMessage, Math.max(10, availableForMsg), "…");
-
-			// Style message
-			let messageColor: "error" | "warning" | "accent" | null = null;
-			if (isConfirmingDelete) {
-				messageColor = "error";
-			} else if (isCurrent) {
-				messageColor = "accent";
-			} else if (hasName) {
-				messageColor = "warning";
-			}
-			let styledMsg = messageColor ? theme.fg(messageColor, truncatedMsg) : truncatedMsg;
-			if (isSelected) {
-				styledMsg = theme.bold(styledMsg);
-			}
-
-			// Build line
-			const leftPart = cursor + theme.fg("dim", prefix) + styledMsg;
-			const leftWidth = visibleWidth(leftPart);
-			const spacing = Math.max(1, width - leftWidth - visibleWidth(rightPart));
-			const styledRight = theme.fg(isConfirmingDelete ? "error" : "dim", rightPart);
-
-			let line = leftPart + " ".repeat(spacing) + styledRight;
-			if (isSelected) {
-				line = theme.bg("selectedBg", line);
-			}
-			lines.push(truncateToWidth(line, width));
-		}
-
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < this.filteredSessions.length) {
-			const scrollText = `  (${this.selectedIndex + 1}/${this.filteredSessions.length})`;
-			const scrollInfo = theme.fg("muted", truncateToWidth(scrollText, width, ""));
-			lines.push(scrollInfo);
-		}
-
-		return lines;
+	private renderSessionItem(
+		node: FlatSessionNode,
+		isSelected: boolean,
+		isConfirmingDelete: boolean,
+		width: number,
+	): string {
+		const session = node.session;
+		const isCurrent = this.isCurrentSessionPath(session.path);
+		const prefix = this.buildTreePrefix(node);
+		const hasName = !!session.name;
+		const displayText = session.name ?? session.firstMessage;
+		const normalizedMessage = displayText.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+		const age = formatSessionDate(session.modified);
+		let rightPart = `${session.messageCount} ${age}`;
+		if (this.showCwd && session.cwd) rightPart = `${shortenPath(session.cwd)} ${rightPart}`;
+		if (this.showPath) rightPart = `${shortenPath(session.path)} ${rightPart}`;
+		const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
+		const availableForMessage = width - 2 - visibleWidth(prefix) - visibleWidth(rightPart) - 2;
+		const truncatedMessage = truncateToWidth(normalizedMessage, Math.max(10, availableForMessage), "…");
+		const messageColor = isConfirmingDelete ? "error" : isCurrent ? "accent" : hasName ? "warning" : undefined;
+		let styledMessage = messageColor ? theme.fg(messageColor, truncatedMessage) : truncatedMessage;
+		if (isSelected) styledMessage = theme.bold(styledMessage);
+		const leftPart = cursor + theme.fg("dim", prefix) + styledMessage;
+		const spacing = Math.max(1, width - visibleWidth(leftPart) - visibleWidth(rightPart));
+		const styledRight = theme.fg(isConfirmingDelete ? "error" : "dim", rightPart);
+		const line = leftPart + " ".repeat(spacing) + styledRight;
+		return truncateToWidth(isSelected ? theme.bg("selectedBg", line) : line, width);
 	}
 
 	private buildTreePrefix(node: FlatSessionNode): string {
@@ -532,19 +488,8 @@ class SessionList implements Component, Focusable {
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
 
-		// Handle delete confirmation state first - intercept all keys
-		if (this.confirmingDeletePath !== null) {
-			if (kb.matches(keyData, "tui.select.confirm")) {
-				const pathToDelete = this.confirmingDeletePath;
-				this.setConfirmingDeletePath(null);
-				void this.onDeleteSession?.(pathToDelete);
-				return;
-			}
-			if (kb.matches(keyData, "tui.select.cancel")) {
-				this.setConfirmingDeletePath(null);
-				return;
-			}
-			// Ignore all other keys while confirming
+		if (this.entityList.isSearching() || this.entityList.isConfirmingDelete()) {
+			this.entityList.handleInput(keyData);
 			return;
 		}
 
@@ -572,68 +517,26 @@ class SessionList implements Component, Focusable {
 			return;
 		}
 
-		// Ctrl+D: initiate delete confirmation (useful on terminals that don't distinguish Ctrl+Backspace from Backspace)
-		if (kb.matches(keyData, "app.session.delete")) {
+		if (kb.matches(keyData, "tui.entity.delete")) {
 			this.startDeleteConfirmationForSelectedSession();
 			return;
 		}
 
 		// Rename selected session
 		if (kb.matches(keyData, "app.session.rename")) {
-			const selected = this.filteredSessions[this.selectedIndex];
-			if (selected) {
-				this.onRenameSession?.(selected.session.path);
-			}
+			const selectedPath = this.getSelectedSessionPath();
+			if (selectedPath) this.onRenameSession?.(selectedPath);
 			return;
 		}
 
 		// Ctrl+Backspace: non-invasive convenience alias for delete
 		// Only triggers deletion when the query is empty; otherwise it is forwarded to the input
 		if (kb.matches(keyData, "app.session.deleteNoninvasive")) {
-			if (this.searchInput.getValue().length > 0) {
-				this.searchInput.handleInput(keyData);
-				this.filterSessions(this.searchInput.getValue());
-				return;
-			}
-
 			this.startDeleteConfirmationForSelectedSession();
 			return;
 		}
 
-		// Up arrow
-		if (kb.matches(keyData, "tui.select.up")) {
-			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-		}
-		// Down arrow
-		else if (kb.matches(keyData, "tui.select.down")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1);
-		}
-		// Page up - jump up by maxVisible items
-		else if (kb.matches(keyData, "tui.select.pageUp")) {
-			this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisible);
-		}
-		// Page down - jump down by maxVisible items
-		else if (kb.matches(keyData, "tui.select.pageDown")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible);
-		}
-		// Enter
-		else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selected = this.filteredSessions[this.selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.session.path);
-			}
-		}
-		// Escape - cancel
-		else if (kb.matches(keyData, "tui.select.cancel")) {
-			if (this.onCancel) {
-				this.onCancel();
-			}
-		}
-		// Pass everything else to search input
-		else {
-			this.searchInput.handleInput(keyData);
-			this.filterSessions(this.searchInput.getValue());
-		}
+		this.entityList.handleInput(keyData);
 	}
 }
 

@@ -1,6 +1,7 @@
-import { type Component, Container, getKeybindings, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, EntityList, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
+import { getEntityListTheme } from "./entity-list-theme.ts";
 
 interface UserMessageItem {
 	id: string; // Entry ID in the session
@@ -9,106 +10,10 @@ interface UserMessageItem {
 }
 
 /**
- * Custom user message list component with selection
- */
-class UserMessageList implements Component {
-	private messages: UserMessageItem[] = [];
-	private selectedIndex: number = 0;
-	public onSelect?: (entryId: string) => void;
-	public onCancel?: () => void;
-	private maxVisible: number = 10; // Max messages visible
-
-	constructor(messages: UserMessageItem[], initialSelectedId?: string) {
-		// Store messages in chronological order (oldest to newest)
-		this.messages = messages;
-		const initialIndex = initialSelectedId ? messages.findIndex((message) => message.id === initialSelectedId) : -1;
-		// Start with selected message if provided, else default to the most recent
-		this.selectedIndex = initialIndex >= 0 ? initialIndex : Math.max(0, messages.length - 1);
-	}
-
-	invalidate(): void {
-		// No cached state to invalidate currently
-	}
-
-	render(width: number): string[] {
-		const lines: string[] = [];
-
-		if (this.messages.length === 0) {
-			lines.push(theme.fg("muted", "  No user messages found"));
-			return lines;
-		}
-
-		// Calculate visible range with scrolling
-		const startIndex = Math.max(
-			0,
-			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.messages.length - this.maxVisible),
-		);
-		const endIndex = Math.min(startIndex + this.maxVisible, this.messages.length);
-
-		// Render visible messages (2 lines per message + blank line)
-		for (let i = startIndex; i < endIndex; i++) {
-			const message = this.messages[i];
-			const isSelected = i === this.selectedIndex;
-
-			// Normalize message to single line
-			const normalizedMessage = message.text.replace(/\n/g, " ").trim();
-
-			// First line: cursor + message
-			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
-			const maxMsgWidth = width - 2; // Account for cursor (2 chars)
-			const truncatedMsg = truncateToWidth(normalizedMessage, maxMsgWidth);
-			const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
-
-			lines.push(messageLine);
-
-			// Second line: metadata (position in history)
-			const position = i + 1;
-			const metadata = `  Message ${position} of ${this.messages.length}`;
-			const metadataLine = theme.fg("muted", metadata);
-			lines.push(metadataLine);
-			lines.push(""); // Blank line between messages
-		}
-
-		// Add scroll indicator if needed
-		if (startIndex > 0 || endIndex < this.messages.length) {
-			const scrollInfo = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.messages.length})`);
-			lines.push(scrollInfo);
-		}
-
-		return lines;
-	}
-
-	handleInput(keyData: string): void {
-		const kb = getKeybindings();
-		// Up arrow - go to previous (older) message, wrap to bottom when at top
-		if (kb.matches(keyData, "tui.select.up")) {
-			this.selectedIndex = this.selectedIndex === 0 ? this.messages.length - 1 : this.selectedIndex - 1;
-		}
-		// Down arrow - go to next (newer) message, wrap to top when at bottom
-		else if (kb.matches(keyData, "tui.select.down")) {
-			this.selectedIndex = this.selectedIndex === this.messages.length - 1 ? 0 : this.selectedIndex + 1;
-		}
-		// Enter - select message and branch
-		else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selected = this.messages[this.selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.id);
-			}
-		}
-		// Escape - cancel
-		else if (kb.matches(keyData, "tui.select.cancel")) {
-			if (this.onCancel) {
-				this.onCancel();
-			}
-		}
-	}
-}
-
-/**
  * Component that renders a user message selector for branching
  */
 export class UserMessageSelectorComponent extends Container {
-	private messageList: UserMessageList;
+	private readonly messageList: EntityList;
 
 	constructor(
 		messages: UserMessageItem[],
@@ -132,9 +37,28 @@ export class UserMessageSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
-		// Create message list
-		this.messageList = new UserMessageList(messages, initialSelectedId);
-		this.messageList.onSelect = onSelect;
+		const messageById = new Map(messages.map((message) => [message.id, message]));
+		const positionById = new Map(messages.map((message, index) => [message.id, index + 1]));
+		this.messageList = new EntityList(
+			messages.map((message) => ({ id: message.id, label: message.text })),
+			{
+				theme: getEntityListTheme(),
+				maxVisible: 10,
+				initialSelectedId: initialSelectedId ?? messages[messages.length - 1]?.id,
+				renderEmpty: () => [theme.fg("muted", "  No user messages found")],
+				renderItem: ({ item, selected, width }) => {
+					const message = messageById.get(item.id);
+					if (!message) return [];
+					const normalizedMessage = message.text.replace(/\n/g, " ").trim();
+					const cursor = selected ? theme.fg("accent", "› ") : "  ";
+					const truncatedMessage = truncateToWidth(normalizedMessage, Math.max(1, width - 2));
+					const messageLine = cursor + (selected ? theme.bold(truncatedMessage) : truncatedMessage);
+					const metadata = theme.fg("muted", `  Message ${positionById.get(item.id) ?? 0} of ${messages.length}`);
+					return [messageLine, metadata, ""];
+				},
+			},
+		);
+		this.messageList.onActivate = (item) => onSelect(item.id);
 		this.messageList.onCancel = onCancel;
 
 		this.addChild(this.messageList);
@@ -149,7 +73,7 @@ export class UserMessageSelectorComponent extends Container {
 		}
 	}
 
-	getMessageList(): UserMessageList {
+	getMessageList(): EntityList {
 		return this.messageList;
 	}
 }

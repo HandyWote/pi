@@ -62,6 +62,35 @@ describe("issue #3217 scoped model ordering", () => {
 		expect(changes).toEqual([[orderedIds[1], orderedIds[0], orderedIds[2]]]);
 	});
 
+	it("uses Space for toggle and leaves Enter for activation", async () => {
+		const harness = await createHarness({
+			models: [
+				{ id: "faux-1", name: "One", reasoning: true },
+				{ id: "faux-2", name: "Two", reasoning: true },
+			],
+		});
+		harnesses.push(harness);
+
+		const orderedIds = harness.models.map((model) => `${model.provider}/${model.id}`);
+		const changes: Array<string[] | null> = [];
+		const selector = new ScopedModelsSelectorComponent(
+			{ allModels: [...harness.models], enabledModelIds: orderedIds },
+			{
+				onChange: (enabledModelIds) => {
+					changes.push(enabledModelIds);
+				},
+				onPersist: () => {},
+				onCancel: () => {},
+			},
+		);
+
+		selector.handleInput("\r");
+		expect(changes).toEqual([]);
+
+		selector.handleInput(" ");
+		expect(changes).toEqual([[orderedIds[1]]]);
+	});
+
 	it("preserves scoped model order in the /model scoped tab", async () => {
 		const harness = await createHarness({
 			models: [

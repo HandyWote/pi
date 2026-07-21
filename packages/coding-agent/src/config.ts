@@ -535,6 +535,11 @@ export function getAuthPath(): string {
 	return join(getAgentDir(), "auth.json");
 }
 
+/** Get path to profiles.json */
+export function getProfilesPath(): string {
+	return join(getAgentDir(), "profiles.json");
+}
+
 /** Get path to settings.json */
 export function getSettingsPath(): string {
 	return join(getAgentDir(), "settings.json");

@@ -1,11 +1,10 @@
 import { type Api, createProvider, type Model, type Provider } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import type { Profile, UserModel } from "./profiles-types.ts";
 
 function userModelToModel(userModel: UserModel, profile: Profile): Model<Api> {
-	const api: Api = profile.protocol === "anthropic" ? "anthropic-messages" : "openai-responses";
+	const api: Api = profile.protocol === "anthropic" ? "anthropic-messages" : "openai-completions";
 
 	return {
 		id: userModel.id,
@@ -41,7 +40,7 @@ export function createProfileProvider(profile: Profile): Provider {
 		});
 	}
 
-	return createProvider<"openai-responses" | "openai-completions">({
+	return createProvider<"openai-completions">({
 		id: profile.id,
 		name: profile.name,
 		baseUrl: profile.baseUrl,
@@ -51,9 +50,8 @@ export function createProfileProvider(profile: Profile): Provider {
 				resolve: async () => ({ auth: { apiKey: profile.apiKey } }),
 			},
 		},
-		models: models as Model<"openai-responses" | "openai-completions">[],
+		models: models as Model<"openai-completions">[],
 		api: {
-			"openai-responses": openAIResponsesApi(),
 			"openai-completions": openAICompletionsApi(),
 		},
 	});

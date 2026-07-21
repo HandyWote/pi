@@ -8,6 +8,7 @@
 - Technical prose only, be direct
 - When the user asks a question, answer it first before making edits or running implementation commands.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
+- when use superpowers to write specs and plans dont use /superpowers just put them all in docs/plans.
 
 ## Code Quality
 

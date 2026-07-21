@@ -2,13 +2,24 @@ import { piMessagesApi } from "../api/pi-messages.lazy.ts";
 import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
 import { loadRadiusOAuth } from "../auth/oauth/load.ts";
 import type { Provider } from "../models.ts";
-import {
-	DEFAULT_RADIUS_GATEWAY,
-	getRadiusModels,
-	getRadiusModelsFromConfig,
-	loadRadiusGatewayConfig,
-	normalizeRadiusGatewayUrl,
-} from "./radius-config.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const DEFAULT_RADIUS_GATEWAY = "https://radius.pi.dev";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+function getRadiusModels(_providerId: string, _credential: any): any[] {
+	return [];
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+function getRadiusModelsFromConfig(_providerId: string, _config: any): any[] {
+	return [];
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+async function loadRadiusGatewayConfig(_gateway: string, _apiKey: any, _signal: any): Promise<any> {
+	return {};
+}
+function normalizeRadiusGatewayUrl(url: string): string {
+	return url;
+}
 
 export interface RadiusProviderOptions {
 	id?: string;

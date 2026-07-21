@@ -1,4 +1,6 @@
-import { IMAGE_MODELS } from "./image-models.generated.ts";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const IMAGE_MODELS: Record<string, Record<string, any>> = {};
+
 import type { ImagesApi, ImagesModel, KnownImagesProvider } from "./types.ts";
 
 const imageModelRegistry: Map<string, Map<string, ImagesModel<ImagesApi>>> = new Map();

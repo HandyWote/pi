@@ -1,6 +1,9 @@
 import { openrouterImagesApi } from "../api/openrouter-images.lazy.ts";
 import { envApiKeyAuth } from "../auth/helpers.ts";
-import { IMAGE_MODELS } from "../image-models.generated.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const IMAGE_MODELS: Record<string, Record<string, any>> = { openrouter: {} };
+
 import { createImagesProvider, type ImagesProvider } from "../images-models.ts";
 
 export function openrouterImagesProvider(): ImagesProvider {

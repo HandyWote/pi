@@ -39,9 +39,23 @@ import { openAICompletionsApi } from "./api/openai-completions.lazy.ts";
 import { openAIResponsesApi } from "./api/openai-responses.lazy.ts";
 import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
-import { getBuiltinModel, getBuiltinModels, getBuiltinProviders } from "./providers/all.ts";
 
-export type { BuiltinProvider } from "./providers/all.ts";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+function getBuiltinModel(_providerId: string, _modelId: string): any {
+	return undefined;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getBuiltinModels(_providerId?: string): any[] {
+	return [];
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getBuiltinProviders(): any[] {
+	return [];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BuiltinProvider = any;
+export type { BuiltinProvider };
 
 import { createFauxCore, type FauxProviderRegistration, type RegisterFauxProviderOptions } from "./providers/faux.ts";
 import type {

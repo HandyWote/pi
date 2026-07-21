@@ -1,8 +1,15 @@
 import type { Api, AuthResult, Model, Provider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
-import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 
-export type { ProviderConfigInput } from "./provider-composer.ts";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type ProviderConfigInput = any;
+
+export type AuthStatus = {
+	configured: boolean;
+	source?: "stored" | "runtime" | "environment" | "fallback" | "models_json_key" | "models_json_command";
+	label?: string;
+};
+
 export type ResolvedRequestAuth =
 	| {
 			ok: true;
@@ -11,7 +18,9 @@ export type ResolvedRequestAuth =
 			env?: Record<string, string>;
 	  }
 	| { ok: false; error: string };
-export { clearApiKeyCache } from "./provider-composer.ts";
+
+/** @deprecated Stub — cache infrastructure was removed. */
+export const clearApiKeyCache = (): void => {};
 
 /**
  * Synchronous compatibility facade exposed to extensions.

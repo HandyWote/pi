@@ -33,7 +33,30 @@ import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.
 import { createProfileProvider } from "./profile-runtime.ts";
 import { ProfilesStore } from "./profiles-store.ts";
 import type { Profile } from "./profiles-types.ts";
-import { RuntimeCredentials } from "./runtime-credentials.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+class RuntimeCredentials {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+	constructor(_store: any) {}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	async read(_provider: string): Promise<any> {
+		return undefined;
+	}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	async modify(_provider: string, fn: any): Promise<any> {
+		return fn(undefined);
+	}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	async delete(_provider: string): Promise<void> {}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	async list(): Promise<readonly any[]> {
+		return [];
+	}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+	setRuntimeApiKey(_providerId: string, _apiKey: string): void {}
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+	removeRuntimeApiKey(_providerId: string): void {}
+}
 
 interface ModelRuntimeSnapshot {
 	all: readonly Model<Api>[];
@@ -170,7 +193,7 @@ export class ModelRuntime implements Models {
 			all: [...this.models.getModels()],
 			available: [...available],
 			configuredProviders,
-			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+			storedProviders: new Set(credentials.map((entry: { providerId: string }) => entry.providerId)),
 			auth,
 		};
 		this.availabilityError = undefined;

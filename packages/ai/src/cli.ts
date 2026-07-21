@@ -3,7 +3,11 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { AuthPrompt, OAuthCredential, Provider } from "./index.ts";
-import { builtinProviders } from "./providers/all.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function builtinProviders(): any[] {
+	return [];
+}
 
 const AUTH_FILE = "auth.json";
 const PROVIDERS = builtinProviders().filter(

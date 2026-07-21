@@ -27,12 +27,18 @@ function formatTokenCount(count: number): string {
  * List available models, optionally filtered by search pattern
  */
 export async function listModels(modelRuntime: ModelRuntime, searchPattern?: string): Promise<void> {
+	const activeProfile = modelRuntime.getActiveProfile();
+	if (!activeProfile) {
+		console.log("No active profile. Use /profile to create one.");
+		return;
+	}
+
 	const loadError = modelRuntime.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
-	const models = [...(await modelRuntime.getAvailable())];
+	const models = [...modelRuntime.getModels(activeProfile.id)];
 
 	if (models.length === 0) {
 		console.log(formatNoModelsAvailableMessage());
@@ -50,16 +56,11 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 		return;
 	}
 
-	// Sort by provider, then by model id
-	filteredModels.sort((a, b) => {
-		const providerCmp = a.provider.localeCompare(b.provider);
-		if (providerCmp !== 0) return providerCmp;
-		return a.id.localeCompare(b.id);
-	});
+	// Sort by model id
+	filteredModels.sort((a, b) => a.id.localeCompare(b.id));
 
 	// Calculate column widths
 	const rows = filteredModels.map((m) => ({
-		provider: m.provider,
 		model: m.id,
 		context: formatTokenCount(m.contextWindow),
 		maxOut: formatTokenCount(m.maxTokens),
@@ -68,7 +69,6 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 	}));
 
 	const headers = {
-		provider: "provider",
 		model: "model",
 		context: "context",
 		maxOut: "max-out",
@@ -77,7 +77,6 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 	};
 
 	const widths = {
-		provider: Math.max(headers.provider.length, ...rows.map((r) => r.provider.length)),
 		model: Math.max(headers.model.length, ...rows.map((r) => r.model.length)),
 		context: Math.max(headers.context.length, ...rows.map((r) => r.context.length)),
 		maxOut: Math.max(headers.maxOut.length, ...rows.map((r) => r.maxOut.length)),
@@ -87,7 +86,6 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 
 	// Print header
 	const headerLine = [
-		headers.provider.padEnd(widths.provider),
 		headers.model.padEnd(widths.model),
 		headers.context.padEnd(widths.context),
 		headers.maxOut.padEnd(widths.maxOut),
@@ -99,7 +97,6 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 	// Print rows
 	for (const row of rows) {
 		const line = [
-			row.provider.padEnd(widths.provider),
 			row.model.padEnd(widths.model),
 			row.context.padEnd(widths.context),
 			row.maxOut.padEnd(widths.maxOut),

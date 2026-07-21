@@ -130,7 +130,7 @@ export async function fetchModelsFromEndpoint(profile: Profile): Promise<Array<{
 		return [];
 	}
 
-	const url = profile.baseUrl.replace(/\/+$/, "") + "/models";
+	const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;
 	const response = await fetch(url, {
 		headers: {
 			Authorization: `Bearer ${profile.apiKey}`,

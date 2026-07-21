@@ -20,6 +20,15 @@ describe("KeybindingsManager", () => {
 		assert.deepStrictEqual(keybindings.getKeys("tui.select.confirm"), ["enter"]);
 	});
 
+	it("provides configurable entity list actions", () => {
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
+
+		assert.deepStrictEqual(keybindings.getKeys("tui.entity.up"), ["up", "k"]);
+		assert.deepStrictEqual(keybindings.getKeys("tui.entity.down"), ["down", "j"]);
+		assert.deepStrictEqual(keybindings.getKeys("tui.entity.toggle"), ["space"]);
+		assert.deepStrictEqual(keybindings.getKeys("tui.entity.delete"), ["x"]);
+	});
+
 	it("does not evict cursor bindings when another action reuses the same key", () => {
 		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
 			"tui.select.up": ["up", "ctrl+p"],

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a configurable `EntityList` component with non-wrapping navigation, toggle and delete actions, delete confirmation, and explicit fuzzy search.
+
 ### Fixed
 
 - Fixed editor paste registry corruption when deleting paste markers: undo now restores the paste registry together with the text, and marker renumbering shifts registry entries in ascending id order, so submitted prompts no longer contain literal `[paste #N ...]` markers or the wrong paste's content ([#6844](https://github.com/earendil-works/pi/issues/6844)).

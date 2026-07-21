@@ -8,7 +8,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -45,9 +44,7 @@ import {
 	APP_TITLE,
 	CONFIG_DIR_NAME,
 	getAgentDir,
-	getAuthPath,
 	getDebugLogPath,
-	getDocsPath,
 	getShareViewerUrl,
 	VERSION,
 } from "../../config.ts";
@@ -76,8 +73,10 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import { enrichWithModelsDev, fetchModelsFromEndpoint } from "../../core/model-metadata.ts";
+import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import type { Profile, ProfileProtocol, UserModel } from "../../core/profiles-types.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -114,61 +113,6 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AuthSelectorProvider = any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function formatAuthSelectorProviderType(authType: any): string {
-	return String(authType);
-}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-class OAuthSelectorComponent {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	constructor(..._args: any[]) {}
-	render(_width: number): string[] {
-		return [];
-	}
-	invalidate(): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	handleKey(_key: any): boolean {
-		return false;
-	}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	handleInput(_data: any): void {}
-	focus(): void {}
-}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-class LoginDialogComponent {
-	signal: AbortSignal | undefined;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	constructor(..._args: any[]) {}
-	render(_width: number): string[] {
-		return [];
-	}
-	invalidate(): void {}
-	handleInput(_data: string): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showInfo(_message: string, _links?: any[], _isAmbient?: boolean): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showDetails(_lines: any[]): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showAuth(_url: string, _instructions?: string): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showDeviceCode(_event: any): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showWaiting(_message: string): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	showProgress(_message: string): void {}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	async showPrompt(_message: string, _placeholder?: string): Promise<string> {
-		return "";
-	}
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	async showManualInput(_message: string): Promise<string> {
-		return "";
-	}
-}
-
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -260,10 +204,6 @@ function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
 	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
 }
 
-function isUnknownModel(model: Model<any> | undefined): boolean {
-	return !!model && model.provider === "unknown" && model.id === "unknown" && model.api === "unknown";
-}
-
 function quoteIfNeeded(value: string): string {
 	if (value.length > 0 && !/[^a-zA-Z0-9_\-./~:@]/.test(value)) {
 		return value;
@@ -286,18 +226,6 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 	return args.join(" ");
 }
 
-function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
-	return providerId in defaultModelPerProvider;
-}
-
-type LoginProviderCompletionOption = {
-	id: string;
-	name: string;
-	authTypes: AuthSelectorProvider["authType"][];
-};
-
-const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
-
 function createFuzzyAutocompleteItems<T>(
 	items: T[],
 	prefix: string,
@@ -307,43 +235,6 @@ function createFuzzyAutocompleteItems<T>(
 	const filtered = fuzzyFilter(items, prefix, getSearchText);
 	if (filtered.length === 0) return null;
 	return filtered.map(toAutocompleteItem);
-}
-
-function getLoginProviderCompletionOptions(
-	providerOptions: readonly AuthSelectorProvider[],
-): LoginProviderCompletionOption[] {
-	const byId = new Map<string, LoginProviderCompletionOption>();
-	for (const provider of providerOptions) {
-		const existing = byId.get(provider.id);
-		if (existing) {
-			if (!existing.authTypes.includes(provider.authType)) {
-				existing.authTypes.push(provider.authType);
-				existing.authTypes.sort(
-					(a: string, b: string) =>
-						(AUTH_TYPE_ORDER as Record<string, number>)[a] - (AUTH_TYPE_ORDER as Record<string, number>)[b],
-				);
-			}
-			continue;
-		}
-		byId.set(provider.id, {
-			id: provider.id,
-			name: provider.name,
-			authTypes: [provider.authType],
-		});
-	}
-	return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function getLoginProviderSearchText(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes
-		.map((authType) => `${authType} ${formatAuthSelectorProviderType(authType)}`)
-		.join(" ");
-	return `${provider.id} ${provider.name} ${authTypes}`;
-}
-
-function formatLoginProviderCompletionDescription(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes.map(formatAuthSelectorProviderType).join("/");
-	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
 /**
@@ -619,18 +510,6 @@ export class InteractiveMode {
 					value: item.label,
 					label: item.id,
 					description: item.provider,
-				}));
-			};
-		}
-
-		const loginCommand = slashCommands.find((command) => command.name === "login");
-		if (loginCommand) {
-			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const providers = getLoginProviderCompletionOptions(this.getLoginProviderOptions());
-				return createFuzzyAutocompleteItems(providers, prefix, getLoginProviderSearchText, (provider) => ({
-					value: provider.id,
-					label: provider.id,
-					description: formatLoginProviderCompletionDescription(provider),
 				}));
 			};
 		}
@@ -2753,27 +2632,9 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/login" || text.startsWith("/login ")) {
-				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
+			if (text === "/profile") {
 				this.editor.setText("");
-				await this.handleLoginCommand(providerRef);
-				return;
-			}
-			if (text === "/logout") {
-				this.showOAuthSelector("logout");
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/profile" || text.startsWith("/profile ")) {
-				const profileName = text.startsWith("/profile ") ? text.slice(9).trim() : undefined;
-				this.editor.setText("");
-				await this.handleProfileCommand(profileName);
-				return;
-			}
-			if (text === "/profile-delete" || text.startsWith("/profile-delete ")) {
-				const profileName = text.startsWith("/profile-delete ") ? text.slice(16).trim() : undefined;
-				this.editor.setText("");
-				await this.handleProfileDeleteCommand(profileName);
+				await this.handleProfileCommand();
 				return;
 			}
 			if (text === "/new") {
@@ -4520,7 +4381,7 @@ export class InteractiveMode {
 			if (profiles.length > 0) {
 				this.showStatus("No models available from profiles. Use /profile to manage profiles.");
 			} else {
-				this.showStatus("No models available. Use /login to add providers or create a profiles.json file.");
+				this.showStatus("No models available. Use /profile to create a profile.");
 			}
 			return;
 		}
@@ -4861,554 +4722,335 @@ export class InteractiveMode {
 		}
 	}
 
-	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
-		const options: AuthSelectorProvider[] = [];
-		for (const provider of this.session.modelRuntime.getProviders()) {
-			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
-			const status = authStatus.configured
-				? {
-						type: this.session.modelRuntime.isUsingOAuth(provider.id) ? ("oauth" as const) : ("api_key" as const),
-						source: authStatus.label ?? authStatus.source,
-					}
-				: undefined;
-			if ((!authType || authType === "oauth") && provider.auth.oauth) {
-				options.push({
-					id: provider.id,
-					name: provider.name,
-					authType: "oauth",
-					method: provider.auth.oauth,
-					status,
-				});
+	private async handleProfileCommand(): Promise<void> {
+		await this.showProfileMenu();
+	}
+
+	private async showProfileMenu(): Promise<void> {
+		while (true) {
+			const profiles = this.session.modelRuntime.getProfiles();
+			const active = this.session.modelRuntime.getActiveProfile();
+			const profileOptions = new Map<string, Profile>();
+			const options = ["Create profile"];
+			for (const profile of profiles) {
+				const enabledCount = profile.models.filter((model) => model.enabled).length;
+				const activeMarker = active?.id === profile.id ? "* " : "";
+				const label = `${activeMarker}${profile.name} (${profile.protocol}, ${enabledCount}/${profile.models.length} enabled)`;
+				profileOptions.set(label, profile);
+				options.push(label);
 			}
-			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
-				options.push({
-					id: provider.id,
-					name: provider.name,
-					authType: "api_key",
-					method: provider.auth.apiKey,
-					status,
-				});
+			options.push("Cancel");
+
+			const selected = await this.showExtensionSelector("Profiles", options);
+			if (!selected || selected === "Cancel") return;
+			if (selected === "Create profile") {
+				await this.createProfileFromMenu();
+				continue;
 			}
+
+			const profile = profileOptions.get(selected);
+			if (profile) await this.showExistingProfileMenu(profile.id);
 		}
-		return options.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials())
-			.map(({ providerId, type }) => ({
-				id: providerId,
-				name: this.session.modelRuntime.getProvider(providerId)?.name ?? providerId,
-				authType: type,
-				status: { type, source: "stored credential" },
-			}))
-			.sort((a, b) => a.name.localeCompare(b.name));
+	private async createProfileFromMenu(): Promise<void> {
+		const protocolSelection = await this.showExtensionSelector("Select profile format", [
+			"Anthropic format",
+			"OpenAI format",
+		]);
+		if (!protocolSelection) return;
+
+		const protocol: ProfileProtocol = protocolSelection === "Anthropic format" ? "anthropic" : "openai";
+		const now = new Date().toISOString();
+		const draft: Profile = {
+			id: crypto.randomUUID(),
+			name: protocol === "anthropic" ? "Anthropic profile" : "OpenAI profile",
+			protocol,
+			baseUrl: protocol === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1",
+			apiKey: "",
+			models: [],
+			createdAt: now,
+			updatedAt: now,
+		};
+
+		await this.showProfileEditor(draft, true);
 	}
 
-	private findLoginProviderOptions(providerRef: string): AuthSelectorProvider[] {
-		const normalizedProviderRef = providerRef.trim().toLowerCase();
-		if (!normalizedProviderRef) {
-			return [];
-		}
-
-		return this.getLoginProviderOptions().filter(
-			(provider) =>
-				provider.id.toLowerCase() === normalizedProviderRef ||
-				provider.name.toLowerCase() === normalizedProviderRef,
-		);
-	}
-
-	private async handleLoginCommand(providerRef?: string): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-		if (!providerRef) {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		const providerOptions = this.findLoginProviderOptions(providerRef);
-		if (providerOptions.length === 1) {
-			await this.startProviderLogin(providerOptions[0]!);
-			return;
-		}
-
-		if (providerOptions.length > 1) {
-			const providerIds = new Set(providerOptions.map((provider) => provider.id));
-			if (providerIds.size === 1) {
-				this.showLoginAuthTypeSelector(providerOptions);
+	private async showExistingProfileMenu(profileId: string): Promise<void> {
+		while (true) {
+			const profile = this.session.modelRuntime.getProfile(profileId);
+			if (!profile) {
+				this.showStatus("Profile no longer exists.");
 				return;
 			}
-		}
 
-		this.showLoginProviderSelector(undefined, providerRef);
-	}
+			const active = this.session.modelRuntime.getActiveProfile();
+			const enabledCount = profile.models.filter((model) => model.enabled).length;
+			const options = [
+				active?.id === profile.id ? "Active profile" : "Set active",
+				"Edit connection",
+				`Models (${enabledCount}/${profile.models.length})`,
+				"Delete profile",
+				"Back",
+			];
+			const selected = await this.showExtensionSelector(`Profile: ${profile.name}`, options);
+			if (!selected || selected === "Back") return;
 
-	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
-		if (providerOption.authType === "oauth") {
-			await this.showLoginDialog(providerOption.id, providerOption.name);
-		} else if (providerOption.method?.login) {
-			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
-		} else {
-			this.showAmbientAuthDialog(providerOption);
-		}
-	}
-
-	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
-		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
-		const oauthLoginLabel =
-			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
-		const subscriptionLabel = oauthLoginLabel ?? "Sign in with an account";
-		const apiKeyLabel = "Sign in with an API key";
-		const availableAuthTypes = providerOptions
-			? new Set(providerOptions.map((provider) => provider.authType))
-			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
-		const options: string[] = [];
-		if (availableAuthTypes.has("oauth")) {
-			options.push(subscriptionLabel);
-		}
-		if (availableAuthTypes.has("api_key")) {
-			options.push(apiKeyLabel);
-		}
-
-		if (options.length === 0) {
-			this.showStatus("No login methods available.");
-			return;
-		}
-
-		if (providerOptions && options.length === 1) {
-			const providerOption = providerOptions[0];
-			if (providerOption) {
-				void this.startProviderLogin(providerOption);
-			}
-			return;
-		}
-
-		const title = providerOptions?.[0]
-			? `Select authentication method for ${providerOptions[0].name}:`
-			: "Select authentication method:";
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				title,
-				options,
-				(option) => {
-					done();
-					const authType = option === subscriptionLabel ? "oauth" : "api_key";
-					if (providerOptions) {
-						const providerOption = providerOptions.find((provider) => provider.authType === authType);
-						if (providerOption) {
-							void this.startProviderLogin(providerOption);
-						}
-						return;
-					}
-					this.showLoginProviderSelector(authType);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
-		const providerOptions = this.getLoginProviderOptions(authType);
-		if (providerOptions.length === 0) {
-			const message =
-				authType === "oauth"
-					? "No subscription providers available."
-					: authType === "api_key"
-						? "No API key providers available."
-						: "No login providers available.";
-			this.showStatus(message);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				"login",
-				providerOptions,
-				async (providerId: string, selectedAuthType: string) => {
-					done();
-
-					const providerOption = providerOptions.find(
-						(provider) => provider.id === providerId && provider.authType === selectedAuthType,
-					);
-					if (!providerOption) {
-						return;
-					}
-
-					await this.startProviderLogin(providerOption);
-				},
-				() => {
-					done();
-					if (authType) {
-						this.showLoginAuthTypeSelector();
-					} else {
-						this.ui.requestRender();
-					}
-				},
-				initialSearchInput,
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		if (mode === "login") {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		const providerOptions = await this.getLogoutProviderOptions();
-		if (providerOptions.length === 0) {
-			this.showStatus(
-				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
-			);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				mode,
-				providerOptions,
-				async (providerId: string) => {
-					done();
-
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
-					if (!providerOption) {
-						return;
-					}
-
-					try {
-						await this.session.modelRuntime.logout(providerOption.id);
-						await this.updateAvailableProviderCount();
-						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
-						this.showStatus(message);
-					} catch (error: unknown) {
-						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async handleProfileCommand(profileName?: string): Promise<void> {
-		const profiles = this.session.modelRuntime.getProfiles();
-
-		if (profileName) {
-			const profile = profiles.find((p) => p.name === profileName || p.id === profileName);
-			if (profile) {
+			if (selected === "Set active") {
 				this.session.modelRuntime.setActiveProfile(profile.id);
 				await this.session.modelRuntime.reloadConfig();
-				this.showStatus(`Switched to profile: ${profile.name}`);
-				return;
+				await this.updateAvailableProviderCount();
+				this.footer.invalidate();
+				this.showStatus(`Active profile: ${profile.name}`);
+				continue;
 			}
-			this.showStatus(`Profile not found: ${profileName}`);
-			return;
-		}
 
-		if (profiles.length === 0) {
-			this.showStatus(
-				"No profiles configured. Create a profiles.json file or use /profile <name> to switch to an existing profile.",
-			);
-			return;
-		}
+			if (selected === "Edit connection") {
+				await this.showProfileEditor(profile, false);
+				continue;
+			}
 
-		const active = this.session.modelRuntime.getActiveProfile();
-		const lines = ["Profiles:", ""];
-		for (const p of profiles) {
-			const marker = active?.id === p.id ? "*" : " ";
-			const enabledCount = p.models.filter((m) => m.enabled).length;
-			lines.push(`${marker} ${p.name} (${p.protocol}, ${enabledCount} enabled models)`);
-		}
-		lines.push("");
-		lines.push("Use /profile <name> to switch, or /profile-delete <name> to delete.");
-		this.showStatus(lines.join("\n"));
-	}
+			if (selected.startsWith("Models ")) {
+				const models = await this.showProfileModelsEditor(profile.models);
+				await this.saveProfile({ ...profile, models, updatedAt: new Date().toISOString() }, false);
+				continue;
+			}
 
-	private async handleProfileDeleteCommand(profileName?: string): Promise<void> {
-		if (!profileName) {
-			this.showStatus("Usage: /profile-delete <name>");
-			return;
-		}
-
-		const profiles = this.session.modelRuntime.getProfiles();
-		const profile = profiles.find((p) => p.name === profileName || p.id === profileName);
-		if (!profile) {
-			this.showStatus(`Profile not found: ${profileName}`);
-			return;
-		}
-
-		const active = this.session.modelRuntime.getActiveProfile();
-		const isActive = active?.id === profile.id;
-
-		// Show confirmation selector
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				`Delete profile "${profile.name}"?${isActive ? " This is the currently active profile." : ""}`,
-				["Yes, delete it", "Cancel"],
-				async (option) => {
-					done();
-					if (option === "Yes, delete it") {
-						try {
-							await this.session.modelRuntime.deleteProfile(profile.id);
-							await this.session.modelRuntime.reloadConfig();
-							this.showStatus(`Deleted profile: ${profile.name}`);
-						} catch (error: unknown) {
-							this.showError(
-								`Failed to delete profile: ${error instanceof Error ? error.message : String(error)}`,
-							);
-						}
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async completeProviderAuthentication(
-		providerId: string,
-		providerName: string,
-		authType: "oauth" | "api_key",
-		previousModel: Model<any> | undefined,
-	): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-
-		const actionLabel = authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`;
-
-		let selectedModel: Model<any> | undefined;
-		let selectionError: string | undefined;
-		if (isUnknownModel(previousModel)) {
-			const availableModels = await this.session.modelRuntime.getAvailable();
-			const providerModels = availableModels.filter((model) => model.provider === providerId);
-			if (!hasDefaultModelProvider(providerId)) {
-				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
-			} else if (providerModels.length === 0) {
-				selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
-			} else {
-				const defaultModelId = defaultModelPerProvider[providerId];
-				selectedModel = providerModels.find((model) => model.id === defaultModelId);
-				if (!selectedModel) {
-					selectionError = `${actionLabel}, but its default model "${defaultModelId}" is not available. Use /model to select a model.`;
-				} else {
-					try {
-						await this.session.setModel(selectedModel);
-					} catch (error: unknown) {
-						selectedModel = undefined;
-						const errorMessage = error instanceof Error ? error.message : String(error);
-						selectionError = `${actionLabel}, but selecting its default model failed: ${errorMessage}. Use /model to select a model.`;
-					}
+			if (selected === "Delete profile") {
+				const confirmed = await this.showExtensionConfirm(
+					"Delete profile",
+					`Delete "${profile.name}"? This cannot be undone.`,
+				);
+				if (confirmed) {
+					await this.session.modelRuntime.deleteProfile(profile.id);
+					await this.session.modelRuntime.reloadConfig();
+					await this.updateAvailableProviderCount();
+					this.footer.invalidate();
+					this.showStatus(`Deleted profile: ${profile.name}`);
+					return;
 				}
 			}
 		}
+	}
 
+	private async showProfileEditor(profile: Profile, isNew: boolean): Promise<void> {
+		let draft: Profile = {
+			...profile,
+			models: profile.models.map((model) => ({ ...model })),
+		};
+
+		while (true) {
+			const enabledCount = draft.models.filter((model) => model.enabled).length;
+			const keyLabel = draft.apiKey ? "configured" : "empty";
+			const options = [
+				`Protocol: ${draft.protocol}`,
+				`Name: ${draft.name}`,
+				`URL: ${draft.baseUrl}`,
+				`Key: ${keyLabel}`,
+				"Test",
+				`Models (${enabledCount}/${draft.models.length})`,
+				"Save",
+				isNew ? "Cancel" : "Back",
+			];
+
+			const selected = await this.showExtensionSelector(
+				isNew ? "Create profile" : `Edit profile: ${draft.name}`,
+				options,
+			);
+			if (!selected || selected === "Cancel" || selected === "Back") return;
+
+			if (selected.startsWith("Protocol: ")) {
+				const protocolSelection = await this.showExtensionSelector("Select profile format", [
+					"Anthropic format",
+					"OpenAI format",
+				]);
+				if (protocolSelection) {
+					draft = {
+						...draft,
+						protocol: protocolSelection === "Anthropic format" ? "anthropic" : "openai",
+					};
+				}
+				continue;
+			}
+
+			if (selected.startsWith("Name: ")) {
+				const value = await this.showExtensionEditor("Profile name", draft.name);
+				if (value !== undefined) draft = { ...draft, name: value.trim() || draft.name };
+				continue;
+			}
+
+			if (selected.startsWith("URL: ")) {
+				const value = await this.showExtensionEditor("Base URL", draft.baseUrl);
+				if (value !== undefined) draft = { ...draft, baseUrl: value.trim() };
+				continue;
+			}
+
+			if (selected.startsWith("Key: ")) {
+				const value = await this.showExtensionEditor("API key", draft.apiKey);
+				if (value !== undefined) draft = { ...draft, apiKey: value.trim() };
+				continue;
+			}
+
+			if (selected === "Test") {
+				draft = await this.testProfileAndLoadModels(draft);
+				continue;
+			}
+
+			if (selected.startsWith("Models ")) {
+				draft = { ...draft, models: await this.showProfileModelsEditor(draft.models) };
+				continue;
+			}
+
+			if (selected === "Save") {
+				if (!draft.baseUrl.trim()) {
+					this.showError("Profile URL is required.");
+					continue;
+				}
+				if (!draft.apiKey.trim()) {
+					this.showError("Profile key is required.");
+					continue;
+				}
+				await this.saveProfile(draft, isNew);
+				return;
+			}
+		}
+	}
+
+	private async testProfileAndLoadModels(profile: Profile): Promise<Profile> {
+		if (!profile.baseUrl.trim()) {
+			this.showError("Profile URL is required before test.");
+			return profile;
+		}
+		if (!profile.apiKey.trim()) {
+			this.showError("Profile key is required before test.");
+			return profile;
+		}
+
+		this.showStatus("Testing profile and loading models...");
+		try {
+			const fetchedModels = await fetchModelsFromEndpoint(profile);
+			const enrichedModels = await enrichWithModelsDev(fetchedModels);
+			const existingById = new Map(profile.models.map((model) => [model.id, model]));
+			const models = enrichedModels.map((model) => {
+				const existing = existingById.get(model.id);
+				return existing ? { ...model, enabled: existing.enabled } : model;
+			});
+			this.showStatus(`Loaded ${models.length} models for ${profile.name}.`);
+			return { ...profile, models, updatedAt: new Date().toISOString() };
+		} catch (error) {
+			this.showError(`Profile test failed: ${error instanceof Error ? error.message : String(error)}`);
+			return profile;
+		}
+	}
+
+	private async showProfileModelsEditor(models: readonly UserModel[]): Promise<UserModel[]> {
+		let draft = models.map((model) => ({ ...model }));
+
+		while (true) {
+			if (draft.length === 0) {
+				const selected = await this.showExtensionSelector("Models", ["No models loaded. Run Test first.", "Back"]);
+				if (!selected || selected === "Back" || selected === "No models loaded. Run Test first.") return draft;
+			}
+
+			const modelOptions = new Map<string, UserModel>();
+			const options: string[] = [];
+			for (const model of draft) {
+				const label = `${model.enabled ? "[x]" : "[ ]"} ${model.id} — ${model.name}`;
+				modelOptions.set(label, model);
+				options.push(label);
+			}
+			options.push("Back");
+
+			const selected = await this.showExtensionSelector("Models", options);
+			if (!selected || selected === "Back") return draft;
+
+			const model = modelOptions.get(selected);
+			if (!model) continue;
+			const updated = await this.showProfileModelEditor(model);
+			draft = draft.map((entry) => (entry.id === updated.id ? updated : entry));
+		}
+	}
+
+	private async showProfileModelEditor(model: UserModel): Promise<UserModel> {
+		let draft = { ...model };
+
+		while (true) {
+			const options = [
+				draft.enabled ? "Disable model" : "Enable model",
+				`Name: ${draft.name}`,
+				`Context window: ${draft.contextWindow}`,
+				`Max tokens: ${draft.maxTokens}`,
+				`Reasoning: ${draft.supportsReasoning ? "yes" : "no"}`,
+				`Vision: ${draft.supportsVision ? "yes" : "no"}`,
+				`Tool calls: ${draft.supportsToolCall ? "yes" : "no"}`,
+				"Back",
+			];
+			const selected = await this.showExtensionSelector(`Model: ${draft.id}`, options);
+			if (!selected || selected === "Back") return draft;
+
+			if (selected === "Disable model" || selected === "Enable model") {
+				draft = { ...draft, enabled: !draft.enabled };
+				continue;
+			}
+			if (selected.startsWith("Name: ")) {
+				const value = await this.showExtensionEditor("Model name", draft.name);
+				if (value !== undefined) draft = { ...draft, name: value.trim() || draft.name, metadataSource: "manual" };
+				continue;
+			}
+			if (selected.startsWith("Context window: ")) {
+				const value = await this.promptPositiveInteger("Context window", draft.contextWindow);
+				if (value !== undefined) draft = { ...draft, contextWindow: value, metadataSource: "manual" };
+				continue;
+			}
+			if (selected.startsWith("Max tokens: ")) {
+				const value = await this.promptPositiveInteger("Max tokens", draft.maxTokens);
+				if (value !== undefined) draft = { ...draft, maxTokens: value, metadataSource: "manual" };
+				continue;
+			}
+			if (selected.startsWith("Reasoning: ")) {
+				draft = { ...draft, supportsReasoning: !draft.supportsReasoning, metadataSource: "manual" };
+				continue;
+			}
+			if (selected.startsWith("Vision: ")) {
+				draft = { ...draft, supportsVision: !draft.supportsVision, metadataSource: "manual" };
+				continue;
+			}
+			if (selected.startsWith("Tool calls: ")) {
+				draft = { ...draft, supportsToolCall: !draft.supportsToolCall, metadataSource: "manual" };
+			}
+		}
+	}
+
+	private async promptPositiveInteger(title: string, current: number): Promise<number | undefined> {
+		const value = await this.showExtensionEditor(title, String(current));
+		if (value === undefined) return undefined;
+		const parsed = Number.parseInt(value.trim(), 10);
+		if (!Number.isFinite(parsed) || parsed <= 0) {
+			this.showError(`${title} must be a positive integer.`);
+			return undefined;
+		}
+		return parsed;
+	}
+
+	private async saveProfile(profile: Profile, isNew: boolean): Promise<void> {
+		const next = {
+			...profile,
+			name: profile.name.trim() || profile.id,
+			baseUrl: profile.baseUrl.trim(),
+			apiKey: profile.apiKey.trim(),
+			updatedAt: new Date().toISOString(),
+		};
+		if (isNew) {
+			await this.session.modelRuntime.createProfile(next);
+			this.session.modelRuntime.setActiveProfile(next.id);
+		} else {
+			await this.session.modelRuntime.updateProfile(next.id, () => next);
+		}
+		await this.session.modelRuntime.reloadConfig();
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
-		if (selectedModel) {
-			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`);
-			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-			this.checkDaxnutsEasterEgg(selectedModel);
-		} else {
-			this.showStatus(`${actionLabel}. Credentials saved to ${getAuthPath()}`);
-			if (selectionError) {
-				this.showError(selectionError);
-			} else {
-				void this.maybeWarnAboutAnthropicSubscriptionAuth();
-			}
-		}
-	}
-
-	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		const dialog = new LoginDialogComponent(
-			this.ui,
-			providerOption.id,
-			() => restoreEditor(),
-			providerOption.name,
-			`${providerOption.name} setup`,
-		);
-		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
-
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-	}
-
-	private async showApiKeyLoginDialog(providerId: string, providerName: string): Promise<void> {
-		const previousModel = this.session.model;
-
-		const dialog = new LoginDialogComponent(
-			this.ui,
-			providerId,
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(_success: any, _message: any) => {
-				// Completion handled below
-			},
-			providerName,
-		);
-
-		if (providerId === "amazon-bedrock") {
-			dialog.showDetails([
-				theme.fg("text", "You can also use an AWS profile, IAM keys, or role-based credentials."),
-				theme.fg("muted", "See:"),
-				theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
-			]);
-		}
-
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		try {
-			await this.loginProvider(dialog, providerId, "api_key");
-			restoreEditor();
-			await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel);
-		} catch (error: unknown) {
-			restoreEditor();
-			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
-				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
-			}
-		}
-	}
-
-	private showAuthSelect(
-		dialog: LoginDialogComponent,
-		prompt: Extract<AuthPrompt, { type: "select" }>,
-	): Promise<string> {
-		return new Promise((resolve, reject) => {
-			const restoreDialog = () => {
-				this.editorContainer.clear();
-				this.editorContainer.addChild(dialog);
-				this.ui.setFocus(dialog);
-				this.ui.requestRender();
-			};
-			const labels = prompt.options.map((option) => option.label);
-			const selector = new ExtensionSelectorComponent(
-				prompt.message,
-				labels,
-				(optionLabel) => {
-					restoreDialog();
-					const id = prompt.options.find((option) => option.label === optionLabel)?.id;
-					if (id) resolve(id);
-					else reject(new Error("Login cancelled"));
-				},
-				() => {
-					restoreDialog();
-					reject(new Error("Login cancelled"));
-				},
-			);
-			this.editorContainer.clear();
-			this.editorContainer.addChild(selector);
-			this.ui.setFocus(selector);
-			this.ui.requestRender();
-		});
-	}
-
-	private async showAuthPrompt(dialog: LoginDialogComponent, prompt: AuthPrompt): Promise<string> {
-		let response: Promise<string>;
-		if (prompt.type === "select") {
-			response = this.showAuthSelect(dialog, prompt);
-		} else if (prompt.type === "manual_code") {
-			response = dialog.showManualInput(prompt.message);
-		} else {
-			response = dialog.showPrompt(prompt.message, prompt.placeholder);
-		}
-		if (!prompt.signal) return response;
-		if (prompt.signal.aborted) throw new Error("Login cancelled");
-		const signal = prompt.signal;
-		let onAbort: (() => void) | undefined;
-		const aborted = new Promise<string>((_resolve, reject) => {
-			onAbort = () => reject(new Error("Login cancelled"));
-			signal.addEventListener("abort", onAbort, { once: true });
-		});
-		try {
-			return await Promise.race([response, aborted]);
-		} finally {
-			if (onAbort) signal.removeEventListener("abort", onAbort);
-		}
-	}
-
-	private notifyAuthDialog(dialog: LoginDialogComponent, event: AuthEvent): void {
-		if (event.type === "auth_url") {
-			dialog.showAuth(event.url, event.instructions);
-		} else if (event.type === "device_code") {
-			dialog.showDeviceCode(event);
-			dialog.showWaiting("Waiting for authentication...");
-		} else if (event.type === "info") {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			dialog.showInfo(event.message, event.links as any[] | undefined);
-		} else {
-			dialog.showProgress(event.message);
-		}
-	}
-
-	private async loginProvider(
-		dialog: LoginDialogComponent,
-		providerId: string,
-		method: "api_key" | "oauth",
-	): Promise<void> {
-		await this.session.modelRuntime.login(providerId, method, {
-			signal: dialog.signal,
-			prompt: (prompt) => this.showAuthPrompt(dialog, prompt),
-			notify: (event) => this.notifyAuthDialog(dialog, event),
-		});
-	}
-
-	private async showLoginDialog(providerId: string, providerName: string): Promise<void> {
-		const previousModel = this.session.model;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const dialog = new LoginDialogComponent(this.ui, providerId, (_success: any, _message: any) => {}, providerName);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		try {
-			await this.loginProvider(dialog, providerId, "oauth");
-			restoreEditor();
-			await this.completeProviderAuthentication(providerId, providerName, "oauth", previousModel);
-		} catch (error: unknown) {
-			restoreEditor();
-			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
-				this.showError(`Failed to login to ${providerName}: ${errorMsg}`);
-			}
-		}
+		this.showStatus(`${isNew ? "Created" : "Saved"} profile: ${next.name}`);
 	}
 
 	// =========================================================================

@@ -127,7 +127,22 @@ export async function enrichWithModelsDev(modelIds: Array<{ id: string; name: st
 
 export async function fetchModelsFromEndpoint(profile: Profile): Promise<Array<{ id: string; name: string }>> {
 	if (profile.protocol === "anthropic") {
-		return [];
+		const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;
+		const response = await fetch(url, {
+			headers: {
+				"anthropic-version": "2023-06-01",
+				"content-type": "application/json",
+				"x-api-key": profile.apiKey,
+			},
+		});
+
+		if (!response.ok) {
+			throw new Error(`Failed to fetch models from ${url}: ${response.status} ${response.statusText}`);
+		}
+
+		const data = (await response.json()) as { data?: Array<{ id: string; display_name?: string }> };
+		const models = data.data ?? [];
+		return models.map((m) => ({ id: m.id, name: m.display_name ?? m.id }));
 	}
 
 	const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;

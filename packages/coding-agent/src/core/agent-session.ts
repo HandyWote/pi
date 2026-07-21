@@ -422,7 +422,7 @@ export class AgentSession {
 			throw new Error(
 				`Authentication failed for "${model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Run '/login ${model.provider}' to re-authenticate.`,
+					"Run '/profile' to update the profile.",
 			);
 		}
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
@@ -1178,7 +1178,7 @@ export class AgentSession {
 					throw new Error(
 						`Authentication failed for "${this.model.provider}". ` +
 							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
+							"Run '/profile' to update the profile.",
 					);
 				}
 				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));

@@ -1,8 +1,7 @@
-import type { Api, Model, Provider } from "@earendil-works/pi-ai";
+import { type Api, createProvider, type Model, type Provider } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
-import { createProvider } from "@earendil-works/pi-ai/models";
 import type { Profile, UserModel } from "./profiles-types.ts";
 
 function userModelToModel(userModel: UserModel, profile: Profile): Model<Api> {

@@ -12,6 +12,7 @@ import {
 	type CredentialInfo,
 	type CredentialStore,
 	createModels,
+	createProvider,
 	lazyStream,
 	type Model,
 	type Models,
@@ -25,10 +26,14 @@ import {
 	type MutableModels,
 	type Provider,
 	type ProviderHeaders,
+	type ProviderStreams,
 	type SimpleStreamOptions,
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
-import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import type { ProviderConfig, ProviderModelConfig } from "./extensions/types.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import { createProfileProvider } from "./profile-runtime.ts";
 import { ProfilesStore } from "./profiles-store.ts";
@@ -36,8 +41,6 @@ import type { Profile } from "./profiles-types.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 class RuntimeCredentials {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-	constructor(_store: any) {}
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	async read(_provider: string): Promise<any> {
 		return undefined;
@@ -103,10 +106,115 @@ function mergeHeaders(
 	return merged;
 }
 
+function resolveConfiguredApiKey(
+	value: string | undefined,
+	env: Record<string, string | undefined>,
+): string | undefined {
+	if (!value) return undefined;
+	if (value.startsWith("${") && value.endsWith("}")) return env[value.slice(2, -1)];
+	if (value.startsWith("$")) return env[value.slice(1)];
+	return value;
+}
+
+function getBuiltInApi(api: Api): ProviderStreams | undefined {
+	if (api === "anthropic-messages") return anthropicMessagesApi();
+	if (api === "openai-completions") return openAICompletionsApi();
+	if (api === "openai-responses") return openAIResponsesApi();
+	return undefined;
+}
+
+function providerModelConfigToModel(
+	providerId: string,
+	config: ProviderConfig,
+	modelConfig: ProviderModelConfig,
+): Model<Api> {
+	const api = modelConfig.api ?? config.api;
+	if (!api) {
+		throw new Error(`Provider ${providerId}: "api" is required when registering models.`);
+	}
+	const baseUrl = modelConfig.baseUrl ?? config.baseUrl;
+	if (!baseUrl) {
+		throw new Error(`Provider ${providerId}: "baseUrl" is required when registering models.`);
+	}
+	return {
+		id: modelConfig.id,
+		name: modelConfig.name,
+		provider: providerId,
+		api,
+		baseUrl,
+		reasoning: modelConfig.reasoning,
+		thinkingLevelMap: modelConfig.thinkingLevelMap,
+		input: modelConfig.input,
+		cost: modelConfig.cost,
+		contextWindow: modelConfig.contextWindow,
+		maxTokens: modelConfig.maxTokens,
+		headers: modelConfig.headers,
+		compat: modelConfig.compat,
+	} as Model<Api>;
+}
+
+function createExtensionProvider(providerId: string, config: ProviderConfig): Provider {
+	if (config.streamSimple && !config.api) {
+		throw new Error(`Provider ${providerId}: "api" is required when registering streamSimple.`);
+	}
+
+	const models = (config.models ?? []).map((modelConfig) =>
+		providerModelConfigToModel(providerId, config, modelConfig),
+	);
+	const api =
+		config.streamSimple && config.api
+			? ({
+					stream: (model, context, options) => config.streamSimple!(model, context, options),
+					streamSimple: config.streamSimple,
+				} satisfies ProviderStreams)
+			: Object.fromEntries(
+					Array.from(new Set(models.map((model) => model.api)))
+						.map((modelApi) => [modelApi, getBuiltInApi(modelApi)] as const)
+						.filter((entry): entry is readonly [Api, ProviderStreams] => entry[1] !== undefined),
+				);
+
+	return createProvider({
+		id: providerId,
+		name: config.name ?? providerId,
+		baseUrl: config.baseUrl,
+		headers: config.headers,
+		auth: {
+			apiKey: {
+				name: "API Key",
+				resolve: async ({ ctx, credential }) => {
+					const env: Record<string, string | undefined> = {};
+					if (config.apiKey?.startsWith("$")) {
+						const envName =
+							config.apiKey.startsWith("${") && config.apiKey.endsWith("}")
+								? config.apiKey.slice(2, -1)
+								: config.apiKey.slice(1);
+						env[envName] = await ctx.env(envName);
+					}
+					const apiKey =
+						credential?.type === "api_key" ? credential.key : resolveConfiguredApiKey(config.apiKey, env);
+					const headers = { ...(config.headers ?? {}) };
+					if (config.authHeader && apiKey) headers.Authorization = `Bearer ${apiKey}`;
+					return { auth: { apiKey, headers, baseUrl: config.baseUrl } };
+				},
+			},
+		},
+		models,
+		fetchModels: config.refreshModels
+			? async (context) =>
+					(await config.refreshModels!(context)).map((modelConfig) =>
+						providerModelConfigToModel(providerId, config, modelConfig),
+					)
+			: undefined,
+		api,
+	});
+}
+
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
 	private readonly profilesStore: ProfilesStore;
+	private readonly registeredProviderConfigs = new Map<string, ProviderConfig>();
+	private readonly registeredNativeProviders = new Map<string, Provider>();
 	private snapshot: ModelRuntimeSnapshot = {
 		all: [],
 		available: [],
@@ -125,7 +233,7 @@ export class ModelRuntime implements Models {
 	}
 
 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
-		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
+		const credentials = new RuntimeCredentials();
 		const profilesStore = new ProfilesStore(options.profilesPath);
 		const modelsStore =
 			options.modelsStore ??
@@ -147,6 +255,16 @@ export class ModelRuntime implements Models {
 			} catch {
 				// Skip broken profiles; error is available via getError()
 			}
+		}
+		for (const [providerId, config] of this.registeredProviderConfigs) {
+			try {
+				this.models.setProvider(createExtensionProvider(providerId, config));
+			} catch {
+				// Skip broken extension providers; registration reports errors synchronously.
+			}
+		}
+		for (const provider of this.registeredNativeProviders.values()) {
+			this.models.setProvider(provider);
 		}
 		this.updateModelSnapshot();
 	}
@@ -368,33 +486,40 @@ export class ModelRuntime implements Models {
 	// Extension support — kept for backward compatibility
 
 	registerNativeProvider(provider: Provider): void {
+		this.registeredNativeProviders.set(provider.id, provider);
+		this.registeredProviderConfigs.delete(provider.id);
 		this.models.setProvider(provider);
 		this.updateModelSnapshot();
 		void this.runAvailabilityRefresh();
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	registerProvider(_providerId: string, _config: any): void {
-		// No-op: profiles replace extension provider config
+	registerProvider(providerId: string, config: ProviderConfig): void {
+		const provider = createExtensionProvider(providerId, config);
+		this.registeredProviderConfigs.set(providerId, config);
+		this.registeredNativeProviders.delete(providerId);
+		this.models.setProvider(provider);
+		this.updateModelSnapshot();
+		void this.runAvailabilityRefresh();
 	}
 
 	unregisterProvider(providerId: string): void {
+		this.registeredProviderConfigs.delete(providerId);
+		this.registeredNativeProviders.delete(providerId);
 		this.models.deleteProvider(providerId);
 		this.updateModelSnapshot();
 		void this.runAvailabilityRefresh();
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	getRegisteredProviderConfig(_providerId: string): any {
-		return undefined;
+	getRegisteredProviderConfig(providerId: string): ProviderConfig | undefined {
+		return this.registeredProviderConfigs.get(providerId);
 	}
 
 	getRegisteredProviderIds(): readonly string[] {
-		return [];
+		return Array.from(new Set([...this.registeredProviderConfigs.keys(), ...this.registeredNativeProviders.keys()]));
 	}
 
-	getRegisteredNativeProvider(_providerId: string): Provider | undefined {
-		return undefined;
+	getRegisteredNativeProvider(providerId: string): Provider | undefined {
+		return this.registeredNativeProviders.get(providerId);
 	}
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any

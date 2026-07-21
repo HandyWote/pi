@@ -1,6 +1,8 @@
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
-import { anthropicCompatProvider } from "@earendil-works/pi-ai/providers/anthropic-compat";
-import { openAICompatProvider } from "@earendil-works/pi-ai/providers/openai-compat";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { createProvider } from "@earendil-works/pi-ai/models";
 import type { Profile, UserModel } from "./profiles-types.ts";
 
 function userModelToModel(userModel: UserModel, profile: Profile): Model<Api> {
@@ -25,20 +27,35 @@ export function createProfileProvider(profile: Profile): Provider {
 	const models = enabledModels.map((m) => userModelToModel(m, profile));
 
 	if (profile.protocol === "anthropic") {
-		return anthropicCompatProvider({
+		return createProvider<"anthropic-messages">({
 			id: profile.id,
 			name: profile.name,
 			baseUrl: profile.baseUrl,
-			apiKey: profile.apiKey,
+			auth: {
+				apiKey: {
+					name: "API Key",
+					resolve: async () => ({ auth: { apiKey: profile.apiKey } }),
+				},
+			},
 			models: models as Model<"anthropic-messages">[],
+			api: anthropicMessagesApi(),
 		});
 	}
 
-	return openAICompatProvider({
+	return createProvider<"openai-responses" | "openai-completions">({
 		id: profile.id,
 		name: profile.name,
 		baseUrl: profile.baseUrl,
-		apiKey: profile.apiKey,
+		auth: {
+			apiKey: {
+				name: "API Key",
+				resolve: async () => ({ auth: { apiKey: profile.apiKey } }),
+			},
+		},
 		models: models as Model<"openai-responses" | "openai-completions">[],
+		api: {
+			"openai-responses": openAIResponsesApi(),
+			"openai-completions": openAICompletionsApi(),
+		},
 	});
 }

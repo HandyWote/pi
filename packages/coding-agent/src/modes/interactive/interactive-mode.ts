@@ -125,10 +125,14 @@ function formatAuthSelectorProviderType(authType: any): string {
 class OAuthSelectorComponent {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	constructor(..._args: any[]) {}
-	render(_width: number): string[] { return []; }
+	render(_width: number): string[] {
+		return [];
+	}
 	invalidate(): void {}
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	handleKey(_key: any): boolean { return false; }
+	handleKey(_key: any): boolean {
+		return false;
+	}
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	handleInput(_data: any): void {}
 	focus(): void {}
@@ -138,7 +142,9 @@ class LoginDialogComponent {
 	signal: AbortSignal | undefined;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	constructor(..._args: any[]) {}
-	render(_width: number): string[] { return []; }
+	render(_width: number): string[] {
+		return [];
+	}
 	invalidate(): void {}
 	handleInput(_data: string): void {}
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any

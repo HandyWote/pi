@@ -17,6 +17,10 @@ function userModelToModel(userModel: UserModel, profile: Profile): Model<Api> {
 		contextWindow: userModel.contextWindow,
 		maxTokens: userModel.maxTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		// User-configured OpenAI-compatible gateways (new-api/one-api style) often
+		// route to non-OpenAI upstreams that reject the `developer` role (HTTP 422).
+		// Prefer `system` for profile models; official OpenAI uses builtin providers.
+		compat: profile.protocol === "openai" ? { supportsDeveloperRole: false } : undefined,
 	} as Model<Api>;
 }
 

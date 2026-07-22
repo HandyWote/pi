@@ -1,4 +1,4 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@handy_wote/pi-ai/compat";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream } from "@handy_wote/pi-ai/compat";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -119,7 +119,18 @@ describe("Agent", () => {
 	});
 
 	it("should create an agent instance with custom initial state", () => {
-		const customModel = getModel("openai", "gpt-4o-mini");
+		const customModel = {
+			id: "gpt-4o-mini",
+			name: "GPT-4o Mini",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"] as ("image" | "text")[],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 16384,
+		};
 		const agent = new Agent({
 			streamFn: unusedStreamFunction,
 			initialState: {
@@ -447,7 +458,18 @@ describe("Agent", () => {
 		expect(agent.state.systemPrompt).toBe("Custom prompt");
 
 		// Test setModel
-		const newModel = getModel("google", "gemini-2.5-flash");
+		const newModel = {
+			id: "gemini-2.5-flash",
+			name: "Gemini 2.5 Flash",
+			api: "google-generative-ai",
+			provider: "google",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"] as ("image" | "text")[],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 8192,
+		};
 		agent.state.model = newModel;
 		expect(agent.state.model).toBe(newModel);
 

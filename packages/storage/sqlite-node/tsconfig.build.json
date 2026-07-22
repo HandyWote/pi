@@ -3,6 +3,12 @@
 	"compilerOptions": {
 		"rootDir": "src",
 		"outDir": "dist",
+		"paths": {
+			"@handy_wote/pi-agent-core": ["../../agent/dist/index.d.ts"],
+			"@handy_wote/pi-agent-core/*": ["../../agent/dist/*.d.ts"],
+			"@handy_wote/pi-ai": ["../../ai/dist/index.d.ts"],
+			"@handy_wote/pi-ai/*": ["../../ai/dist/*.d.ts", "../../ai/dist/providers/*.d.ts"]
+		},
 		"declaration": true,
 		"emitDeclarationOnly": false,
 		"noEmit": false

@@ -1,5 +1,5 @@
-import { type Model, modelsAreEqual } from "@earendil-works/pi-ai";
-import { Container, EntityList, type Focusable, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { type Model, modelsAreEqual } from "@handy_wote/pi-ai";
+import { Container, EntityList, type Focusable, getKeybindings, Spacer, Text, type TUI } from "@handy_wote/pi-tui";
 import type { ModelRuntime } from "../../../core/model-runtime.ts";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
 import { getModelSelectorSearchText } from "../model-search.ts";

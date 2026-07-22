@@ -6,6 +6,10 @@
 
 - Added a configurable `EntityList` component with non-wrapping navigation, toggle and delete actions, delete confirmation, and explicit fuzzy search.
 
+### Changed
+
+- Renamed the published package scope to `@handy_wote`.
+
 ## [0.81.1] - 2026-07-21
 
 ## [0.81.0] - 2026-07-21

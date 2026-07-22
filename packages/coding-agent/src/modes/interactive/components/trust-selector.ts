@@ -1,4 +1,4 @@
-import { Container, EntityList, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, EntityList, Spacer, Text } from "@handy_wote/pi-tui";
 import {
 	getProjectTrustOptions,
 	type ProjectTrustOption,

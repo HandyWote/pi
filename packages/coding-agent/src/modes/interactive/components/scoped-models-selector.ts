@@ -1,5 +1,5 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { Container, EntityList, type Focusable, getKeybindings, Spacer, Text } from "@earendil-works/pi-tui";
+import type { Model } from "@handy_wote/pi-ai";
+import { Container, EntityList, type Focusable, getKeybindings, Spacer, Text } from "@handy_wote/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { getEntityListTheme } from "./entity-list-theme.ts";

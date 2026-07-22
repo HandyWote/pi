@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the published package scope to `@handy_wote`.
+
 ## [0.81.1] - 2026-07-21
 
 ### Added

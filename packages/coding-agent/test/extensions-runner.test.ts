@@ -106,7 +106,7 @@ describe("ExtensionRunner", () => {
 			const extensionPath = path.join(extensionsDir, "coding-agent-entrypoint.ts");
 			fs.writeFileSync(
 				extensionPath,
-				`import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+				`import { DynamicBorder } from "@handy_wote/pi-coding-agent";
 
 export default function(pi) {
 	pi.on("session_start", () => {

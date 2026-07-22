@@ -1,4 +1,4 @@
-import { Container, EntityList, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, EntityList, Spacer, Text, truncateToWidth } from "@handy_wote/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { getEntityListTheme } from "./entity-list-theme.ts";

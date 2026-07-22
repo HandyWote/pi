@@ -1,4 +1,4 @@
-import { Container, EntityList } from "@earendil-works/pi-tui";
+import { Container, EntityList } from "@handy_wote/pi-tui";
 import { getAvailableThemes } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { getEntityListTheme } from "./entity-list-theme.ts";

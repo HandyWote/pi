@@ -11,7 +11,7 @@ import {
 	type SimpleStreamOptions,
 	type TextContent,
 	type Usage,
-} from "@earendil-works/pi-ai";
+} from "@handy_wote/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
 	convertToLlm,

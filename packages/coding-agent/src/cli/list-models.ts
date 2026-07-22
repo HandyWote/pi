@@ -2,8 +2,8 @@
  * List available models with optional fuzzy search
  */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { fuzzyFilter } from "@earendil-works/pi-tui";
+import type { Api, Model } from "@handy_wote/pi-ai";
+import { fuzzyFilter } from "@handy_wote/pi-tui";
 import chalk from "chalk";
 
 function formatNoModelsAvailableMessage(): string {

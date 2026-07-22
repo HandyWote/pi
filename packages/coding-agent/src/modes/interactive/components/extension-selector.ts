@@ -3,7 +3,7 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { Container, EntityList, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, EntityList, getKeybindings, Spacer, Text, type TUI } from "@handy_wote/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";

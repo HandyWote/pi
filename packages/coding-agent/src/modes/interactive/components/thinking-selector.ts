@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { Container, EntityList } from "@earendil-works/pi-tui";
+import type { ThinkingLevel } from "@handy_wote/pi-agent-core";
+import { Container, EntityList } from "@handy_wote/pi-tui";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { getEntityListTheme } from "./entity-list-theme.ts";
 

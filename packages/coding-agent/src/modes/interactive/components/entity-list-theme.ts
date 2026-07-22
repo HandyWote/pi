@@ -1,4 +1,4 @@
-import type { EntityListTheme } from "@earendil-works/pi-tui";
+import type { EntityListTheme } from "@handy_wote/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 export function getEntityListTheme(): EntityListTheme {

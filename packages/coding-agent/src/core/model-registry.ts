@@ -1,4 +1,4 @@
-import type { Api, AuthResult, Model, Provider } from "@earendil-works/pi-ai";
+import type { Api, AuthResult, Model, Provider } from "@handy_wote/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

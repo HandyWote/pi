@@ -29,10 +29,10 @@ import {
 	type ProviderStreams,
 	type SimpleStreamOptions,
 	type StreamOptions,
-} from "@earendil-works/pi-ai";
-import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+} from "@handy_wote/pi-ai";
+import { anthropicMessagesApi } from "@handy_wote/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@handy_wote/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@handy_wote/pi-ai/api/openai-responses.lazy";
 import type { ProviderConfig, ProviderModelConfig } from "./extensions/types.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import { createProfileProvider } from "./profile-runtime.ts";

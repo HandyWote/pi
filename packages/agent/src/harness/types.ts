@@ -7,7 +7,7 @@ import type {
 	TextContent,
 	Transport,
 	Usage,
-} from "@earendil-works/pi-ai";
+} from "@handy_wote/pi-ai";
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
 import type { Session } from "./session/session.ts";
 

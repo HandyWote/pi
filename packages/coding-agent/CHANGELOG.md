@@ -5,6 +5,7 @@
 ### Changed
 
 - Renamed the published package scope to `@handy_wote` while keeping the `pi` CLI command name.
+- Changed update checks to read the `@handy_wote` release metadata from GitHub Pages.
 
 ## [0.81.1] - 2026-07-21
 

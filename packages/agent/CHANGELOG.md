@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed test assertion that referenced a removed `getModel` helper.
+
 ## [0.81.2] - 2026-07-22
 
 ### Changed

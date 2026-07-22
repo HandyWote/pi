@@ -1,5 +1,5 @@
 {
-	"version": "0.81.2",
+	"version": "0.81.3",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Custom profiles release"
+	"note": "Remove legacy OAuth and provider support"
 }

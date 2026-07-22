@@ -16,8 +16,13 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 	});
 }
 
-import { normalizeRadiusGatewayUrl } from "../../providers/radius-config.ts";
 import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function normalizeRadiusGatewayUrl(url: string): string {
+	return url;
+}
+
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";

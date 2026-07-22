@@ -39,6 +39,15 @@ export interface Keybindings {
 	"tui.select.pageDown": true;
 	"tui.select.confirm": true;
 	"tui.select.cancel": true;
+	// Entity list actions
+	"tui.entity.up": true;
+	"tui.entity.down": true;
+	"tui.entity.activate": true;
+	"tui.entity.toggle": true;
+	"tui.entity.delete": true;
+	"tui.entity.search": true;
+	"tui.entity.searchExit": true;
+	"tui.entity.cancel": true;
 }
 
 export type Keybinding = keyof Keybindings;
@@ -130,6 +139,17 @@ export const TUI_KEYBINDINGS = {
 	"tui.select.cancel": {
 		defaultKeys: ["escape", "ctrl+c"],
 		description: "Cancel selection",
+	},
+	"tui.entity.up": { defaultKeys: ["up", "k"], description: "Move entity selection up" },
+	"tui.entity.down": { defaultKeys: ["down", "j"], description: "Move entity selection down" },
+	"tui.entity.activate": { defaultKeys: "enter", description: "Activate selected entity" },
+	"tui.entity.toggle": { defaultKeys: "space", description: "Toggle selected entity" },
+	"tui.entity.delete": { defaultKeys: "x", description: "Delete selected entity" },
+	"tui.entity.search": { defaultKeys: "/", description: "Search entities" },
+	"tui.entity.searchExit": { defaultKeys: "escape", description: "Exit entity search" },
+	"tui.entity.cancel": {
+		defaultKeys: ["escape", "ctrl+c"],
+		description: "Cancel entity selection",
 	},
 } as const satisfies KeybindingDefinitions;
 

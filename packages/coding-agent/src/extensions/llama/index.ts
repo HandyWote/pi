@@ -29,7 +29,7 @@ function parseHuggingFaceModel(value: string): { repository: string; quantizatio
 async function configuredClient(ctx: ExtensionCommandContext): Promise<LlamaClient | undefined> {
 	const result = await ctx.modelRegistry.getProviderAuth(LLAMA_PROVIDER_ID);
 	if (!result) {
-		ctx.ui.notify(`Configure llama.cpp with /login ${LLAMA_PROVIDER_ID}`, "warning");
+		ctx.ui.notify("Configure llama.cpp with /profile", "warning");
 		return undefined;
 	}
 	const configuredUrl = result.env?.LLAMA_BASE_URL;

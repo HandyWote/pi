@@ -12,6 +12,13 @@ export {
 export { Box } from "./components/box.ts";
 export { CancellableLoader } from "./components/cancellable-loader.ts";
 export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";
+export {
+	EntityList,
+	type EntityListItem,
+	type EntityListOptions,
+	type EntityListRenderContext,
+	type EntityListTheme,
+} from "./components/entity-list.ts";
 export { Image, type ImageOptions, type ImageTheme } from "./components/image.ts";
 export { Input } from "./components/input.ts";
 export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";

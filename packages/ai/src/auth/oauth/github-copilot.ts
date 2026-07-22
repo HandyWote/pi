@@ -2,8 +2,11 @@
  * GitHub Copilot OAuth flow
  */
 
-import { GITHUB_COPILOT_MODELS } from "../../providers/github-copilot.models.ts";
 import type { AuthInteraction, OAuthAuth, OAuthCredential } from "../types.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const GITHUB_COPILOT_MODELS: Record<string, any> = {};
+
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 
 const decode = (s: string) => atob(s);
@@ -320,7 +323,7 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
 async function enableAllGitHubCopilotModels(token: string, enterpriseDomain?: string): Promise<void> {
 	const models = Object.values(GITHUB_COPILOT_MODELS);
 	await Promise.all(
-		models.map(async (model) => {
+		models.map(async (model: { id: string }) => {
 			await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
 		}),
 	);

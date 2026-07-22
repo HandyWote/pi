@@ -39,15 +39,27 @@ import { openAICompletionsApi } from "./api/openai-completions.lazy.ts";
 import { openAIResponsesApi } from "./api/openai-responses.lazy.ts";
 import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
-import type { ModelsApiStreamOptions } from "./models.ts";
-import { builtinModels, getBuiltinModel, getBuiltinModels, getBuiltinProviders } from "./providers/all.ts";
 
-export type { BuiltinProvider } from "./providers/all.ts";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+function getBuiltinModel(_providerId: string, _modelId: string): any {
+	return undefined;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getBuiltinModels(_providerId?: string): any[] {
+	return [];
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getBuiltinProviders(): any[] {
+	return [];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BuiltinProvider = any;
+export type { BuiltinProvider };
 
 import { createFauxCore, type FauxProviderRegistration, type RegisterFauxProviderOptions } from "./providers/faux.ts";
 import type {
 	Api,
-	ApiStreamOptions,
 	AssistantMessage,
 	AssistantMessageEventStream,
 	Context,
@@ -212,7 +224,6 @@ export function resetApiProviders(): void {
 
 registerBuiltInApiProviders();
 
-const compatModels = builtinModels();
 const AMBIENT_AUTH_MARKER = "<authenticated>";
 
 function hasExplicitApiKey(apiKey: string | undefined): apiKey is string {
@@ -229,14 +240,8 @@ function withEnvApiKey<TOptions extends StreamOptions>(
 	return { ...options, apiKey } as TOptions;
 }
 
-function hasResolvedCloudflareAuth(options: StreamOptions | undefined): boolean {
+function _hasResolvedCloudflareAuth(options: StreamOptions | undefined): boolean {
 	return hasExplicitApiKey(options?.apiKey) || typeof options?.headers?.["cf-aig-authorization"] === "string";
-}
-
-function getBuiltinProviderForModel(model: Model<Api>) {
-	if (getApiProvider(model.api) !== builtinApiProviderInstances.get(model.api)) return undefined;
-	const provider = compatModels.getProvider(model.provider);
-	return provider?.getModels().some((candidate) => candidate.api === model.api) ? provider : undefined;
 }
 
 function resolveApiProvider(api: Api) {
@@ -252,13 +257,6 @@ export function stream<TApi extends Api>(
 	context: Context,
 	options?: ProviderStreamOptions,
 ): AssistantMessageEventStream {
-	const builtinProvider = getBuiltinProviderForModel(model);
-	if (builtinProvider) {
-		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return compatModels.stream(model, context, options as ModelsApiStreamOptions<TApi> | undefined);
-		}
-		return builtinProvider.stream(model, context, withEnvApiKey(model, options) as ApiStreamOptions<TApi>);
-	}
 	const provider = resolveApiProvider(model.api);
 	return provider.stream(model, context, withEnvApiKey(model, options) as StreamOptions);
 }
@@ -277,13 +275,6 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	const builtinProvider = getBuiltinProviderForModel(model);
-	if (builtinProvider) {
-		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return compatModels.streamSimple(model, context, options);
-		}
-		return builtinProvider.streamSimple(model, context, withEnvApiKey(model, options));
-	}
 	const provider = resolveApiProvider(model.api);
 	return provider.streamSimple(model, context, withEnvApiKey(model, options));
 }

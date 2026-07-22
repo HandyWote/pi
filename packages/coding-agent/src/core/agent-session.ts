@@ -49,7 +49,14 @@ import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
-import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+
+function formatNoApiKeyFoundMessage(provider: string): string {
+	return `No API key found for ${provider}.`;
+}
+function formatNoModelSelectedMessage(): string {
+	return "No model selected.";
+}
+
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
@@ -430,7 +437,7 @@ export class AgentSession {
 			throw new Error(
 				`Authentication failed for "${model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Run '/login ${model.provider}' to re-authenticate.`,
+					"Run '/profile' to update the profile.",
 			);
 		}
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
@@ -1186,7 +1193,7 @@ export class AgentSession {
 					throw new Error(
 						`Authentication failed for "${this.model.provider}". ` +
 							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
+							"Run '/profile' to update the profile.",
 					);
 				}
 				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));

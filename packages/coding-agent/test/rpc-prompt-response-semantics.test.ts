@@ -6,7 +6,6 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	EventStream,
-	getModel,
 	type Model,
 } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,6 +94,19 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TEST_MODEL: Model<"anthropic-messages"> = {
+	id: "claude-sonnet-4-5",
+	name: "Claude Sonnet 4.5",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://example.invalid",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128000,
+	maxTokens: 4096,
+};
+
 async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
 	runtimeHost: AgentSessionRuntime;
 	cleanup: () => Promise<void>;
@@ -102,10 +114,7 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	const tempDir = join(tmpdir(), `pi-rpc-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 
-	const model = options.model ?? getModel("anthropic", "claude-sonnet-4-5");
-	if (!model) {
-		throw new Error("Test model not found");
-	}
+	const model = options.model ?? TEST_MODEL;
 
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -129,7 +138,13 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	const sessionManager = SessionManager.inMemory();
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-	const modelRegistry = await createModelRegistry(authStorage, tempDir);
+	const modelRegistry = await createModelRegistry(authStorage, tempDir, join(tempDir, "profiles.json"));
+	modelRegistry.registerProvider("anthropic", {
+		baseUrl: TEST_MODEL.baseUrl,
+		apiKey: "test-key",
+		api: TEST_MODEL.api,
+		models: [TEST_MODEL],
+	});
 	if (options.withAuth) {
 		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
 	}
@@ -219,9 +234,7 @@ describe("RPC prompt response semantics", () => {
 					type: "response",
 					command: "prompt",
 					success: false,
-					error: expect.stringContaining(
-						"No API key found for fake-provider.\n\nUse /login to log into a provider via OAuth or API key. See:",
-					),
+					error: expect.stringContaining("No API key found for fake-provider."),
 				});
 			});
 		} finally {

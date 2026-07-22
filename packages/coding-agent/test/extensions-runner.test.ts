@@ -102,6 +102,25 @@ describe("ExtensionRunner", () => {
 	};
 
 	describe("project_trust", () => {
+		it("loads extensions importing the coding-agent entrypoint without corrupting pi-ai subpath imports", async () => {
+			const extensionPath = path.join(extensionsDir, "coding-agent-entrypoint.ts");
+			fs.writeFileSync(
+				extensionPath,
+				`import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+
+export default function(pi) {
+	pi.on("session_start", () => {
+		void DynamicBorder;
+	});
+}`,
+			);
+
+			const result = await loadExtensions([extensionPath], tempDir);
+
+			expect(result.errors).toEqual([]);
+			expect(result.extensions).toHaveLength(1);
+		});
+
 		it("continues past undecided handlers and returns the first yes/no decision", async () => {
 			const undecidedPath = path.join(extensionsDir, "undecided.ts");
 			const decidedPath = path.join(extensionsDir, "decided.ts");

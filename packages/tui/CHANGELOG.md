@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a configurable `EntityList` component with non-wrapping navigation, toggle and delete actions, delete confirmation, and explicit fuzzy search.
+
 ## [0.81.1] - 2026-07-21
 
 ## [0.81.0] - 2026-07-21

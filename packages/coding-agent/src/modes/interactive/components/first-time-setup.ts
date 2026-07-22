@@ -1,8 +1,9 @@
-import { Container, getKeybindings, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, EntityList, Spacer, Text } from "@earendil-works/pi-tui";
 import { APP_NAME } from "../../../config.ts";
 import { type TerminalTheme, theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+import { getEntityListTheme } from "./entity-list-theme.ts";
+import { keyHint } from "./keybinding-hints.ts";
 
 export interface FirstTimeSetupResult {
 	theme: TerminalTheme;
@@ -34,6 +35,7 @@ export class FirstTimeSetupComponent extends Container {
 	private themeIndex: number;
 	private analyticsIndex = 0;
 	private readonly options: FirstTimeSetupOptions;
+	private list!: EntityList;
 
 	constructor(options: FirstTimeSetupOptions) {
 		super();
@@ -61,10 +63,6 @@ export class FirstTimeSetupComponent extends Container {
 			this.addChild(new Text(theme.fg("text", "Pick a theme."), 1, 0));
 			this.addChild(new Text(theme.fg("muted", `Detected system appearance: ${this.options.detectedTheme}`), 1, 0));
 			this.addChild(new Spacer(1));
-			this.addOptionList(
-				THEME_OPTIONS.map((option) => option.label),
-				this.themeIndex,
-			);
 		} else {
 			this.addChild(new Text(theme.fg("text", "Opt-in to anonymous usage data sharing?"), 1, 0));
 			this.addChild(
@@ -78,57 +76,28 @@ export class FirstTimeSetupComponent extends Container {
 				),
 			);
 			this.addChild(new Spacer(1));
-			this.addOptionList(
-				ANALYTICS_OPTIONS.map((option) => option.label),
-				this.analyticsIndex,
-			);
 		}
 
-		this.addChild(new Spacer(1));
-		this.addChild(
-			new Text(
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", this.step === "theme" ? "continue" : "finish") +
-					"  " +
-					keyHint("tui.select.cancel", "skip setup"),
-				1,
-				0,
-			),
+		const sourceOptions = this.step === "theme" ? THEME_OPTIONS : ANALYTICS_OPTIONS;
+		const selectedIndex = this.step === "theme" ? this.themeIndex : this.analyticsIndex;
+		this.list = new EntityList(
+			sourceOptions.map((option, index) => ({ id: String(index), label: option.label })),
+			{
+				theme: getEntityListTheme(),
+				maxVisible: sourceOptions.length,
+				initialSelectedId: String(selectedIndex),
+			},
 		);
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder());
-	}
-
-	private addOptionList(labels: string[], selectedIndex: number): void {
-		for (let i = 0; i < labels.length; i++) {
-			const isSelected = i === selectedIndex;
-			const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
-			const label = isSelected ? theme.fg("accent", labels[i]) : theme.fg("text", labels[i]);
-			this.addChild(new Text(`${prefix}${label}`, 1, 0));
-		}
-	}
-
-	private moveSelection(delta: number): void {
-		if (this.step === "theme") {
-			const next = Math.max(0, Math.min(THEME_OPTIONS.length - 1, this.themeIndex + delta));
-			if (next !== this.themeIndex) {
-				this.themeIndex = next;
-				this.options.onThemePreview(THEME_OPTIONS[this.themeIndex].value);
+		this.list.onSelectionChange = (item) => {
+			const index = Number(item.id);
+			if (this.step === "theme") {
+				this.themeIndex = index;
+				this.options.onThemePreview(THEME_OPTIONS[index].value);
+			} else {
+				this.analyticsIndex = index;
 			}
-		} else {
-			this.analyticsIndex = Math.max(0, Math.min(ANALYTICS_OPTIONS.length - 1, this.analyticsIndex + delta));
-		}
-		this.update();
-	}
-
-	handleInput(keyData: string): void {
-		const kb = getKeybindings();
-		if (kb.matches(keyData, "tui.select.up") || keyData === "k") {
-			this.moveSelection(-1);
-		} else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
-			this.moveSelection(1);
-		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
+		};
+		this.list.onActivate = () => {
 			if (this.step === "theme") {
 				this.step = "analytics";
 				this.update();
@@ -138,8 +107,27 @@ export class FirstTimeSetupComponent extends Container {
 					shareAnalytics: ANALYTICS_OPTIONS[this.analyticsIndex].value,
 				});
 			}
-		} else if (kb.matches(keyData, "tui.select.cancel")) {
-			this.options.onCancel();
-		}
+		};
+		this.list.onCancel = this.options.onCancel;
+		this.addChild(this.list);
+
+		this.addChild(new Spacer(1));
+		this.addChild(
+			new Text(
+				keyHint("tui.entity.up", "navigate") +
+					"  " +
+					keyHint("tui.entity.activate", this.step === "theme" ? "continue" : "finish") +
+					"  " +
+					keyHint("tui.entity.cancel", "skip setup"),
+				1,
+				0,
+			),
+		);
+		this.addChild(new Spacer(1));
+		this.addChild(new DynamicBorder());
+	}
+
+	handleInput(keyData: string): void {
+		this.list.handleInput(keyData);
 	}
 }

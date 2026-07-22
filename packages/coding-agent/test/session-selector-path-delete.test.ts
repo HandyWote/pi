@@ -83,7 +83,6 @@ function createSymlinkedSessionPaths(): {
 	};
 }
 
-const CTRL_D = "\x04";
 const CTRL_BACKSPACE = "\x1b[127;5u";
 
 describe("session selector path/delete interactions", () => {
@@ -123,13 +122,14 @@ describe("session selector path/delete interactions", () => {
 		const confirmationChanges: Array<string | null> = [];
 		list.onDeleteConfirmationChange = (path) => confirmationChanges.push(path);
 
+		list.handleInput("/");
 		list.handleInput("a");
 		list.handleInput(CTRL_BACKSPACE);
 
 		expect(confirmationChanges).toEqual([]);
 	});
 
-	it("enters confirmation mode on Ctrl+D even with a non-empty search query", async () => {
+	it("treats x as query text while search mode is active", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];
 
 		const selector = new SessionSelectorComponent(
@@ -147,10 +147,11 @@ describe("session selector path/delete interactions", () => {
 		const confirmationChanges: Array<string | null> = [];
 		list.onDeleteConfirmationChange = (path) => confirmationChanges.push(path);
 
+		list.handleInput("/");
 		list.handleInput("a");
-		list.handleInput(CTRL_D);
+		list.handleInput("x");
 
-		expect(confirmationChanges).toEqual([sessions[0]!.path]);
+		expect(confirmationChanges).toEqual([]);
 	});
 
 	it("enters confirmation mode on Ctrl+Backspace when search query is empty", async () => {
@@ -179,7 +180,7 @@ describe("session selector path/delete interactions", () => {
 		list.handleInput(CTRL_BACKSPACE);
 		expect(confirmationChanges).toEqual([sessions[0]!.path]);
 
-		list.handleInput("\r");
+		list.handleInput("x");
 		expect(confirmationChanges).toEqual([sessions[0]!.path, null]);
 		expect(deletedPath).toBe(sessions[0]!.path);
 	});
@@ -346,7 +347,7 @@ describe("session selector path/delete interactions", () => {
 			errorMessage = message;
 		};
 
-		list.handleInput(CTRL_D);
+		list.handleInput("x");
 
 		expect(confirmationChanges).toEqual([]);
 		expect(errorMessage).toBe("Cannot delete the currently active session");

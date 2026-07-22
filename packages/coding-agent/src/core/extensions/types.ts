@@ -1337,7 +1337,7 @@ export interface ExtensionAPI {
 	 *
 	 * If `models` is provided: replaces all existing models for this provider.
 	 * If only `baseUrl` is provided: overrides the URL for existing models.
-	 * If `oauth` is provided: registers OAuth provider for /login support.
+	 * If `oauth` is provided: registers OAuth auth compatibility for this provider.
 	 * If `streamSimple` is provided: registers a custom API stream handler.
 	 *
 	 * During initial extension load this call is queued and applied once the
@@ -1433,9 +1433,9 @@ export interface ProviderConfig {
 	 * Use context.store explicitly when the catalog should persist across sessions.
 	 */
 	refreshModels?(context: RefreshModelsContext): Promise<ProviderModelConfig[]>;
-	/** OAuth provider for /login support. The `id` is set automatically from the provider name. */
+	/** OAuth provider compatibility. The `id` is set automatically from the provider name. */
 	oauth?: {
-		/** Display name for the provider in login UI. */
+		/** Display name for the provider in auth UI. */
 		name: string;
 		/** @deprecated Retained for source compatibility; canonical auth flows ignore it. */
 		usesCallbackServer?: boolean;

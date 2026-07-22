@@ -38,8 +38,13 @@
 - Added extension registration for complete pi-ai providers, including native authentication, model refresh, filtering, and streaming behavior.
 - Added usage accounting for tools, compaction, and branch summaries in persisted sessions, footer totals, and session statistics ([#6671](https://github.com/earendil-works/pi/pull/6671) by [@davidbrai](https://github.com/davidbrai)).
 
+### Changed
+
+- Unified list navigation across profiles, sessions, model selectors, extension dialogs, themes, thinking levels, trust, message forking, and first-time setup, with Space toggles and two-step `x` deletion for entity lists.
+
 ### Fixed
 
+- Fixed profile model refreshes to leave new models disabled and preserve manually edited model metadata.
 - Updated the packaged `brace-expansion` dependency to 5.0.7 ([#6896](https://github.com/earendil-works/pi/pull/6896) by [@davidbrai](https://github.com/davidbrai)).
 - Fixed persisted remote model catalogs from overriding newer bundled catalogs after an upgrade.
 - Fixed inherited stored API-key credentials to apply their provider-scoped `env` values, including Amazon Bedrock profiles ([#6864](https://github.com/earendil-works/pi/pull/6864) by [@cristinaponcela](https://github.com/cristinaponcela)).

@@ -1,18 +1,14 @@
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@earendil-works/pi-tui";
-import { getAvailableThemes, getSelectListTheme } from "../theme/theme.ts";
+import { Container, EntityList } from "@earendil-works/pi-tui";
+import { getAvailableThemes } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-
-const THEME_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
-	minPrimaryColumnWidth: 12,
-	maxPrimaryColumnWidth: 32,
-};
+import { getEntityListTheme } from "./entity-list-theme.ts";
 
 /**
  * Component that renders a theme selector
  */
 export class ThemeSelectorComponent extends Container {
-	private selectList: SelectList;
-	private onPreview: (themeName: string) => void;
+	private readonly selectList: EntityList;
+	private readonly onPreview: (themeName: string) => void;
 
 	constructor(
 		currentTheme: string,
@@ -25,8 +21,8 @@ export class ThemeSelectorComponent extends Container {
 
 		// Get available themes and create select items
 		const themes = getAvailableThemes();
-		const themeItems: SelectItem[] = themes.map((name) => ({
-			value: name,
+		const themeItems = themes.map((name) => ({
+			id: name,
 			label: name,
 			description: name === currentTheme ? "(current)" : undefined,
 		}));
@@ -35,16 +31,14 @@ export class ThemeSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 
 		// Create selector
-		this.selectList = new SelectList(themeItems, 10, getSelectListTheme(), THEME_SELECT_LIST_LAYOUT);
+		this.selectList = new EntityList(themeItems, {
+			theme: getEntityListTheme(),
+			maxVisible: 10,
+			initialSelectedId: currentTheme,
+		});
 
-		// Preselect current theme
-		const currentIndex = themes.indexOf(currentTheme);
-		if (currentIndex !== -1) {
-			this.selectList.setSelectedIndex(currentIndex);
-		}
-
-		this.selectList.onSelect = (item) => {
-			onSelect(item.value);
+		this.selectList.onActivate = (item) => {
+			onSelect(item.id);
 		};
 
 		this.selectList.onCancel = () => {
@@ -52,7 +46,7 @@ export class ThemeSelectorComponent extends Container {
 		};
 
 		this.selectList.onSelectionChange = (item) => {
-			this.onPreview(item.value);
+			this.onPreview(item.id);
 		};
 
 		this.addChild(this.selectList);
@@ -61,7 +55,7 @@ export class ThemeSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 	}
 
-	getSelectList(): SelectList {
+	getSelectList(): EntityList {
 		return this.selectList;
 	}
 }

@@ -1,12 +1,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@earendil-works/pi-tui";
-import { getSelectListTheme } from "../theme/theme.ts";
+import { Container, EntityList } from "@earendil-works/pi-tui";
 import { DynamicBorder } from "./dynamic-border.ts";
-
-const THINKING_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
-	minPrimaryColumnWidth: 12,
-	maxPrimaryColumnWidth: 32,
-};
+import { getEntityListTheme } from "./entity-list-theme.ts";
 
 const LEVEL_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	off: "No reasoning",
@@ -22,7 +17,7 @@ const LEVEL_DESCRIPTIONS: Record<ThinkingLevel, string> = {
  * Component that renders a thinking level selector with borders
  */
 export class ThinkingSelectorComponent extends Container {
-	private selectList: SelectList;
+	private readonly selectList: EntityList;
 
 	constructor(
 		currentLevel: ThinkingLevel,
@@ -32,8 +27,8 @@ export class ThinkingSelectorComponent extends Container {
 	) {
 		super();
 
-		const thinkingLevels: SelectItem[] = availableLevels.map((level) => ({
-			value: level,
+		const thinkingLevels = availableLevels.map((level) => ({
+			id: level,
 			label: level,
 			description: LEVEL_DESCRIPTIONS[level],
 		}));
@@ -42,21 +37,14 @@ export class ThinkingSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 
 		// Create selector
-		this.selectList = new SelectList(
-			thinkingLevels,
-			thinkingLevels.length,
-			getSelectListTheme(),
-			THINKING_SELECT_LIST_LAYOUT,
-		);
+		this.selectList = new EntityList(thinkingLevels, {
+			theme: getEntityListTheme(),
+			maxVisible: thinkingLevels.length,
+			initialSelectedId: currentLevel,
+		});
 
-		// Preselect current level
-		const currentIndex = thinkingLevels.findIndex((item) => item.value === currentLevel);
-		if (currentIndex !== -1) {
-			this.selectList.setSelectedIndex(currentIndex);
-		}
-
-		this.selectList.onSelect = (item) => {
-			onSelect(item.value as ThinkingLevel);
+		this.selectList.onActivate = (item) => {
+			onSelect(item.id as ThinkingLevel);
 		};
 
 		this.selectList.onCancel = () => {
@@ -69,7 +57,7 @@ export class ThinkingSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 	}
 
-	getSelectList(): SelectList {
+	getSelectList(): EntityList {
 		return this.selectList;
 	}
 }

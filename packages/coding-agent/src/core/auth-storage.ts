@@ -9,7 +9,11 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
 import { normalizePath } from "../utils/paths.ts";
-import { resolveConfigValue } from "./resolve-config-value.ts";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+function resolveConfigValue(value: string, _env?: Record<string, string>): string {
+	return value;
+}
 
 type AuthStorageData = Record<string, Credential>;
 

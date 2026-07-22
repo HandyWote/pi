@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed built-in provider factories, generated model catalogs, and model generation scripts. Use protocol-level compatible providers and coding-agent profiles instead.
+
+### Added
+
+- Added OpenAI-compatible and Anthropic-compatible protocol provider factories.
+
 ### Changed
 
 - Renamed the published package scope to `@handy_wote`.
+- Simplified known provider typing for profile-driven provider IDs.
 
 ## [0.81.1] - 2026-07-21
 

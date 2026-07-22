@@ -2,10 +2,32 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Custom profile-based model configuration** — Built-in providers and catalogs are replaced by user-defined profiles with protocol, base URL, API key, and enabled models. See [Custom Profiles Design](../../docs/plans/2026-07-21-custom-profiles-design.md).
+- **Unified selector navigation** — Profile, model, session, theme, thinking-level, trust, extension, and message selectors now share the same list navigation behavior.
+
+### Breaking Changes
+
+- Replaced built-in provider login and model catalogs with user-defined profiles stored in `profiles.json`. Users must create profiles with a protocol, base URL, API key, and enabled model list.
+- Removed built-in provider catalogs and model generation from the coding-agent runtime; model selection now comes from configured profiles.
+
+### Added
+
+- Added profile types, locked profile storage, profile-to-provider runtime wiring, and models.dev metadata enrichment with graceful fallback defaults.
+- Added OpenAI-compatible and Anthropic-compatible profile support for custom endpoints.
+
 ### Changed
 
 - Renamed the published package scope to `@handy_wote` while keeping the `pi` CLI command name.
 - Changed update checks to read the `@handy_wote` release metadata from GitHub Pages.
+- Changed `ModelRuntime` and `pi --list-models` to use configured profiles instead of built-in provider catalogs.
+- Unified profile, model, session, theme, thinking-level, trust, extension, and message selectors on the shared `EntityList` component.
+
+### Fixed
+
+- Fixed OpenAI profile requests to use the completions API and default to the system role.
+- Fixed source-mode extension alias resolution for renamed package scopes while preserving compatibility aliases.
 
 ## [0.81.1] - 2026-07-21
 

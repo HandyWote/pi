@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-tui",
-	"version": "0.81.1",
+	"version": "0.81.2",
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
 	"main": "dist/index.js",

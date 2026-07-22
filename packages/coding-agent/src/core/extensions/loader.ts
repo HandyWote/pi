@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import * as _bundledPiAgentCore from "@handy_wote/pi-agent-core";
 import type { Provider } from "@handy_wote/pi-ai";
 import * as _bundledPiAiCompat from "@handy_wote/pi-ai/compat";
-import * as _bundledPiAiOauth from "@handy_wote/pi-ai/oauth";
 import * as _bundledPiAiProviders from "@handy_wote/pi-ai/providers/all";
 import type { KeyId } from "@handy_wote/pi-tui";
 import * as _bundledPiTui from "@handy_wote/pi-tui";
@@ -59,21 +58,18 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	// global API keep working at runtime until compat is removed.
 	"@handy_wote/pi-ai": _bundledPiAiCompat,
 	"@handy_wote/pi-ai/compat": _bundledPiAiCompat,
-	"@handy_wote/pi-ai/oauth": _bundledPiAiOauth,
 	"@handy_wote/pi-ai/providers/all": _bundledPiAiProviders,
 	"@handy_wote/pi-coding-agent": _bundledPiCodingAgent,
 	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
 	"@earendil-works/pi-tui": _bundledPiTui,
 	"@earendil-works/pi-ai": _bundledPiAiCompat,
 	"@earendil-works/pi-ai/compat": _bundledPiAiCompat,
-	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
 	"@earendil-works/pi-ai/providers/all": _bundledPiAiProviders,
 	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
 	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
 	"@mariozechner/pi-tui": _bundledPiTui,
 	"@mariozechner/pi-ai": _bundledPiAiCompat,
 	"@mariozechner/pi-ai/compat": _bundledPiAiCompat,
-	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/pi-ai/providers/all": _bundledPiAiProviders,
 	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
 };
@@ -125,7 +121,6 @@ function getAliases(): Record<string, string> {
 		["ai/dist/compat.js", "ai/src/compat.ts"],
 		"@handy_wote/pi-ai/compat",
 	);
-	const piAiOauthEntry = resolveWorkspaceOrImport(["ai/dist/oauth.js", "ai/src/oauth.ts"], "@handy_wote/pi-ai/oauth");
 	const piAiProvidersEntry = resolveWorkspaceOrImport(
 		["ai/dist/providers/all.js", "ai/src/providers/all.ts"],
 		"@handy_wote/pi-ai/providers/all",
@@ -141,7 +136,6 @@ function getAliases(): Record<string, string> {
 		"@handy_wote/pi-ai/providers/all": piAiProvidersEntry,
 		"@handy_wote/pi-ai/compat": piAiCompatEntry,
 		"@handy_wote/pi-ai/models": piAiModelsEntry,
-		"@handy_wote/pi-ai/oauth": piAiOauthEntry,
 		"@handy_wote/pi-ai": piAiCompatEntry,
 		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
 		"@earendil-works/pi-agent-core": piAgentCoreEntry,
@@ -150,7 +144,6 @@ function getAliases(): Record<string, string> {
 		"@earendil-works/pi-ai/providers/all": piAiProvidersEntry,
 		"@earendil-works/pi-ai/compat": piAiCompatEntry,
 		"@earendil-works/pi-ai/models": piAiModelsEntry,
-		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		"@earendil-works/pi-ai": piAiCompatEntry,
 		"@mariozechner/pi-coding-agent": piCodingAgentEntry,
 		"@mariozechner/pi-agent-core": piAgentCoreEntry,
@@ -159,7 +152,6 @@ function getAliases(): Record<string, string> {
 		"@mariozechner/pi-ai/providers/all": piAiProvidersEntry,
 		"@mariozechner/pi-ai/compat": piAiCompatEntry,
 		"@mariozechner/pi-ai/models": piAiModelsEntry,
-		"@mariozechner/pi-ai/oauth": piAiOauthEntry,
 		"@mariozechner/pi-ai": piAiCompatEntry,
 		typebox: typeboxEntry,
 		"typebox/compile": typeboxCompileEntry,

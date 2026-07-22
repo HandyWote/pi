@@ -3,13 +3,11 @@ import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils
  * Shared test utilities for coding-agent tests.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Agent } from "@handy_wote/pi-agent-core";
-import type { OAuthCredentials } from "@handy_wote/pi-ai";
 import { getModel, streamSimple } from "@handy_wote/pi-ai/compat";
-import { builtinProviders } from "@handy_wote/pi-ai/providers/all";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createEventBus } from "../src/core/event-bus.ts";
@@ -30,97 +28,6 @@ import { createCodingTools } from "../src/index.ts";
  * describe.skipIf(!API_KEY)
  */
 export const API_KEY = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
-
-// ============================================================================
-// OAuth API key resolution from ~/.pi/agent/auth.json
-// ============================================================================
-
-const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
-
-type ApiKeyCredential = {
-	type: "api_key";
-	key: string;
-};
-
-type OAuthCredentialEntry = {
-	type: "oauth";
-} & OAuthCredentials;
-
-type AuthCredential = ApiKeyCredential | OAuthCredentialEntry;
-
-type AuthStorageData = Record<string, AuthCredential>;
-
-function loadAuthStorage(): AuthStorageData {
-	if (!existsSync(AUTH_PATH)) {
-		return {};
-	}
-	try {
-		const content = readFileSync(AUTH_PATH, "utf-8");
-		return JSON.parse(content);
-	} catch {
-		return {};
-	}
-}
-
-function saveAuthStorage(storage: AuthStorageData): void {
-	const configDir = dirname(AUTH_PATH);
-	if (!existsSync(configDir)) {
-		mkdirSync(configDir, { recursive: true, mode: 0o700 });
-	}
-	writeFileSync(AUTH_PATH, JSON.stringify(storage, null, 2), "utf-8");
-	chmodSync(AUTH_PATH, 0o600);
-}
-
-/**
- * Resolve API key for a provider from ~/.pi/agent/auth.json
- *
- * For API key credentials, returns the key directly.
- * For OAuth credentials, returns the access token (refreshing if expired and saving back).
- *
- */
-export async function resolveApiKey(provider: string): Promise<string | undefined> {
-	const storage = loadAuthStorage();
-	const entry = storage[provider];
-
-	if (!entry) return undefined;
-
-	if (entry.type === "api_key") {
-		return entry.key;
-	}
-
-	if (entry.type === "oauth") {
-		const oauth = builtinProviders().find((candidate) => candidate.id === provider)?.auth.oauth;
-		if (!oauth) return undefined;
-		let credential = entry;
-		if (Date.now() >= credential.expires) {
-			credential = await oauth.refresh(credential);
-			storage[provider] = credential;
-			saveAuthStorage(storage);
-		}
-		return (await oauth.toAuth(credential)).apiKey;
-	}
-
-	return undefined;
-}
-
-/**
- * Check if a provider has credentials in ~/.pi/agent/auth.json
- */
-export function hasAuthForProvider(provider: string): boolean {
-	const storage = loadAuthStorage();
-	return provider in storage;
-}
-
-/** Path to the real pi agent config directory */
-export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
-
-/**
- * Get an AuthStorage instance backed by ~/.pi/agent/auth.json
- * Use this for tests that need real OAuth credentials.
- */
-export function getRealAuthStorage(): AuthStorage {
-	return AuthStorage.create(AUTH_PATH);
-}
 
 /**
  * Create a minimal user message for testing.
@@ -257,7 +164,26 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	}
 
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+	await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-key" }));
 	const modelRegistry = await createModelRegistry(authStorage, tempDir);
+	modelRegistry.registerProvider(model.provider, {
+		baseUrl: model.baseUrl,
+		api: model.api,
+		apiKey: "test-key",
+		models: [
+			{
+				id: model.id,
+				name: model.name,
+				api: model.api,
+				reasoning: model.reasoning,
+				input: model.input,
+				cost: model.cost,
+				contextWindow: model.contextWindow,
+				maxTokens: model.maxTokens,
+				baseUrl: model.baseUrl,
+			},
+		],
+	});
 
 	const session = new AgentSession({
 		agent,

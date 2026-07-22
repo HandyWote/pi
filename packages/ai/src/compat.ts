@@ -13,8 +13,6 @@
 export * from "./api/anthropic-messages.lazy.ts";
 export * from "./api/azure-openai-responses.lazy.ts";
 export * from "./api/bedrock-converse-stream.lazy.ts";
-export * from "./api/google-generative-ai.lazy.ts";
-export * from "./api/google-vertex.lazy.ts";
 export * from "./api/mistral-conversations.lazy.ts";
 export * from "./api/openai-codex-responses.lazy.ts";
 export * from "./api/openai-completions.lazy.ts";
@@ -31,8 +29,6 @@ export * from "./providers/images/register-builtins.ts";
 import { anthropicMessagesApi } from "./api/anthropic-messages.lazy.ts";
 import { azureOpenAIResponsesApi } from "./api/azure-openai-responses.lazy.ts";
 import { bedrockConverseStreamApi } from "./api/bedrock-converse-stream.lazy.ts";
-import { googleGenerativeAIApi } from "./api/google-generative-ai.lazy.ts";
-import { googleVertexApi } from "./api/google-vertex.lazy.ts";
 import { mistralConversationsApi } from "./api/mistral-conversations.lazy.ts";
 import { openAICodexResponsesApi } from "./api/openai-codex-responses.lazy.ts";
 import { openAICompletionsApi } from "./api/openai-completions.lazy.ts";
@@ -40,9 +36,30 @@ import { openAIResponsesApi } from "./api/openai-responses.lazy.ts";
 import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-function getBuiltinModel(_providerId: string, _modelId: string): any {
-	return undefined;
+const DEFAULT_API_BY_PROVIDER: Record<string, string> = {
+	anthropic: "anthropic-messages",
+	openai: "openai-responses",
+	"openai-codex": "openai-codex-responses",
+	"azure-openai-responses": "azure-openai-responses",
+	mistral: "mistral-conversations",
+	"amazon-bedrock": "bedrock-converse-stream",
+	radius: "pi-messages",
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getBuiltinModel(providerId: string, modelId: string): any {
+	return {
+		id: modelId,
+		name: modelId,
+		api: DEFAULT_API_BY_PROVIDER[providerId] ?? "openai-completions",
+		provider: providerId,
+		baseUrl: "",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 16384,
+	};
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getBuiltinModels(_providerId?: string): any[] {
@@ -193,8 +210,6 @@ const BUILTIN_APIS: [Api, ProviderStreams][] = [
 	["openai-responses", openAIResponsesApi()],
 	["openai-codex-responses", openAICodexResponsesApi()],
 	["azure-openai-responses", azureOpenAIResponsesApi()],
-	["google-generative-ai", googleGenerativeAIApi()],
-	["google-vertex", googleVertexApi()],
 	["mistral-conversations", mistralConversationsApi()],
 	["bedrock-converse-stream", bedrockConverseStreamApi()],
 	["pi-messages", piMessagesApi()],

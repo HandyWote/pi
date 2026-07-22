@@ -9,9 +9,6 @@ export { Type } from "typebox";
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./api/bedrock-converse-stream.ts";
-export type { GoogleOptions } from "./api/google-generative-ai.ts";
-export type { GoogleThinkingLevel } from "./api/google-shared.ts";
-export type { GoogleVertexOptions } from "./api/google-vertex.ts";
 export * from "./api/lazy.ts";
 export type { MistralOptions } from "./api/mistral-conversations.ts";
 export type { OpenAICodexResponsesOptions, OpenAICodexWebSocketDebugStats } from "./api/openai-codex-responses.ts";
@@ -22,14 +19,6 @@ export * from "./auth/context.ts";
 export * from "./auth/credential-store.ts";
 export * from "./auth/helpers.ts";
 export * from "./auth/types.ts";
-export type {
-	OAuthAuthInfo,
-	OAuthDeviceCodeInfo,
-	OAuthLoginCallbacks,
-	OAuthPrompt,
-	OAuthSelectOption,
-	OAuthSelectPrompt,
-} from "./compat/extension-oauth-types.ts";
 export * from "./images-models.ts";
 export * from "./models.ts";
 export * from "./models-store.ts";

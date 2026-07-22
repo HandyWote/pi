@@ -22,8 +22,6 @@ import type {
 	Context,
 	ImageContent,
 	Model,
-	OAuthCredentials,
-	OAuthLoginCallbacks,
 	Provider,
 	ProviderHeaders,
 	RefreshModelsContext,
@@ -1433,21 +1431,6 @@ export interface ProviderConfig {
 	 * Use context.store explicitly when the catalog should persist across sessions.
 	 */
 	refreshModels?(context: RefreshModelsContext): Promise<ProviderModelConfig[]>;
-	/** OAuth provider compatibility. The `id` is set automatically from the provider name. */
-	oauth?: {
-		/** Display name for the provider in auth UI. */
-		name: string;
-		/** @deprecated Retained for source compatibility; canonical auth flows ignore it. */
-		usesCallbackServer?: boolean;
-		/** Run the login flow, return credentials to persist. */
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-		/** Refresh expired credentials, return updated credentials to persist. */
-		refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-		/** Convert credentials to API key string for the provider. */
-		getApiKey(credentials: OAuthCredentials): string;
-		/** Legacy synchronous credential-dependent model projection. */
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
 }
 
 /** Configuration for a model within a provider. */

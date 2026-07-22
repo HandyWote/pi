@@ -27,17 +27,9 @@
 			"types": "./dist/api/*.d.ts",
 			"import": "./dist/api/*.js"
 		},
-		"./oauth": {
-			"types": "./dist/oauth.d.ts",
-			"import": "./dist/oauth.js"
-		},
 		"./bedrock-provider": {
 			"types": "./dist/bedrock-provider.d.ts",
 			"import": "./dist/bedrock-provider.js"
-		},
-		"./bun-oauth": {
-			"types": "./dist/bun-oauth.d.ts",
-			"import": "./dist/bun-oauth.js"
 		}
 	},
 	"bin": {
@@ -57,7 +49,6 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "0.91.1",
 		"@aws-sdk/client-bedrock-runtime": "3.1048.0",
-		"@google/genai": "1.52.0",
 		"@mistralai/mistralai": "2.2.6",
 		"@opentelemetry/api": "1.9.0",
 		"@smithy/node-http-handler": "4.7.3",

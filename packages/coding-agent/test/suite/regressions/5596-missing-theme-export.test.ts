@@ -33,7 +33,7 @@ describe("regression #5596: missing configured theme export", () => {
 		const model = faux.getModel();
 		const authStorage = AuthStorage.inMemory();
 		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "faux-key" }));
-		const modelRegistry = await createInMemoryModelRegistry(authStorage);
+		const modelRegistry = await createInMemoryModelRegistry(authStorage, join(tempDir, "profiles.json"));
 		modelRegistry.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,
 			apiKey: "faux-key",

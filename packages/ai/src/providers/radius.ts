@@ -1,6 +1,5 @@
 import { piMessagesApi } from "../api/pi-messages.lazy.ts";
-import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
-import { loadRadiusOAuth } from "../auth/oauth/load.ts";
+import { envApiKeyAuth } from "../auth/helpers.ts";
 import type { Provider } from "../models.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,7 +40,6 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 		name,
 		auth: {
 			apiKey: envApiKeyAuth("Radius API key", ["RADIUS_API_KEY"]),
-			oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }),
 		},
 		getModels: () => models,
 		refreshModels: (context) => {
@@ -50,19 +48,8 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 					const stored = await context.store.read();
 					if (stored) models = stored.models.filter((model) => model.provider === id) as typeof models;
 
-					// Import catalogs cached by the pre-ModelsStore Radius implementation.
-					if (!stored && context.credential?.type === "oauth") {
-						const legacy = getRadiusModels(id, context.credential);
-						if (legacy.length > 0) {
-							models = legacy;
-							await context.store.write({ models: legacy, checkedAt: Date.now() });
-						}
-					}
-
 					if (!context.allowNetwork || context.signal?.aborted) return;
-					const apiKey =
-						context.credential?.type === "oauth" ? context.credential.access : context.credential?.key;
-					const config = await loadRadiusGatewayConfig(gateway, apiKey, context.signal);
+					const config = await loadRadiusGatewayConfig(gateway, context.credential?.key, context.signal);
 					if (context.signal?.aborted) return;
 					models = getRadiusModelsFromConfig(id, config);
 					await context.store.write({ models, checkedAt: Date.now() });

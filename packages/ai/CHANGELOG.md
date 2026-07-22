@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the legacy OAuth exports and built-in OAuth flows; configure API-key profiles instead.
+- Removed the Google Generative AI and Google Vertex protocol implementations and related API exports.
+
+### Removed
+
+- Removed the `@google/genai` runtime dependency and Google-specific environment credential discovery.
+
 ## [0.81.2] - 2026-07-22
 
 ### Breaking Changes

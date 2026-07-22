@@ -1,65 +1,5 @@
-// NEVER convert to top-level imports - breaks browser/Vite builds
-let _existsSync: typeof import("node:fs").existsSync | null = null;
-let _homedir: typeof import("node:os").homedir | null = null;
-let _join: typeof import("node:path").join | null = null;
-
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
-const NODE_FS_SPECIFIER = "node:" + "fs";
-const NODE_OS_SPECIFIER = "node:" + "os";
-const NODE_PATH_SPECIFIER = "node:" + "path";
-
-// Eagerly load in Node.js/Bun environment only
-if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-	dynamicImport(NODE_FS_SPECIFIER).then((m) => {
-		_existsSync = (m as typeof import("node:fs")).existsSync;
-	});
-	dynamicImport(NODE_OS_SPECIFIER).then((m) => {
-		_homedir = (m as typeof import("node:os")).homedir;
-	});
-	dynamicImport(NODE_PATH_SPECIFIER).then((m) => {
-		_join = (m as typeof import("node:path")).join;
-	});
-}
-
 import type { KnownProvider, ProviderEnv } from "./types.ts";
 import { getProviderEnvValue } from "./utils/provider-env.ts";
-
-let cachedVertexAdcCredentialsExists: boolean | null = null;
-
-function hasVertexAdcCredentials(env?: ProviderEnv): boolean {
-	const explicitCredentialsPath = env?.GOOGLE_APPLICATION_CREDENTIALS;
-	if (explicitCredentialsPath) {
-		return _existsSync ? _existsSync(explicitCredentialsPath) : false;
-	}
-
-	if (cachedVertexAdcCredentialsExists === null) {
-		// If node modules haven't loaded yet (async import race at startup),
-		// return false WITHOUT caching so the next call retries once they're ready.
-		// Only cache false permanently in a browser environment where fs is never available.
-		if (!_existsSync || !_homedir || !_join) {
-			const isNode = typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
-			if (!isNode) {
-				// Definitively in a browser — safe to cache false permanently
-				cachedVertexAdcCredentialsExists = false;
-			}
-			return false;
-		}
-
-		// Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
-		const gacPath = getProviderEnvValue("GOOGLE_APPLICATION_CREDENTIALS", env);
-		if (gacPath) {
-			cachedVertexAdcCredentialsExists = _existsSync(gacPath);
-		} else {
-			// Fall back to default ADC path (lazy evaluation)
-			cachedVertexAdcCredentialsExists = _existsSync(
-				_join(_homedir(), ".config", "gcloud", "application_default_credentials.json"),
-			);
-		}
-	}
-	return cachedVertexAdcCredentialsExists;
-}
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 	if (provider === "github-copilot") {
@@ -79,8 +19,6 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 		"azure-openai-responses": "AZURE_OPENAI_API_KEY",
 		nvidia: "NVIDIA_API_KEY",
 		deepseek: "DEEPSEEK_API_KEY",
-		google: "GEMINI_API_KEY",
-		"google-vertex": "GOOGLE_CLOUD_API_KEY",
 		groq: "GROQ_API_KEY",
 		cerebras: "CEREBRAS_API_KEY",
 		xai: "XAI_API_KEY",
@@ -140,20 +78,6 @@ export function getEnvApiKey(provider: string, env?: ProviderEnv): string | unde
 	const envKeys = findEnvKeys(provider, env);
 	if (envKeys?.[0]) {
 		return getProviderEnvValue(envKeys[0], env);
-	}
-
-	// Vertex AI supports either an explicit API key or Application Default Credentials.
-	// Auth is configured via `gcloud auth application-default login`.
-	if (provider === "google-vertex") {
-		const hasCredentials = hasVertexAdcCredentials(env);
-		const hasProject = !!(
-			getProviderEnvValue("GOOGLE_CLOUD_PROJECT", env) || getProviderEnvValue("GCLOUD_PROJECT", env)
-		);
-		const hasLocation = !!getProviderEnvValue("GOOGLE_CLOUD_LOCATION", env);
-
-		if (hasCredentials && hasProject && hasLocation) {
-			return "<authenticated>";
-		}
 	}
 
 	if (provider === "amazon-bedrock") {

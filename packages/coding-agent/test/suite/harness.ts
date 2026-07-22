@@ -110,7 +110,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	if (withConfiguredAuth) {
 		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "faux-key" }));
 	}
-	const modelRegistry = await createInMemoryModelRegistry(authStorage);
+	const modelRegistry = await createInMemoryModelRegistry(authStorage, join(tempDir, "profiles.json"));
 	if (withConfiguredAuth) {
 		modelRegistry.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,

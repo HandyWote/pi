@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed OAuth provider configuration from the extension API and extension runtime aliases.
+
+### Fixed
+
+- Fixed SDK sessions with a custom agent directory loading and locking the user's global profile store.
+
+### Removed
+
+- Removed the legacy Anthropic and GitLab Duo custom-provider examples.
+
 ## [0.81.2] - 2026-07-22
 
 ### New Features

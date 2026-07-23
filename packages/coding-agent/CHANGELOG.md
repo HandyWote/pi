@@ -15,6 +15,7 @@
 ### Fixed
 
 - Fixed DeepSeek optional-only tool schemas and preserved unsupported thinking-level mappings across serializers.
+- Fixed profiles store to retry lock acquisition on concurrent access, preventing crashes when multiple processes read or write profiles simultaneously.
 
 ## [0.81.3] - 2026-07-22
 

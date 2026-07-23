@@ -2,10 +2,19 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Gateway Profile model discovery** — Use `/profile` to connect to a single gateway, auto-discover its models and supported APIs, group models by family (GPT, Claude, Qwen, DeepSeek), and set per-family or per-model API preferences (`Auto` with gateway-aware resolution, or explicit overrides). See [Gateway Profiles](docs/models.md#gateway-profiles).
+- **Local compatibility registry files** — Add or override model metadata, API preferences, thinking levels, and API-specific compatibility rules via the `compatRegistries` setting pointing to local JSON files. See [compatRegistries](docs/settings.md#compatregistries).
+
 ### Added
 
 - Added gateway Profile model discovery, family grouping, per-family and per-model API selection, and mixed-API runtime providers.
 - Added validated local compatibility registry files through the `compatRegistries` setting.
+
+### Fixed
+
+- Fixed DeepSeek optional-only tool schemas and preserved unsupported thinking-level mappings across serializers.
 
 ## [0.81.3] - 2026-07-22
 

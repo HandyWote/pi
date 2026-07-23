@@ -1,5 +1,5 @@
 {
-	"version": "0.81.3",
+	"version": "0.82.0",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Remove legacy OAuth and provider support"
+	"note": "Gateway Profile model discovery; Local compatibility registry files"
 }

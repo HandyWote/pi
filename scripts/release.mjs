@@ -9,7 +9,7 @@
  * Steps:
  * 1. Check for uncommitted changes
  * 2. Bump version via npm run version:xxx or set an explicit version
- * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
+ * 3. Update CHANGELOG.md files and public/latest-version.json
  * 4. Regenerate release artifacts
  * 5. Run checks and tests
  * 6. Commit and tag the release
@@ -160,6 +160,22 @@ function updateChangelogsForRelease(version) {
 	}
 }
 
+function updateLatestVersionMetadata(version) {
+	const metadataPath = "public/latest-version.json";
+	const changelog = readFileSync("packages/coding-agent/CHANGELOG.md", "utf-8");
+	const releaseStart = changelog.indexOf(`## [${version}]`);
+	const releaseEnd = releaseStart === -1 ? -1 : changelog.indexOf("\n## [", releaseStart + 1);
+	const releaseSection =
+		releaseStart === -1 ? "" : changelog.slice(releaseStart, releaseEnd === -1 ? undefined : releaseEnd);
+	const featureTitles = [...releaseSection.matchAll(/^- \*\*([^*]+)\*\*/gm)].map((match) => match[1].trim());
+	const firstChange = releaseSection.match(/^- (.+)$/m)?.[1].trim();
+	const note = featureTitles.length > 0 ? featureTitles.join("; ") : (firstChange ?? `Release v${version}`);
+	const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+
+	writeFileSync(metadataPath, `${JSON.stringify({ ...metadata, version, note }, null, "\t")}\n`);
+	console.log(`  Updated ${metadataPath}`);
+}
+
 function addUnreleasedSection() {
 	const changelogs = getChangelogs();
 	const unreleasedSection = "## [Unreleased]\n\n";
@@ -197,6 +213,7 @@ console.log(`  New version: ${version}\n`);
 // 3. Update changelogs
 console.log("Updating CHANGELOG.md files...");
 updateChangelogsForRelease(version);
+updateLatestVersionMetadata(version);
 console.log();
 
 // 4. Regenerate release artifacts

@@ -1,10 +1,11 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+Use `/profile` for a gateway that exposes a model catalog, or add fully explicit custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
 
 ## Table of Contents
 
 - [Minimal Example](#minimal-example)
+- [Gateway Profiles](#gateway-profiles)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
@@ -13,6 +14,20 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
+
+## Gateway Profiles
+
+A Profile is one gateway connection, not one provider or one protocol. Create it with `/profile` and enter only a connection name, base URL, and API key. Pi then tests the connection, discovers the gateway's models and available APIs, enriches known model metadata, and opens model management.
+
+Models are grouped into families such as GPT, Claude, Qwen, and DeepSeek. New models start disabled. You can enable or disable the current models in a group, set a persistent API policy for the group, and override enabled state or API on an individual model.
+
+The default API preference is `Auto`. The model row shows the resolved API, for example `Auto -> Anthropic Messages`. Auto chooses only from APIs exposed by the gateway and supported by Pi, preferring a known model's native format when it is actually available. Select an explicit API when gateway discovery is incomplete or incorrect. Pi shows unresolved models, models no longer returned by the gateway, and discovery warnings instead of silently changing formats.
+
+For an existing Profile, connection settings also expose a fallback API. It is used only after model, family, gateway, and registry preferences cannot resolve an API; it does not force every model through one format.
+
+Refreshing discovery preserves model enabled state, family API policies, per-model API choices, and manual metadata overrides. Newly discovered models remain disabled; missing models remain visible as unavailable so their settings are not lost.
+
+Use a Profile when one gateway serves a changing catalog or multiple model families. Use `models.json` when you need a fully explicit provider definition, custom headers, or models that cannot be discovered.
 
 ## Minimal Example
 

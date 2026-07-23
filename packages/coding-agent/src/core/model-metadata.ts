@@ -1,12 +1,27 @@
 import {
+	BUILTIN_COMPAT_REGISTRY,
+	type CompiledModelCompatRegistry,
+	lookupModelCompatOverlay,
+	type ModelCost,
+	type RegistryDisplayGroup,
+} from "@handy_wote/pi-ai";
+import type { DiscoveredProfileModel } from "./profile-discovery.ts";
+import {
 	DEFAULT_CONTEXT_WINDOW,
 	DEFAULT_MAX_TOKENS,
-	type MetadataSource,
-	type Profile,
+	type ProfileModelOverrides,
 	type UserModel,
 } from "./profiles-types.ts";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
+
+interface ModelsDevCostTier {
+	input?: number;
+	output?: number;
+	cache_read?: number;
+	cache_write?: number;
+	tier?: { type?: string; size?: number };
+}
 
 interface ModelsDevModel {
 	name?: string;
@@ -14,11 +29,16 @@ interface ModelsDevModel {
 	reasoning?: boolean;
 	attachment?: boolean;
 	tool_call?: boolean;
+	cost?: {
+		input?: number;
+		output?: number;
+		cache_read?: number;
+		cache_write?: number;
+		tiers?: ModelsDevCostTier[];
+	};
 }
 
 interface ModelsDevProvider {
-	name?: string;
-	api?: string;
 	models: Record<string, ModelsDevModel>;
 }
 
@@ -31,73 +51,115 @@ function guessOfficialProvider(modelId: string): string | undefined {
 	if (lower.includes("deepseek")) return "deepseek";
 	if (lower.includes("qwen")) return "alibaba";
 	if (lower.includes("glm")) return "zhipuai";
+	if (lower.includes("gemini") || lower.includes("gemma")) return "google";
+	if (lower.includes("grok")) return "xai";
+	if (lower.includes("mistral") || lower.includes("codestral")) return "mistral";
 	return undefined;
 }
 
-function makeDefaultModel(id: string, name: string): UserModel {
+function zeroCost(): ModelCost {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+function modelsDevCost(cost: ModelsDevModel["cost"]): ModelCost {
+	const tiers = cost?.tiers?.flatMap((tier) => {
+		if (tier.tier?.type !== "context" || tier.tier.size === undefined) return [];
+		return [
+			{
+				inputTokensAbove: tier.tier.size,
+				input: tier.input ?? 0,
+				output: tier.output ?? 0,
+				cacheRead: tier.cache_read ?? 0,
+				cacheWrite: tier.cache_write ?? 0,
+			},
+		];
+	});
 	return {
-		id,
-		name,
+		input: cost?.input ?? 0,
+		output: cost?.output ?? 0,
+		cacheRead: cost?.cache_read ?? 0,
+		cacheWrite: cost?.cache_write ?? 0,
+		...(tiers?.length ? { tiers } : {}),
+	};
+}
+
+export function inferModelDisplayGroup(modelId: string, name = modelId): RegistryDisplayGroup {
+	const value = `${modelId} ${name}`.toLowerCase();
+	if (value.includes("claude")) return { id: "claude", label: "Claude" };
+	if (value.includes("deepseek")) return { id: "deepseek", label: "DeepSeek" };
+	if (value.includes("qwen")) return { id: "qwen", label: "Qwen" };
+	if (value.includes("kimi") || value.includes("moonshot")) return { id: "kimi", label: "Kimi" };
+	if (value.includes("glm")) return { id: "glm", label: "GLM" };
+	if (value.includes("gemini") || value.includes("gemma")) return { id: "google", label: "Google" };
+	if (value.includes("grok")) return { id: "grok", label: "Grok" };
+	if (value.includes("mistral") || value.includes("codestral")) return { id: "mistral", label: "Mistral" };
+	if (value.includes("gpt") || value.includes("codex") || /(^|[\s/_-])o\d/.test(value)) {
+		return { id: "gpt", label: "GPT" };
+	}
+	return { id: "other", label: "Other models" };
+}
+
+function makeDefaultModel(
+	discovered: DiscoveredProfileModel,
+	registrySources: readonly CompiledModelCompatRegistry[],
+): UserModel {
+	const registryGroup = lookupModelCompatOverlay(registrySources, discovered.id)?.group;
+	return {
+		...discovered,
+		name: discovered.name,
 		enabled: true,
 		contextWindow: DEFAULT_CONTEXT_WINDOW,
 		maxTokens: DEFAULT_MAX_TOKENS,
 		supportsReasoning: false,
 		supportsVision: false,
 		supportsToolCall: true,
-		metadataSource: "manual" as MetadataSource,
+		metadataSource: "default",
+		cost: zeroCost(),
+		group: registryGroup ?? inferModelDisplayGroup(discovered.id, discovered.name),
+		available: true,
 	};
 }
 
-function enrichOne(modelId: string, displayName: string, modelsDev: ModelsDevData): UserModel {
-	const officialProvider = guessOfficialProvider(modelId);
+function enrichOne(
+	discovered: DiscoveredProfileModel,
+	modelsDev: ModelsDevData,
+	registrySources: readonly CompiledModelCompatRegistry[],
+): UserModel {
+	const officialProvider = guessOfficialProvider(discovered.id);
 	const matches: Array<{ model: ModelsDevModel; isOfficial: boolean }> = [];
 
 	for (const [providerId, provider] of Object.entries(modelsDev)) {
-		const model = provider.models?.[modelId];
-		if (model) {
-			matches.push({
-				model,
-				isOfficial: officialProvider === providerId,
-			});
-		}
+		const model = provider.models?.[discovered.id];
+		if (model) matches.push({ model, isOfficial: officialProvider === providerId });
 	}
 
-	if (matches.length === 0) {
-		return makeDefaultModel(modelId, displayName);
-	}
+	if (matches.length === 0) return makeDefaultModel(discovered, registrySources);
 
-	matches.sort((a, b) => (b.isOfficial ? 1 : 0) - (a.isOfficial ? 1 : 0));
+	matches.sort((a, b) => Number(b.isOfficial) - Number(a.isOfficial));
 	const best = matches[0].model;
-
-	const reasoning = matches.some((m) => m.model.reasoning === true);
-	const vision = matches.some((m) => m.model.attachment === true);
-	const toolCall = matches.some((m) => m.model.tool_call === true);
-
 	const contexts = matches
-		.map((m) => m.model.limit?.context)
-		.filter((c): c is number => typeof c === "number" && c > 0)
+		.map((match) => match.model.limit?.context)
+		.filter((value): value is number => typeof value === "number" && value > 0)
 		.sort((a, b) => a - b);
-	const contextWindow = contexts.length > 0 ? contexts[Math.floor(contexts.length / 2)] : DEFAULT_CONTEXT_WINDOW;
-
 	const outputs = matches
-		.map((m) => m.model.limit?.output)
-		.filter((o): o is number => typeof o === "number" && o > 0)
+		.map((match) => match.model.limit?.output)
+		.filter((value): value is number => typeof value === "number" && value > 0)
 		.sort((a, b) => a - b);
-	const maxTokens = outputs.length > 0 ? outputs[Math.floor(outputs.length / 2)] : DEFAULT_MAX_TOKENS;
-
-	const name = best.name ?? displayName;
-	const source: MetadataSource = matches.some((m) => m.isOfficial) ? "official" : "community";
+	const registryGroup = lookupModelCompatOverlay(registrySources, discovered.id)?.group;
 
 	return {
-		id: modelId,
-		name,
+		...discovered,
+		name: best.name ?? discovered.name,
 		enabled: true,
-		contextWindow,
-		maxTokens,
-		supportsReasoning: reasoning,
-		supportsVision: vision,
-		supportsToolCall: toolCall,
-		metadataSource: source,
+		contextWindow: contexts.length ? contexts[Math.floor(contexts.length / 2)] : DEFAULT_CONTEXT_WINDOW,
+		maxTokens: outputs.length ? outputs[Math.floor(outputs.length / 2)] : DEFAULT_MAX_TOKENS,
+		supportsReasoning: matches.some((match) => match.model.reasoning === true),
+		supportsVision: matches.some((match) => match.model.attachment === true),
+		supportsToolCall: matches.some((match) => match.model.tool_call === true),
+		metadataSource: matches.some((match) => match.isOfficial) ? "official" : "community",
+		cost: modelsDevCost(best.cost),
+		group: registryGroup ?? inferModelDisplayGroup(discovered.id, best.name ?? discovered.name),
+		available: true,
 	};
 }
 
@@ -115,62 +177,53 @@ export function clearModelsDevCache(): void {
 	cachedModelsDev = undefined;
 }
 
-export async function enrichWithModelsDev(modelIds: Array<{ id: string; name: string }>): Promise<UserModel[]> {
+export async function enrichWithModelsDev(
+	models: DiscoveredProfileModel[],
+	registrySources: readonly CompiledModelCompatRegistry[] = [BUILTIN_COMPAT_REGISTRY],
+): Promise<UserModel[]> {
 	let catalog: ModelsDevData;
 	try {
 		catalog = await fetchModelsDevCatalog();
 	} catch {
-		return modelIds.map((m) => makeDefaultModel(m.id, m.name));
+		return models.map((model) => makeDefaultModel(model, registrySources));
 	}
-	return modelIds.map((m) => enrichOne(m.id, m.name, catalog));
+	return models.map((model) => enrichOne(model, catalog, registrySources));
+}
+
+function legacyManualOverrides(model: UserModel): ProfileModelOverrides | undefined {
+	if (model.overrides) return model.overrides;
+	if (model.metadataSource !== "manual") return undefined;
+	return {
+		name: model.name,
+		contextWindow: model.contextWindow,
+		maxTokens: model.maxTokens,
+		supportsReasoning: model.supportsReasoning,
+		supportsVision: model.supportsVision,
+		supportsToolCall: model.supportsToolCall,
+		...(model.cost ? { cost: model.cost } : {}),
+	};
 }
 
 export function mergeProfileModels(
 	existingModels: readonly UserModel[],
 	enrichedModels: readonly UserModel[],
+	seenAt = new Date().toISOString(),
 ): UserModel[] {
 	const existingById = new Map(existingModels.map((model) => [model.id, model]));
-	return enrichedModels.map((model) => {
+	const current = enrichedModels.map((model) => {
 		const existing = existingById.get(model.id);
-		if (!existing) return { ...model, enabled: false };
-		if (existing.metadataSource === "manual") return { ...existing };
-		return { ...model, enabled: existing.enabled };
+		if (!existing) return { ...model, enabled: false, available: true, lastSeenAt: seenAt };
+		existingById.delete(model.id);
+		const overrides = legacyManualOverrides(existing);
+		return {
+			...model,
+			enabled: existing.enabled,
+			available: true,
+			lastSeenAt: seenAt,
+			...(existing.apiPreference ? { apiPreference: existing.apiPreference } : {}),
+			...(overrides ? { overrides } : {}),
+		};
 	});
-}
-
-export async function fetchModelsFromEndpoint(profile: Profile): Promise<Array<{ id: string; name: string }>> {
-	if (profile.protocol === "anthropic") {
-		const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;
-		const response = await fetch(url, {
-			headers: {
-				"anthropic-version": "2023-06-01",
-				"content-type": "application/json",
-				"x-api-key": profile.apiKey,
-			},
-		});
-
-		if (!response.ok) {
-			throw new Error(`Failed to fetch models from ${url}: ${response.status} ${response.statusText}`);
-		}
-
-		const data = (await response.json()) as { data?: Array<{ id: string; display_name?: string }> };
-		const models = data.data ?? [];
-		return models.map((m) => ({ id: m.id, name: m.display_name ?? m.id }));
-	}
-
-	const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;
-	const response = await fetch(url, {
-		headers: {
-			Authorization: `Bearer ${profile.apiKey}`,
-			"Content-Type": "application/json",
-		},
-	});
-
-	if (!response.ok) {
-		throw new Error(`Failed to fetch models from ${url}: ${response.status} ${response.statusText}`);
-	}
-
-	const data = (await response.json()) as { data?: Array<{ id: string }> };
-	const models = data.data ?? [];
-	return models.map((m) => ({ id: m.id, name: m.id }));
+	const unavailable = Array.from(existingById.values(), (model) => ({ ...model, available: false }));
+	return [...current, ...unavailable];
 }

@@ -33,6 +33,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
+| `compatRegistries` | array | `[]` | Local model compatibility registry files, applied after the built-in registry |
 
 #### thinkingBudgets
 
@@ -46,6 +47,20 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
   }
 }
 ```
+
+#### compatRegistries
+
+Use local compatibility registry files to add or override model metadata, API preferences, thinking levels, and API-specific compatibility rules:
+
+```json
+{
+  "compatRegistries": [
+    { "type": "file", "path": "registries/company-models.json" }
+  ]
+}
+```
+
+Relative paths resolve from the settings file that declares them. Files are loaded in order after the built-in registry, so later files take precedence field by field. Invalid or missing files produce a warning and are skipped without disabling the built-in registry. `/reload` rereads the files.
 
 ### UI & Display
 

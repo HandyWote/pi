@@ -279,14 +279,19 @@ function buildParams(
 
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
-			const effort = options?.reasoningEffort
-				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+			const mappedEffort = options.reasoningEffort ? model.thinkingLevelMap?.[options.reasoningEffort] : undefined;
+			const effort = options.reasoningEffort
+				? mappedEffort === null
+					? undefined
+					: (mappedEffort ?? options.reasoningEffort)
 				: "medium";
-			params.reasoning = {
-				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
-			};
-			params.include = ["reasoning.encrypted_content"];
+			if (effort !== undefined || options.reasoningSummary) {
+				params.reasoning = {
+					...(effort !== undefined ? { effort: effort as NonNullable<typeof params.reasoning>["effort"] } : {}),
+					summary: options.reasoningSummary || "auto",
+				};
+				params.include = ["reasoning.encrypted_content"];
+			}
 		} else if (model.thinkingLevelMap?.off !== null) {
 			params.reasoning = {
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],

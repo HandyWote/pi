@@ -19,6 +19,7 @@ import type {
 	ImageContent,
 	Message,
 	Model,
+	ModelThinkingLevel,
 	OpenAICompletionsCompat,
 	ProviderEnv,
 	ProviderHeaders,
@@ -643,9 +644,8 @@ function buildParams(
 		};
 		zaiParams.thinking = options?.reasoningEffort ? { type: "enabled", clear_thinking: false } : { type: "disabled" };
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			const mappedEffort = model.thinkingLevelMap?.[options.reasoningEffort];
-			const effort = mappedEffort === undefined ? options.reasoningEffort : mappedEffort;
-			if (typeof effort === "string") {
+			const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+			if (effort !== undefined) {
 				zaiParams.reasoning_effort = effort;
 			}
 		}
@@ -668,22 +668,25 @@ function buildParams(
 			(params as any).thinking = { type: "disabled" };
 		}
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			(params as any).reasoning_effort =
-				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+			if (effort !== undefined) {
+				(params as any).reasoning_effort = effort;
+			}
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
 		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
 		if (options?.reasoningEffort) {
-			openRouterParams.reasoning = {
-				effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
-			};
+			const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+			if (effort !== undefined) {
+				openRouterParams.reasoning = { effort };
+			}
 		} else if (model.thinkingLevelMap?.off !== null) {
 			openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
 		}
 	} else if (compat.thinkingFormat === "ant-ling" && model.reasoning && options?.reasoningEffort) {
-		const effort = model.thinkingLevelMap?.[options.reasoningEffort];
-		if (typeof effort === "string") {
+		const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+		if (effort !== undefined) {
 			(params as typeof params & { reasoning?: { effort: string } }).reasoning = { effort };
 		}
 	} else if (compat.thinkingFormat === "together" && model.reasoning) {
@@ -693,18 +696,27 @@ function buildParams(
 		};
 		togetherParams.reasoning = { enabled: !!options?.reasoningEffort };
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			togetherParams.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+			if (effort !== undefined) {
+				togetherParams.reasoning_effort = effort;
+			}
 		}
 	} else if (compat.thinkingFormat === "string-thinking" && model.reasoning) {
 		const stringThinkingParams = params as typeof params & { thinking?: string };
 		if (options?.reasoningEffort) {
-			stringThinkingParams.thinking = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			const thinking = resolveThinkingLevelValue(model, options.reasoningEffort);
+			if (thinking !== undefined) {
+				stringThinkingParams.thinking = thinking;
+			}
 		} else if (model.thinkingLevelMap?.off !== null) {
 			stringThinkingParams.thinking = model.thinkingLevelMap?.off ?? "none";
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		const effort = resolveThinkingLevelValue(model, options.reasoningEffort);
+		if (effort !== undefined) {
+			(params as any).reasoning_effort = effort;
+		}
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
 		if (typeof offValue === "string") {
@@ -729,6 +741,14 @@ function buildParams(
 	}
 
 	return params;
+}
+
+function resolveThinkingLevelValue(
+	model: Pick<Model<"openai-completions">, "thinkingLevelMap">,
+	level: ModelThinkingLevel,
+): string | undefined {
+	const mapped = model.thinkingLevelMap?.[level];
+	return mapped === null ? undefined : (mapped ?? level);
 }
 
 function buildChatTemplateKwargs(
@@ -1165,16 +1185,23 @@ function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
-	return tools.map((tool) => ({
-		type: "function",
-		function: {
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.parameters as any, // TypeBox already generates JSON Schema
-			// Only include strict if provider supports it. Some reject unknown fields.
-			...(compat.supportsStrictMode !== false && { strict: false }),
-		},
-	}));
+	return tools.map((tool) => {
+		const schema = tool.parameters as Tool["parameters"] & { type?: unknown; required?: unknown };
+		const parameters =
+			compat.requiresToolSchemaRequiredArray && schema.type === "object" && schema.required === undefined
+				? { ...tool.parameters, required: [] }
+				: tool.parameters;
+		return {
+			type: "function",
+			function: {
+				name: tool.name,
+				description: tool.description,
+				parameters: parameters as any, // TypeBox already generates JSON Schema
+				// Only include strict if provider supports it. Some reject unknown fields.
+				...(compat.supportsStrictMode !== false && { strict: false }),
+			},
+		};
+	});
 }
 
 function parseChunkUsage(
@@ -1301,6 +1328,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: false,
 		requiresReasoningContentOnAssistantMessages: isDeepSeek,
+		requiresToolSchemaRequiredArray: false,
 		thinkingFormat: isDeepSeek
 			? "deepseek"
 			: isZai
@@ -1352,6 +1380,8 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		requiresReasoningContentOnAssistantMessages:
 			model.compat.requiresReasoningContentOnAssistantMessages ??
 			detected.requiresReasoningContentOnAssistantMessages,
+		requiresToolSchemaRequiredArray:
+			model.compat.requiresToolSchemaRequiredArray ?? detected.requiresToolSchemaRequiredArray,
 		thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
 		openRouterRouting: model.compat.openRouterRouting ?? {},
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,

@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@handy_wote/pi-agent-core";
+import type { RegistryApi } from "@handy_wote/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model } from "@handy_wote/pi-ai/compat";
 import type {
 	AutocompleteItem,
@@ -76,10 +77,16 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
-import { enrichWithModelsDev, fetchModelsFromEndpoint, mergeProfileModels } from "../../core/model-metadata.ts";
+import { enrichWithModelsDev, mergeProfileModels } from "../../core/model-metadata.ts";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
-import type { Profile, ProfileProtocol, UserModel } from "../../core/profiles-types.ts";
+import {
+	getProfileApiLabel,
+	PROFILE_API_SERIALIZERS,
+	resolveProfileModelApi,
+} from "../../core/profile-api-resolution.ts";
+import { discoverProfile } from "../../core/profile-discovery.ts";
+import type { Profile, ProfileApiPreference, UserModel } from "../../core/profiles-types.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -4838,7 +4845,7 @@ export class InteractiveMode {
 				return {
 					id: profile.id,
 					label: profile.name,
-					description: `${profile.protocol}, ${enabledCount}/${profile.models.length} enabled`,
+					description: `${enabledCount}/${profile.models.length} enabled · ${profile.baseUrl}`,
 					toggled: active?.id === profile.id,
 					toggleable: true,
 					deletable: true,
@@ -4881,19 +4888,12 @@ export class InteractiveMode {
 	}
 
 	private async createProfileFromMenu(): Promise<void> {
-		const protocolSelection = await this.showExtensionSelector("Select profile format", [
-			"Anthropic format",
-			"OpenAI format",
-		]);
-		if (!protocolSelection) return;
-
-		const protocol: ProfileProtocol = protocolSelection === "Anthropic format" ? "anthropic" : "openai";
 		const now = new Date().toISOString();
 		const draft: Profile = {
 			id: crypto.randomUUID(),
-			name: protocol === "anthropic" ? "Anthropic profile" : "OpenAI profile",
-			protocol,
-			baseUrl: protocol === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1",
+			name: "New profile",
+			apiPreference: "auto",
+			baseUrl: "",
 			apiKey: "",
 			models: [],
 			createdAt: now,
@@ -4916,12 +4916,17 @@ export class InteractiveMode {
 			const result = await this.showEntityListDialog(
 				`Profile: ${profile.name}`,
 				[
-					{ id: "connection", label: "Edit connection" },
 					{
 						id: "models",
 						label: "Models",
 						description: `${enabledCount}/${profile.models.length} enabled`,
 					},
+					{
+						id: "refresh",
+						label: "Refresh discovery",
+						description: profile.lastDiscoveredAt ? `Last: ${profile.lastDiscoveredAt}` : "Not discovered",
+					},
+					{ id: "connection", label: "Edit connection", description: profile.baseUrl },
 				],
 				{ initialSelectedId: selectedId },
 			);
@@ -4929,10 +4934,16 @@ export class InteractiveMode {
 			selectedId = result.item.id;
 			if (result.action !== "activate") continue;
 
-			if (result.item.id === "connection") {
-				await this.showProfileEditor(profile, false);
-			} else if (result.item.id === "models") {
+			if (result.item.id === "models") {
 				await this.showProfileModelsEditor(profile.id);
+			} else if (result.item.id === "refresh") {
+				const refreshed = await this.testProfileAndLoadModels(profile);
+				if (refreshed) {
+					await this.saveProfile(refreshed, false);
+					await this.showProfileModelsEditor(profile.id);
+				}
+			} else if (result.item.id === "connection") {
+				await this.showProfileEditor(profile, false);
 			}
 		}
 	}
@@ -4945,15 +4956,24 @@ export class InteractiveMode {
 		let selectedId: string | undefined;
 
 		while (true) {
+			const actionLabel = isNew ? "Connect and discover" : "Save connection";
+			const fallbackPreference = draft.apiPreference ?? "auto";
 			const result = await this.showEntityListDialog(
 				isNew ? "Create profile" : `Edit profile: ${draft.name}`,
 				[
-					{ id: "protocol", label: "Protocol", description: draft.protocol },
 					{ id: "name", label: "Name", description: draft.name },
-					{ id: "url", label: "URL", description: draft.baseUrl },
+					{ id: "url", label: "Base URL", description: draft.baseUrl || "required" },
 					{ id: "key", label: "Key", description: draft.apiKey ? "configured" : "empty" },
-					{ id: "test", label: "Test connection" },
-					{ id: "save", label: "Save" },
+					...(isNew
+						? []
+						: [
+								{
+									id: "fallback",
+									label: "Fallback API",
+									description: fallbackPreference === "auto" ? "Auto" : getProfileApiLabel(fallbackPreference),
+								},
+							]),
+					{ id: "save", label: actionLabel },
 				],
 				{
 					initialSelectedId: selectedId,
@@ -4962,20 +4982,6 @@ export class InteractiveMode {
 			if (!result) return;
 			selectedId = result.item.id;
 			if (result.action !== "activate") continue;
-
-			if (result.item.id === "protocol") {
-				const protocolSelection = await this.showExtensionSelector("Select profile format", [
-					"Anthropic format",
-					"OpenAI format",
-				]);
-				if (protocolSelection) {
-					draft = {
-						...draft,
-						protocol: protocolSelection === "Anthropic format" ? "anthropic" : "openai",
-					};
-				}
-				continue;
-			}
 
 			if (result.item.id === "name") {
 				const value = await this.showExtensionEditor("Profile name", draft.name);
@@ -4995,8 +5001,16 @@ export class InteractiveMode {
 				continue;
 			}
 
-			if (result.item.id === "test") {
-				draft = await this.testProfileAndLoadModels(draft);
+			if (result.item.id === "fallback") {
+				const preference = await this.selectProfileApiPreference(
+					"Fallback API",
+					draft.apiPreference,
+					draft.availableApis ?? [],
+					"Auto",
+				);
+				if (preference !== undefined) {
+					draft = { ...draft, protocol: undefined, apiPreference: preference };
+				}
 				continue;
 			}
 
@@ -5009,94 +5023,231 @@ export class InteractiveMode {
 					this.showError("Profile key is required.");
 					continue;
 				}
-				await this.saveProfile(draft, isNew);
+				if (isNew) {
+					const discovered = await this.testProfileAndLoadModels(draft);
+					if (!discovered) continue;
+					await this.saveProfile(discovered, true);
+					await this.showProfileModelsEditor(discovered.id);
+					return;
+				}
+				await this.saveProfile(draft, false);
 				return;
 			}
 		}
 	}
 
-	private async testProfileAndLoadModels(profile: Profile): Promise<Profile> {
+	private async testProfileAndLoadModels(profile: Profile): Promise<Profile | undefined> {
 		if (!profile.baseUrl.trim()) {
 			this.showError("Profile URL is required before test.");
-			return profile;
+			return undefined;
 		}
 		if (!profile.apiKey.trim()) {
 			this.showError("Profile key is required before test.");
-			return profile;
+			return undefined;
 		}
 
-		this.showStatus("Testing profile and loading models...");
+		this.showStatus("Discovering models and APIs...");
 		try {
-			const fetchedModels = await fetchModelsFromEndpoint(profile);
-			const enrichedModels = await enrichWithModelsDev(fetchedModels);
+			const discovery = await discoverProfile(profile);
+			const enrichedModels = await enrichWithModelsDev(
+				discovery.models,
+				this.session.modelRuntime.getCompatRegistries(),
+			);
 			const models = mergeProfileModels(profile.models, enrichedModels);
-			this.showStatus(`Loaded ${models.length} models for ${profile.name}.`);
-			return { ...profile, models, updatedAt: new Date().toISOString() };
+			const now = new Date().toISOString();
+			this.showStatus(`Discovered ${discovery.models.length} models for ${profile.name}.`);
+			return {
+				...profile,
+				models,
+				availableApis: discovery.availableApis,
+				discoveryWarnings: discovery.warnings,
+				lastDiscoveredAt: now,
+				updatedAt: now,
+			};
 		} catch (error) {
 			this.showError(`Profile test failed: ${error instanceof Error ? error.message : String(error)}`);
-			return profile;
+			return undefined;
 		}
 	}
 
 	private async showProfileModelsEditor(profileId: string): Promise<void> {
 		let selectedId: string | undefined;
+		while (true) {
+			const profile = this.session.modelRuntime.getProfile(profileId);
+			if (!profile) return;
+			const groups = new Map<string, { label: string; models: UserModel[] }>();
+			for (const model of profile.models) {
+				const group = model.group ?? { id: "other", label: "Other models" };
+				const current = groups.get(group.id);
+				if (current) current.models.push(model);
+				else groups.set(group.id, { label: group.label, models: [model] });
+			}
+			const items: EntityListItem[] = Array.from(groups, ([groupId, group]) => {
+				const currentModels = group.models.filter((model) => model.available !== false);
+				const enabledCount = currentModels.filter((model) => model.enabled).length;
+				const unavailableCount = group.models.filter((model) => model.available === false).length;
+				const details = [
+					`${enabledCount}/${currentModels.length} enabled`,
+					this.formatProfileFamilyApi(profile, groupId, group.models),
+				];
+				if (unavailableCount > 0) details.push(`${unavailableCount} unavailable`);
+				return {
+					id: `group:${groupId}`,
+					label: group.label,
+					description: details.join(" · "),
+					toggled: enabledCount === currentModels.length && currentModels.length > 0,
+					toggleable: currentModels.length > 0,
+				};
+			});
+			for (const [index, warning] of (profile.discoveryWarnings ?? []).entries()) {
+				items.push({ id: `warning:${index}`, label: "Discovery warning", description: warning });
+			}
+			const result = await this.showEntityListDialog(`Models: ${profile.name}`, items, {
+				initialSelectedId: selectedId,
+				renderEmpty: () => [theme.fg("muted", "  No models discovered. Refresh discovery from the Profile menu.")],
+			});
+			if (!result) return;
+			selectedId = result.item.id;
+			if (!result.item.id.startsWith("group:")) continue;
+			const groupId = result.item.id.slice("group:".length);
+			const group = groups.get(groupId);
+			if (!group) continue;
+
+			if (result.action === "activate") {
+				await this.showProfileModelGroupEditor(profileId, groupId);
+				continue;
+			}
+			if (result.action !== "toggle") continue;
+			const currentModels = group.models.filter((model) => model.available !== false);
+			const enable = currentModels.some((model) => !model.enabled);
+			const ids = new Set(currentModels.map((model) => model.id));
+			const models = profile.models.map((model) => (ids.has(model.id) ? { ...model, enabled: enable } : model));
+			await this.saveProfile({ ...profile, models }, false);
+		}
+	}
+
+	private async showProfileModelGroupEditor(profileId: string, groupId: string): Promise<void> {
+		let selectedId: string | undefined;
 		let query = "";
 		while (true) {
 			const profile = this.session.modelRuntime.getProfile(profileId);
 			if (!profile) return;
-			const items = profile.models.map((model) => ({
-				id: model.id,
-				label: model.id,
-				description: model.name,
-				toggled: model.enabled,
-				toggleable: true,
-			}));
-			const result = await this.showEntityListDialog(`Models: ${profile.name}`, items, {
+			const groupModels = profile.models.filter((model) => (model.group?.id ?? "other") === groupId);
+			if (groupModels.length === 0) return;
+			const groupLabel = groupModels[0].group?.label ?? "Other models";
+			const items: EntityListItem[] = [
+				{ id: "__enable_all__", label: "Enable all" },
+				{ id: "__disable_all__", label: "Disable all" },
+				{
+					id: "__api__",
+					label: "API policy",
+					description: this.formatProfileFamilyApi(profile, groupId, groupModels),
+				},
+				...groupModels.map((model) => ({
+					id: model.id,
+					label: model.id,
+					description: this.formatProfileModelDescription(profile, model),
+					toggled: model.enabled,
+					toggleable: true,
+				})),
+			];
+			const result = await this.showEntityListDialog(`Models: ${groupLabel}`, items, {
 				searchable: true,
 				initialSelectedId: selectedId,
 				initialQuery: query,
 				getSearchText: (item) => `${item.id} ${item.label} ${item.description ?? ""}`,
-				renderEmpty: () => [theme.fg("muted", "  No models loaded. Run Test first.")],
 			});
 			if (!result) return;
 			selectedId = result.item.id;
 			query = result.query;
-			const model = profile.models.find((entry) => entry.id === result.item.id);
-			if (!model) continue;
 
+			if (
+				result.action === "activate" &&
+				(result.item.id === "__enable_all__" || result.item.id === "__disable_all__")
+			) {
+				const enabled = result.item.id === "__enable_all__";
+				const ids = new Set(groupModels.filter((model) => model.available !== false).map((model) => model.id));
+				const models = profile.models.map((model) => (ids.has(model.id) ? { ...model, enabled } : model));
+				await this.saveProfile({ ...profile, models }, false);
+				continue;
+			}
+
+			if (result.action === "activate" && result.item.id === "__api__") {
+				const availableApis = Array.from(
+					new Set(
+						groupModels.flatMap((model) =>
+							model.availableApis?.length ? model.availableApis : (profile.availableApis ?? []),
+						),
+					),
+				);
+				const current = profile.familyApiPreferences?.[groupId];
+				const preference = await this.selectProfileApiPreference(
+					`API policy: ${groupLabel}`,
+					current,
+					availableApis,
+					this.formatProfileFamilyApi(
+						{ ...profile, familyApiPreferences: { ...profile.familyApiPreferences, [groupId]: "auto" } },
+						groupId,
+						groupModels,
+					),
+				);
+				if (preference === undefined) continue;
+				await this.saveProfile(
+					{
+						...profile,
+						familyApiPreferences: { ...profile.familyApiPreferences, [groupId]: preference },
+					},
+					false,
+				);
+				continue;
+			}
+
+			const model = groupModels.find((entry) => entry.id === result.item.id);
+			if (!model) continue;
 			if (result.action === "toggle") {
 				const models = profile.models.map((entry) =>
 					entry.id === model.id ? { ...entry, enabled: !entry.enabled } : entry,
 				);
 				await this.saveProfile({ ...profile, models }, false);
 			} else if (result.action === "activate") {
-				const updated = await this.showProfileModelEditor(model);
+				const updated = await this.showProfileModelEditor(profile, model);
 				const models = profile.models.map((entry) => (entry.id === updated.id ? updated : entry));
 				await this.saveProfile({ ...profile, models }, false);
 			}
 		}
 	}
 
-	private async showProfileModelEditor(model: UserModel): Promise<UserModel> {
+	private async showProfileModelEditor(profile: Profile, model: UserModel): Promise<UserModel> {
 		let draft = { ...model };
 		let selectedId: string | undefined;
 
 		while (true) {
+			const effectiveName = draft.overrides?.name ?? draft.name;
+			const effectiveContextWindow = draft.overrides?.contextWindow ?? draft.contextWindow;
+			const effectiveMaxTokens = draft.overrides?.maxTokens ?? draft.maxTokens;
+			const effectiveReasoning = draft.overrides?.supportsReasoning ?? draft.supportsReasoning;
+			const effectiveVision = draft.overrides?.supportsVision ?? draft.supportsVision;
+			const effectiveToolCall = draft.overrides?.supportsToolCall ?? draft.supportsToolCall;
 			const result = await this.showEntityListDialog(
 				`Model: ${draft.id}`,
 				[
 					{ id: "enabled", label: "Enabled", toggled: draft.enabled, toggleable: true },
-					{ id: "name", label: "Name", description: draft.name },
-					{ id: "context", label: "Context window", description: String(draft.contextWindow) },
-					{ id: "maxTokens", label: "Max tokens", description: String(draft.maxTokens) },
+					{
+						id: "api",
+						label: "API",
+						description: this.formatProfileModelApi(profile, draft),
+					},
+					{ id: "name", label: "Name", description: effectiveName },
+					{ id: "context", label: "Context window", description: String(effectiveContextWindow) },
+					{ id: "maxTokens", label: "Max tokens", description: String(effectiveMaxTokens) },
 					{
 						id: "reasoning",
 						label: "Reasoning",
-						toggled: draft.supportsReasoning,
+						toggled: effectiveReasoning,
 						toggleable: true,
 					},
-					{ id: "vision", label: "Vision", toggled: draft.supportsVision, toggleable: true },
-					{ id: "toolCall", label: "Tool calls", toggled: draft.supportsToolCall, toggleable: true },
+					{ id: "vision", label: "Vision", toggled: effectiveVision, toggleable: true },
+					{ id: "toolCall", label: "Tool calls", toggled: effectiveToolCall, toggleable: true },
 				],
 				{
 					initialSelectedId: selectedId,
@@ -5108,33 +5259,117 @@ export class InteractiveMode {
 			if (result.action === "toggle") {
 				if (result.item.id === "enabled") draft = { ...draft, enabled: !draft.enabled };
 				if (result.item.id === "reasoning") {
-					draft = { ...draft, supportsReasoning: !draft.supportsReasoning, metadataSource: "manual" };
+					draft = {
+						...draft,
+						overrides: { ...draft.overrides, supportsReasoning: !effectiveReasoning },
+					};
 				}
 				if (result.item.id === "vision") {
-					draft = { ...draft, supportsVision: !draft.supportsVision, metadataSource: "manual" };
+					draft = { ...draft, overrides: { ...draft.overrides, supportsVision: !effectiveVision } };
 				}
 				if (result.item.id === "toolCall") {
-					draft = { ...draft, supportsToolCall: !draft.supportsToolCall, metadataSource: "manual" };
+					draft = { ...draft, overrides: { ...draft.overrides, supportsToolCall: !effectiveToolCall } };
 				}
 				continue;
 			}
 			if (result.action !== "activate") continue;
 
+			if (result.item.id === "api") {
+				const availableApis = Array.from(
+					new Set(draft.availableApis?.length ? draft.availableApis : (profile.availableApis ?? [])),
+				);
+				const autoDraft = { ...draft, apiPreference: "auto" as const };
+				const preference = await this.selectProfileApiPreference(
+					`API: ${draft.id}`,
+					draft.apiPreference,
+					availableApis,
+					this.formatProfileModelApi(profile, autoDraft),
+				);
+				if (preference !== undefined) draft = { ...draft, apiPreference: preference };
+				continue;
+			}
 			if (result.item.id === "name") {
-				const value = await this.showExtensionEditor("Model name", draft.name);
-				if (value !== undefined) draft = { ...draft, name: value.trim() || draft.name, metadataSource: "manual" };
+				const value = await this.showExtensionEditor("Model name", effectiveName);
+				if (value !== undefined) {
+					draft = { ...draft, overrides: { ...draft.overrides, name: value.trim() || effectiveName } };
+				}
 				continue;
 			}
 			if (result.item.id === "context") {
-				const value = await this.promptPositiveInteger("Context window", draft.contextWindow);
-				if (value !== undefined) draft = { ...draft, contextWindow: value, metadataSource: "manual" };
+				const value = await this.promptPositiveInteger("Context window", effectiveContextWindow);
+				if (value !== undefined) {
+					draft = { ...draft, overrides: { ...draft.overrides, contextWindow: value } };
+				}
 				continue;
 			}
 			if (result.item.id === "maxTokens") {
-				const value = await this.promptPositiveInteger("Max tokens", draft.maxTokens);
-				if (value !== undefined) draft = { ...draft, maxTokens: value, metadataSource: "manual" };
+				const value = await this.promptPositiveInteger("Max tokens", effectiveMaxTokens);
+				if (value !== undefined) draft = { ...draft, overrides: { ...draft.overrides, maxTokens: value } };
 			}
 		}
+	}
+
+	private formatProfileModelApi(profile: Profile, model: UserModel): string {
+		const preference = model.apiPreference ?? "auto";
+		const resolution = resolveProfileModelApi(profile, model, {
+			registrySources: this.session.modelRuntime.getCompatRegistries(),
+		});
+		if (preference !== "auto") {
+			const label = getProfileApiLabel(preference);
+			return resolution.api ? label : `${label} · unresolved: ${resolution.reason ?? "select an API"}`;
+		}
+		return resolution.api
+			? `Auto -> ${getProfileApiLabel(resolution.api)}`
+			: `Auto -> unresolved: ${resolution.reason ?? "select an API"}`;
+	}
+
+	private formatProfileModelDescription(profile: Profile, model: UserModel): string {
+		const details = [model.overrides?.name ?? model.name, this.formatProfileModelApi(profile, model)];
+		if (model.available === false) details.push("unavailable");
+		return details.join(" · ");
+	}
+
+	private formatProfileFamilyApi(profile: Profile, groupId: string, models: UserModel[]): string {
+		const preference = profile.familyApiPreferences?.[groupId] ?? "auto";
+		if (preference !== "auto") return getProfileApiLabel(preference);
+		const resolved = new Set(
+			models.map(
+				(model) =>
+					resolveProfileModelApi(profile, model, {
+						registrySources: this.session.modelRuntime.getCompatRegistries(),
+					}).api,
+			),
+		);
+		if (resolved.has(undefined)) return "Auto -> Unresolved";
+		if (resolved.size !== 1) return "Auto -> Mixed";
+		const api = resolved.values().next().value;
+		return api ? `Auto -> ${getProfileApiLabel(api)}` : "Auto -> Unresolved";
+	}
+
+	private async selectProfileApiPreference(
+		title: string,
+		current: ProfileApiPreference | undefined,
+		availableApis: readonly RegistryApi[],
+		autoDescription: string,
+	): Promise<ProfileApiPreference | undefined> {
+		const explicitCurrent = current && current !== "auto" ? current : undefined;
+		const installedApis = new Set<RegistryApi>(PROFILE_API_SERIALIZERS);
+		const apis = Array.from(
+			new Set([
+				...availableApis.filter((api) => installedApis.has(api)),
+				...PROFILE_API_SERIALIZERS,
+				...(explicitCurrent ? [explicitCurrent] : []),
+			]),
+		);
+		const choices: Array<{ label: string; value: ProfileApiPreference }> = [
+			{ label: autoDescription, value: "auto" },
+			...apis.map((api) => ({ label: getProfileApiLabel(api), value: api })),
+		];
+		const selection = await this.showExtensionSelector(
+			title,
+			choices.map((choice) => choice.label),
+		);
+		return choices.find((choice) => choice.label === selection)?.value;
 	}
 
 	private async promptPositiveInteger(title: string, current: number): Promise<number | undefined> {

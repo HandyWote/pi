@@ -136,14 +136,15 @@ export async function createAgentSessionServices(
 ): Promise<AgentSessionServices> {
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
+	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const modelRuntime =
 		options.modelRuntime ??
 		(await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 			profilesPath: join(agentDir, "profiles.json"),
+			compatRegistries: settingsManager.getCompatRegistries(),
 		}));
-	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
 		cwd,
@@ -152,7 +153,12 @@ export async function createAgentSessionServices(
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
 
-	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
+	const diagnostics: AgentSessionRuntimeDiagnostic[] = modelRuntime
+		.getCompatRegistryDiagnostics()
+		.map((diagnostic) => ({
+			type: diagnostic.type,
+			message: diagnostic.path ? `${diagnostic.message}: ${diagnostic.path}` : diagnostic.message,
+		}));
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
 		try {

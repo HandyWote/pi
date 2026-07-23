@@ -7,6 +7,7 @@ import {
 	type AuthInteraction,
 	type AuthResult,
 	type AuthType,
+	type CompiledModelCompatRegistry,
 	type Context,
 	type Credential,
 	type CredentialInfo,
@@ -33,9 +34,14 @@ import {
 import { anthropicMessagesApi } from "@handy_wote/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@handy_wote/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@handy_wote/pi-ai/api/openai-responses.lazy";
+import {
+	type CompatRegistryDiagnostic,
+	type CompatRegistrySource,
+	loadCompatRegistries,
+} from "./compat-registry-loader.ts";
 import type { ProviderConfig, ProviderModelConfig } from "./extensions/types.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
-import { createProfileProvider } from "./profile-runtime.ts";
+import { buildProfileProvider } from "./profile-runtime.ts";
 import { ProfilesStore } from "./profiles-store.ts";
 import type { Profile } from "./profiles-types.ts";
 
@@ -83,6 +89,8 @@ export interface CreateModelRuntimeOptions {
 	catalogBaseUrl?: string;
 	/** @deprecated No-op in profile mode. */
 	modelRefreshTimeoutMs?: number;
+	/** External compat registry file sources (merged on top of the builtin). */
+	compatRegistries?: readonly CompatRegistrySource[];
 }
 
 export interface ModelRuntimeAuthOverrides {
@@ -213,6 +221,10 @@ export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
 	private readonly profilesStore: ProfilesStore;
+	private compatRegistrySources: readonly CompatRegistrySource[];
+	private compatRegistries: CompiledModelCompatRegistry[];
+	private compatRegistryDiagnostics: CompatRegistryDiagnostic[];
+	private profileErrors: string[] = [];
 	private readonly registeredProviderConfigs = new Map<string, ProviderConfig>();
 	private readonly registeredNativeProviders = new Map<string, Provider>();
 	private snapshot: ModelRuntimeSnapshot = {
@@ -225,10 +237,19 @@ export class ModelRuntime implements Models {
 	private availabilityRefresh: Promise<void> | undefined;
 	private availabilityError: string | undefined;
 
-	private constructor(credentials: RuntimeCredentials, profilesStore: ProfilesStore, modelsStore: ModelsStore) {
+	private constructor(
+		credentials: RuntimeCredentials,
+		profilesStore: ProfilesStore,
+		modelsStore: ModelsStore,
+		compatRegistrySources: readonly CompatRegistrySource[],
+	) {
 		this.credentials = credentials;
 		this.profilesStore = profilesStore;
 		this.models = createModels({ credentials, modelsStore });
+		this.compatRegistrySources = compatRegistrySources;
+		const loaded = loadCompatRegistries(compatRegistrySources);
+		this.compatRegistries = loaded.registries;
+		this.compatRegistryDiagnostics = loaded.diagnostics;
 		this.rebuildProviders();
 	}
 
@@ -240,20 +261,22 @@ export class ModelRuntime implements Models {
 			(options.modelsStorePath
 				? new FileModelsStore(options.modelsStorePath)
 				: new InMemoryCodingAgentModelsStore());
-		const runtime = new ModelRuntime(credentials, profilesStore, modelsStore);
+		const runtime = new ModelRuntime(credentials, profilesStore, modelsStore, options.compatRegistries ?? []);
 		await runtime.forceRefreshAvailability();
 		return runtime;
 	}
 
 	private rebuildProviders(): void {
 		this.models.clearProviders();
+		this.profileErrors = [];
 		const profiles = this.profilesStore.list();
 		for (const profile of profiles) {
 			try {
-				const provider = createProfileProvider(profile);
-				this.models.setProvider(provider);
-			} catch {
-				// Skip broken profiles; error is available via getError()
+				const result = buildProfileProvider(profile, this.compatRegistries);
+				this.models.setProvider(result.provider);
+				this.profileErrors.push(...result.diagnostics);
+			} catch (error) {
+				this.profileErrors.push(error instanceof Error ? error.message : String(error));
 			}
 		}
 		for (const [providerId, config] of this.registeredProviderConfigs) {
@@ -419,7 +442,19 @@ export class ModelRuntime implements Models {
 
 	getError(): string | undefined {
 		if (this.availabilityError) return `Availability refresh: ${this.availabilityError}`;
+		if (this.profileErrors.length > 0) return this.profileErrors.join("; ");
+		if (this.compatRegistryDiagnostics.length > 0) {
+			return this.compatRegistryDiagnostics.map((diagnostic) => diagnostic.message).join("; ");
+		}
 		return undefined;
+	}
+
+	getCompatRegistryDiagnostics(): readonly CompatRegistryDiagnostic[] {
+		return this.compatRegistryDiagnostics;
+	}
+
+	getCompatRegistries(): readonly CompiledModelCompatRegistry[] {
+		return this.compatRegistries;
 	}
 
 	hasConfiguredAuth(providerId: string): boolean {
@@ -464,7 +499,11 @@ export class ModelRuntime implements Models {
 		await this.refresh({ allowNetwork: false });
 	}
 
-	async reloadConfig(): Promise<void> {
+	async reloadConfig(compatRegistries?: readonly CompatRegistrySource[]): Promise<void> {
+		if (compatRegistries) this.compatRegistrySources = compatRegistries;
+		const loaded = loadCompatRegistries(this.compatRegistrySources);
+		this.compatRegistries = loaded.registries;
+		this.compatRegistryDiagnostics = loaded.diagnostics;
 		this.rebuildProviders();
 		await this.refresh({ allowNetwork: false });
 	}

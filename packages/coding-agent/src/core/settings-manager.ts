@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import type { CompatRegistrySource } from "./compat-registry-loader.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
@@ -126,6 +127,8 @@ export interface Settings {
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
+	/** External compat registry sources (file only for now; git/npm planned). Merged on top of the builtin. */
+	compatRegistries?: CompatRegistrySource[];
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -178,6 +181,7 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	getBaseDir?(scope: SettingsScope): string | undefined;
 }
 
 export interface SettingsError {
@@ -194,6 +198,10 @@ export class FileSettingsStorage implements SettingsStorage {
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
+	}
+
+	getBaseDir(scope: SettingsScope): string {
+		return dirname(scope === "global" ? this.globalSettingsPath : this.projectSettingsPath);
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -1230,5 +1238,13 @@ export class SettingsManager {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
 		this.save();
+	}
+
+	getCompatRegistries(): CompatRegistrySource[] {
+		const sources = this.settings.compatRegistries ?? [];
+		const scope: SettingsScope =
+			this.projectTrusted && this.projectSettings.compatRegistries !== undefined ? "project" : "global";
+		const baseDir = this.storage.getBaseDir?.(scope);
+		return sources.map((source) => ({ ...source, baseDir: source.baseDir ?? baseDir }));
 	}
 }

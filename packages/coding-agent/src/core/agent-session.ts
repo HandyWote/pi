@@ -2613,6 +2613,8 @@ export class AgentSession {
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
+		await this._modelRuntime.reloadConfig(this.settingsManager.getCompatRegistries());
+		this._refreshCurrentModelFromRegistry();
 		await this._resourceLoader.reload();
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),

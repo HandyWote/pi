@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added gateway Profile model discovery, family grouping, per-family and per-model API selection, and mixed-API runtime providers.
+- Added validated local compatibility registry files through the `compatRegistries` setting.
+
 ## [0.81.3] - 2026-07-22
 
 ### Breaking Changes

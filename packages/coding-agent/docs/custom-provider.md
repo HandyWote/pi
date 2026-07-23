@@ -7,6 +7,8 @@ Extensions can register custom model providers via `pi.registerProvider()`. This
 - **OAuth/SSO** - Add authentication flows for enterprise providers
 - **Custom APIs** - Implement streaming for non-standard LLM APIs
 
+For a user-configured gateway that exposes a model catalog through Pi's supported APIs, use `/profile` instead. A Profile keeps one gateway connection, discovers its models and APIs, groups models by family, and lets each model use `Auto` or an explicit API. Use an extension when the provider needs custom authentication, catalog logic, filtering, or streaming code that a Profile cannot supply.
+
 ## Example Extensions
 
 See these complete provider examples:

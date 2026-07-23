@@ -5,6 +5,7 @@ import type {
 	CompletionEvent,
 	ContentChunk,
 	FunctionTool,
+	ReasoningEffort as MistralReasoningEffort,
 } from "@mistralai/mistralai/models/components";
 import { calculateCost, clampThinkingLevel } from "../models.ts";
 import type {
@@ -34,8 +35,6 @@ const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
 /**
  * Provider-specific options for the Mistral API.
  */
-type MistralReasoningEffort = "none" | "high";
-
 export interface MistralOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any" | "required" | { type: "function"; function: { name: string } };
 	promptMode?: "reasoning";
@@ -629,8 +628,9 @@ function usesPromptModeReasoning(model: Model<"mistral-conversations">): boolean
 function mapReasoningEffort(
 	model: Model<"mistral-conversations">,
 	level: Exclude<SimpleStreamOptions["reasoning"], undefined>,
-): MistralReasoningEffort {
-	return (model.thinkingLevelMap?.[level] ?? "high") as MistralReasoningEffort;
+): MistralReasoningEffort | undefined {
+	const mapped = model.thinkingLevelMap?.[level];
+	return mapped === null ? undefined : ((mapped ?? level) as MistralReasoningEffort);
 }
 
 function mapToolChoice(

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a validated, API-scoped model compatibility registry with built-in and external source overlays.
+
+### Fixed
+
+- Fixed DeepSeek optional-only tool schemas and preserved unsupported thinking-level mappings across serializers.
+
 ## [0.81.3] - 2026-07-22
 
 ### Breaking Changes

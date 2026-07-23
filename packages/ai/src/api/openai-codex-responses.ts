@@ -517,10 +517,9 @@ function buildRequestBody(
 	}
 
 	if (options?.reasoningEffort !== undefined) {
-		const effort =
-			options.reasoningEffort === "none"
-				? (model.thinkingLevelMap?.off ?? "none")
-				: (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
+		const level = options.reasoningEffort === "none" ? "off" : options.reasoningEffort;
+		const mappedEffort = model.thinkingLevelMap?.[level];
+		const effort = mappedEffort === undefined ? options.reasoningEffort : mappedEffort;
 		if (effort !== null) {
 			body.reasoning = {
 				effort,

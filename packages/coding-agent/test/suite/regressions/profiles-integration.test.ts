@@ -64,6 +64,49 @@ describe("Profile-based ModelRuntime", () => {
 		expect(models.map((m) => m.id).sort()).toEqual(["model-a", "model-b"]);
 	});
 
+	it("keeps models with different APIs in one profile provider", async () => {
+		const runtime = await ModelRuntime.create({
+			profilesPath: join(tmpDir, "profiles.json"),
+			modelsStorePath: undefined,
+		});
+		const base = makeTestProfile("gateway", []);
+		await runtime.createProfile({
+			...base,
+			protocol: undefined,
+			models: [
+				{
+					...makeTestProfile("unused", [{ id: "gpt", name: "GPT" }]).models[0],
+					apiPreference: "openai-responses",
+				},
+				{
+					...makeTestProfile("unused", [{ id: "claude", name: "Claude" }]).models[0],
+					apiPreference: "anthropic-messages",
+				},
+			],
+		});
+
+		expect(runtime.getProviders()).toHaveLength(1);
+		expect(runtime.getModels("gateway").map((model) => [model.id, model.api])).toEqual([
+			["gpt", "openai-responses"],
+			["claude", "anthropic-messages"],
+		]);
+	});
+
+	it("keeps resolvable models when another enabled model needs an API choice", async () => {
+		const runtime = await ModelRuntime.create({ profilesPath: join(tmpDir, "profiles.json") });
+		const next = makeTestProfile("gateway", [
+			{ id: "working", name: "Working" },
+			{ id: "unresolved", name: "Unresolved" },
+		]);
+		next.protocol = undefined;
+		next.models[0].apiPreference = "openai-completions";
+
+		await runtime.createProfile(next);
+
+		expect(runtime.getModels("gateway").map((model) => model.id)).toEqual(["working"]);
+		expect(runtime.getError()).toContain("model unresolved");
+	});
+
 	it("lists profiles", async () => {
 		const runtime = await ModelRuntime.create({
 			authPath: join(tmpDir, "auth.json"),

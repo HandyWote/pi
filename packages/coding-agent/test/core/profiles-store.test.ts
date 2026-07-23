@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import lockfile from "proper-lockfile";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfilesStore } from "../../src/core/profiles-store.ts";
 import type { Profile } from "../../src/core/profiles-types.ts";
 
@@ -26,6 +27,7 @@ describe("ProfilesStore", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -102,5 +104,19 @@ describe("ProfilesStore", () => {
 		const store2 = new ProfilesStore(file);
 		expect(store2.list()).toHaveLength(1);
 		expect(store2.getActive()?.id).toBe("a");
+	});
+
+	it("retries transient lock contention", () => {
+		const lockSync = lockfile.lockSync.bind(lockfile);
+		let attempts = 0;
+		vi.spyOn(lockfile, "lockSync").mockImplementation((path, options) => {
+			attempts++;
+			if (attempts < 3) throw Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED" });
+			return lockSync(path, options);
+		});
+
+		const store = new ProfilesStore(join(tmpDir, "profiles.json"));
+		expect(store.list()).toEqual([]);
+		expect(attempts).toBe(3);
 	});
 });

@@ -32,10 +32,33 @@ export class ProfilesStore {
 		}
 	}
 
+	private acquireLockSyncWithRetry(): () => void {
+		const maxAttempts = 10;
+		const delayMs = 20;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				return lockfile.lockSync(this.path, { realpath: false });
+			} catch (error) {
+				const code =
+					typeof error === "object" && error !== null && "code" in error
+						? String((error as { code?: unknown }).code)
+						: undefined;
+				if (code !== "ELOCKED" || attempt === maxAttempts) throw error;
+
+				const start = Date.now();
+				while (Date.now() - start < delayMs) {
+					// ProfilesStore is synchronous, so retry with a short bounded wait.
+				}
+			}
+		}
+
+		throw new Error("Failed to acquire profiles lock");
+	}
+
 	private read(): ProfilesFile {
 		this.ensureDir();
 		this.ensureFile();
-		const lock = lockfile.lockSync(this.path, { realpath: false });
+		const lock = this.acquireLockSyncWithRetry();
 		try {
 			return JSON.parse(readFileSync(this.path, "utf-8")) as ProfilesFile;
 		} finally {
@@ -46,7 +69,7 @@ export class ProfilesStore {
 	private write(fn: (data: ProfilesFile) => ProfilesFile): ProfilesFile {
 		this.ensureDir();
 		this.ensureFile();
-		const lock = lockfile.lockSync(this.path, { realpath: false });
+		const lock = this.acquireLockSyncWithRetry();
 		try {
 			const data = JSON.parse(readFileSync(this.path, "utf-8")) as ProfilesFile;
 			const next = fn(data);

@@ -1,8 +1,21 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CredentialStore } from "@handy_wote/pi-ai";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 const runtimes = new WeakMap<ModelRegistry, ModelRuntime>();
+const isolatedProfilesDir = mkdtempSync(join(tmpdir(), "pi-model-runtime-test-"));
+let isolatedProfilesIndex = 0;
+
+process.once("exit", () => {
+	rmSync(isolatedProfilesDir, { recursive: true, force: true });
+});
+
+function nextIsolatedProfilesPath(): string {
+	return join(isolatedProfilesDir, `profiles-${isolatedProfilesIndex++}.json`);
+}
 
 function wrap(runtime: ModelRuntime): ModelRegistry {
 	const registry = new ModelRegistry(runtime);
@@ -15,7 +28,14 @@ export async function createModelRegistry(
 	modelsPath?: string,
 	profilesPath?: string,
 ): Promise<ModelRegistry> {
-	return wrap(await ModelRuntime.create({ credentials, modelsPath, profilesPath, allowModelNetwork: false }));
+	return wrap(
+		await ModelRuntime.create({
+			credentials,
+			modelsPath,
+			profilesPath: profilesPath ?? nextIsolatedProfilesPath(),
+			allowModelNetwork: false,
+		}),
+	);
 }
 
 export async function createInMemoryModelRegistry(

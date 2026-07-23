@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.82.0] - 2026-07-23
 
 ### New Features
 

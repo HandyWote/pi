@@ -58,6 +58,17 @@ describe("Profile-based ModelRuntime", () => {
 		const providers = runtime.getProviders();
 		expect(providers).toHaveLength(1);
 		expect(providers[0].id).toBe("test-profile");
+		expect(runtime.getProviderName("test-profile")).toBe("Test test-profile");
+		expect(runtime.isProfileProvider("test-profile")).toBe(true);
+		runtime.registerProvider("extension-provider", {
+			name: "Extension Provider",
+			baseUrl: "https://extension.example/v1",
+			api: "openai-completions",
+		});
+		expect(runtime.getProviderName("extension-provider")).toBe("Extension Provider");
+		expect(runtime.isProfileProvider("extension-provider")).toBe(false);
+		expect(runtime.getProviderName("missing-provider")).toBe("missing-provider");
+		expect(runtime.isProfileProvider("missing-provider")).toBe(false);
 
 		const models = runtime.getModels("test-profile");
 		expect(models).toHaveLength(2);

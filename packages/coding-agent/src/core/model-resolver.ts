@@ -118,6 +118,15 @@ export function findExactModelReferenceMatch(
 	return idMatches.length === 1 ? idMatches[0] : undefined;
 }
 
+function findExactModelMatches(modelReference: string, availableModels: readonly Model<Api>[]): Model<Api>[] {
+	const trimmedReference = modelReference.trim().toLowerCase();
+	return availableModels.filter(
+		(model) =>
+			model.id.toLowerCase() === trimmedReference ||
+			`${model.provider}/${model.id}`.toLowerCase() === trimmedReference,
+	);
+}
+
 /**
  * Try to match a pattern to a model from the available models list.
  * Returns the matched model or undefined if no match found.
@@ -312,6 +321,21 @@ export async function resolveModelScopeWithDiagnostics(
 		}
 
 		const { model, thinkingLevel, warning } = parseModelPattern(pattern, availableModels);
+		const fullPatternMatches = findExactModelMatches(pattern, availableModels);
+		const lastColon = pattern.lastIndexOf(":");
+		const strippedPattern =
+			fullPatternMatches.length === 0 && lastColon !== -1 && isValidThinkingLevel(pattern.slice(lastColon + 1))
+				? pattern.slice(0, lastColon)
+				: pattern;
+		const exactMatches = findExactModelMatches(strippedPattern, availableModels);
+		if (exactMatches.length > 1) {
+			diagnostics.push({
+				type: "warning",
+				message: `Model pattern "${pattern}" is ambiguous. Use a full profile/model reference.`,
+				pattern,
+			});
+			continue;
+		}
 
 		if (warning) {
 			diagnostics.push({ type: "warning", message: warning, pattern });
@@ -350,6 +374,40 @@ export interface ResolveCliModelResult {
 	error: string | undefined;
 }
 
+export function formatNoModelsAvailableMessage(modelRuntime: ModelRuntime): string {
+	const profiles = modelRuntime.getProfiles?.() ?? [];
+	if (profiles.length === 0) {
+		return "No profiles configured. Run pi interactively and use /profile to create one.";
+	}
+	const activeProfile = modelRuntime.getActiveProfile?.();
+	if (!activeProfile) {
+		return "No selectable models. Use /profile to activate a profile and enable a model.";
+	}
+	return `No selectable models for active profile "${activeProfile.name}". Use /profile to enable a model or configure its API route.`;
+}
+
+function findConfiguredProfileModel(
+	modelRuntime: ModelRuntime,
+	modelReference: string,
+): { profileId: string; modelId: string } | undefined {
+	const trimmed = modelReference.trim().toLowerCase();
+	const lastColon = trimmed.lastIndexOf(":");
+	const normalized =
+		lastColon > 0 && isValidThinkingLevel(trimmed.slice(lastColon + 1)) ? trimmed.slice(0, lastColon) : trimmed;
+	for (const profile of modelRuntime.getProfiles?.() ?? []) {
+		for (const model of profile.models) {
+			if (model.id.toLowerCase() === normalized || `${profile.id}/${model.id}`.toLowerCase() === normalized) {
+				return { profileId: profile.id, modelId: model.id };
+			}
+		}
+	}
+	return undefined;
+}
+
+function formatUnavailableProfileModelError(profileId: string, modelId: string): string {
+	return `Model "${profileId}/${modelId}" is not selectable. Enable it and configure a resolvable API route in /profile.`;
+}
+
 /**
  * Resolve a single model from CLI flags.
  *
@@ -377,10 +435,19 @@ export function resolveCliModel(options: {
 	// This allows "--api-key" to be used for first-time setup.
 	const availableModels = [...modelRuntime.getModels()];
 	if (availableModels.length === 0) {
+		const configured = findConfiguredProfileModel(modelRuntime, cliModel);
+		if (configured) {
+			return {
+				model: undefined,
+				warning: undefined,
+				thinkingLevel: undefined,
+				error: formatUnavailableProfileModelError(configured.profileId, configured.modelId),
+			};
+		}
 		return {
 			model: undefined,
 			warning: undefined,
-			error: "No models available. Check your installation or add models to models.json.",
+			error: formatNoModelsAvailableMessage(modelRuntime),
 		};
 	}
 
@@ -424,11 +491,35 @@ export function resolveCliModel(options: {
 	// This handles models whose IDs naturally contain slashes (e.g. OpenRouter-style IDs).
 	if (!provider) {
 		const lower = cliModel.toLowerCase();
-		const exact = availableModels.find(
+		const activeProfileId = modelRuntime.getActiveProfile?.()?.id;
+		const activeExactMatches = activeProfileId
+			? availableModels.filter((m) => m.provider === activeProfileId && m.id.toLowerCase() === lower)
+			: [];
+		if (activeExactMatches.length === 1) {
+			return { model: activeExactMatches[0], warning: undefined, thinkingLevel: undefined, error: undefined };
+		}
+		if (activeExactMatches.length > 1) {
+			return {
+				model: undefined,
+				warning: undefined,
+				thinkingLevel: undefined,
+				error: formatAmbiguousModelError(cliModel, activeExactMatches),
+			};
+		}
+
+		const exactMatches = availableModels.filter(
 			(m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
 		);
-		if (exact) {
-			return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
+		if (exactMatches.length === 1) {
+			return { model: exactMatches[0], warning: undefined, thinkingLevel: undefined, error: undefined };
+		}
+		if (exactMatches.length > 1) {
+			return {
+				model: undefined,
+				warning: undefined,
+				thinkingLevel: undefined,
+				error: formatAmbiguousModelError(cliModel, exactMatches),
+			};
 		}
 	}
 
@@ -440,10 +531,28 @@ export function resolveCliModel(options: {
 		}
 	}
 
-	const candidates = provider ? availableModels.filter((m) => m.provider === provider) : availableModels;
-	const { model, thinkingLevel, warning } = parseModelPattern(pattern, candidates, {
-		allowInvalidThinkingLevelFallback: false,
-	});
+	const providerModels = provider ? availableModels.filter((m) => m.provider === provider) : undefined;
+	const activeProfileId = modelRuntime.getActiveProfile?.()?.id;
+	const activeModels = activeProfileId ? availableModels.filter((m) => m.provider === activeProfileId) : [];
+	const candidateSets = providerModels
+		? [providerModels]
+		: activeModels.length > 0
+			? [activeModels, availableModels]
+			: [availableModels];
+	let model: Model<Api> | undefined;
+	let thinkingLevel: ThinkingLevel | undefined;
+	let warning: string | undefined;
+	for (const candidates of candidateSets) {
+		const parsed = parseModelPattern(pattern, candidates, {
+			allowInvalidThinkingLevelFallback: false,
+		});
+		if (parsed.model) {
+			model = parsed.model;
+			thinkingLevel = parsed.thinkingLevel;
+			warning = parsed.warning;
+			break;
+		}
+	}
 
 	if (model) {
 		// If provider inference matched an unauthenticated provider/model pair, prefer
@@ -496,7 +605,17 @@ export function resolveCliModel(options: {
 		}
 	}
 
-	if (provider) {
+	const configuredProfileModel = findConfiguredProfileModel(modelRuntime, cliModel);
+	if (configuredProfileModel) {
+		return {
+			model: undefined,
+			thinkingLevel: undefined,
+			warning,
+			error: formatUnavailableProfileModelError(configuredProfileModel.profileId, configuredProfileModel.modelId),
+		};
+	}
+
+	if (provider && !(modelRuntime.isProfileProvider?.(provider) ?? false)) {
 		// Parse thinking level suffix from the pattern before building the fallback model,
 		// but only when --thinking is not explicitly provided.
 		// e.g. "zai-org/GLM-5.1-FP8:high" → modelId="zai-org/GLM-5.1-FP8", fallbackThinking="high"
@@ -534,6 +653,11 @@ export function resolveCliModel(options: {
 	};
 }
 
+function formatAmbiguousModelError(modelReference: string, models: readonly Model<Api>[]): string {
+	const references = models.map((model) => `${model.provider}/${model.id}`).join(", ");
+	return `Model "${modelReference}" is ambiguous. Use one of: ${references}`;
+}
+
 export interface InitialModelResult {
 	model: Model<Api> | undefined;
 	thinkingLevel: ThinkingLevel;
@@ -545,7 +669,7 @@ export interface InitialModelResult {
  * 1. CLI args (provider + model)
  * 2. First model from scoped models (if not continuing/resuming)
  * 3. Restored from session (if continuing/resuming)
- * 4. Saved default from settings
+ * 4. Active Profile model, then saved default from settings
  * 5. First available model with valid API key
  */
 export async function findInitialModel(options: {
@@ -597,15 +721,22 @@ export async function findInitialModel(options: {
 		};
 	}
 
-	// 3. Try saved default from settings if auth is configured.
+	const activeProfileId = modelRuntime.getActiveProfile?.()?.id;
+
+	// 3. Try the saved default when it belongs to the active profile, or when no
+	// active profile is configured.
+	let savedDefault: Model<Api> | undefined;
 	if (defaultProvider && defaultModelId) {
 		const found = modelRuntime.getModel(defaultProvider, defaultModelId);
 		if (found && modelRuntime.hasConfiguredAuth(found.provider)) {
-			model = found;
-			if (defaultThinkingLevel) {
-				thinkingLevel = defaultThinkingLevel;
+			savedDefault = found;
+			if (!activeProfileId || found.provider === activeProfileId) {
+				model = found;
+				if (defaultThinkingLevel) {
+					thinkingLevel = defaultThinkingLevel;
+				}
+				return { model, thinkingLevel, fallbackMessage: undefined };
 			}
-			return { model, thinkingLevel, fallbackMessage: undefined };
 		}
 	}
 
@@ -613,6 +744,25 @@ export async function findInitialModel(options: {
 	const availableModels = [...(await modelRuntime.getAvailable())];
 
 	if (availableModels.length > 0) {
+		if (activeProfileId) {
+			const activeModel = availableModels.find((candidate) => candidate.provider === activeProfileId);
+			if (activeModel) {
+				return {
+					model: activeModel,
+					thinkingLevel: defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+					fallbackMessage: undefined,
+				};
+			}
+		}
+
+		if (savedDefault) {
+			return {
+				model: savedDefault,
+				thinkingLevel: defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+				fallbackMessage: undefined,
+			};
+		}
+
 		// Try to find a default model from known providers
 		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
 			const defaultId = defaultModelPerProvider[provider];

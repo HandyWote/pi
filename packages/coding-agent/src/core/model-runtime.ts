@@ -407,6 +407,14 @@ export class ModelRuntime implements Models {
 		return this.models.getProvider(providerId);
 	}
 
+	getProviderName(providerId: string): string {
+		return this.getProfile(providerId)?.name ?? this.getProvider(providerId)?.name ?? providerId;
+	}
+
+	isProfileProvider(providerId: string): boolean {
+		return this.getProfile(providerId) !== undefined;
+	}
+
 	getModels(providerId?: string): readonly Model<Api>[] {
 		return this.models.getModels(providerId);
 	}

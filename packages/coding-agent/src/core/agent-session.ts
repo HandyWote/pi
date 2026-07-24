@@ -1183,6 +1183,15 @@ export class AgentSession {
 			if (!this.model) {
 				throw new Error(formatNoModelSelectedMessage());
 			}
+			if (
+				this._modelRuntime.isProfileProvider(this.model.provider) &&
+				!this._modelRuntime.getModel(this.model.provider, this.model.id)
+			) {
+				throw new Error(
+					`Model ${this.model.provider}/${this.model.id} is disabled, unavailable, or has no resolved API route. ` +
+						"Use /profile to update the model or select another model.",
+				);
+			}
 
 			const hasConfiguredAuth =
 				this._modelRuntime.hasConfiguredAuth(this.model.provider) ||

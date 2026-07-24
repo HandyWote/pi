@@ -239,6 +239,27 @@ describe("resolveModelScopeWithDiagnostics", () => {
 		}
 	});
 
+	test("reports a duplicate bare model ID instead of choosing one Profile", async () => {
+		const duplicateModels: Model<"anthropic-messages">[] = [
+			{ ...mockModels[0], provider: "profile-a", id: "shared-model" },
+			{ ...mockModels[1], provider: "profile-b", id: "shared-model" },
+		];
+		const registry = {
+			getAvailable: () => duplicateModels,
+		} as unknown as Parameters<typeof resolveModelScopeWithDiagnostics>[1];
+
+		const result = await resolveModelScopeWithDiagnostics(["shared-model"], registry);
+
+		expect(result.scopedModels).toEqual([]);
+		expect(result.diagnostics).toEqual([
+			{
+				type: "warning",
+				message: 'Model pattern "shared-model" is ambiguous. Use a full profile/model reference.',
+				pattern: "shared-model",
+			},
+		]);
+	});
+
 	test("resolveModelScope preserves CLI warning output", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
@@ -271,6 +292,89 @@ describe("resolveCliModel", () => {
 		expect(result.error).toBeUndefined();
 		expect(result.model?.provider).toBe("openai");
 		expect(result.model?.id).toBe("gpt-4o");
+	});
+
+	test("prefers an exact model from the active profile for a bare model reference", () => {
+		const profileModel: Model<"anthropic-messages"> = {
+			...mockModels[0],
+			provider: "profile-a",
+			id: "shared-model",
+			name: "Profile Shared Model",
+		};
+		const otherModel: Model<"anthropic-messages"> = {
+			...mockModels[1],
+			provider: "openai",
+			id: "shared-model",
+		};
+		const registry = {
+			getModels: () => [profileModel, otherModel],
+			getActiveProfile: () => ({ id: "profile-a" }),
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+
+		const result = resolveCliModel({ cliModel: "shared-model", modelRuntime: registry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model).toBe(profileModel);
+	});
+
+	test("resolves a complete profile/model reference when bare IDs are duplicated", () => {
+		const profileModel: Model<"anthropic-messages"> = {
+			...mockModels[0],
+			provider: "profile-a",
+			id: "shared-model",
+		};
+		const otherModel: Model<"anthropic-messages"> = {
+			...mockModels[1],
+			provider: "openai",
+			id: "shared-model",
+		};
+		const registry = {
+			getModels: () => [profileModel, otherModel],
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+
+		const result = resolveCliModel({ cliModel: "profile-a/shared-model", modelRuntime: registry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model).toBe(profileModel);
+	});
+
+	test("reports duplicate bare model IDs as ambiguous", () => {
+		const duplicateModels: Model<"anthropic-messages">[] = [
+			{ ...mockModels[0], provider: "profile-a", id: "shared-model" },
+			{ ...mockModels[1], provider: "profile-b", id: "shared-model" },
+		];
+		const registry = {
+			getModels: () => duplicateModels,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+
+		const result = resolveCliModel({ cliModel: "shared-model", modelRuntime: registry });
+
+		expect(result.model).toBeUndefined();
+		expect(result.error).toContain('Model "shared-model" is ambiguous');
+		expect(result.error).toContain("profile-a/shared-model");
+		expect(result.error).toContain("profile-b/shared-model");
+	});
+
+	test("does not synthesize a fallback model for a Profile provider", () => {
+		const profileModel: Model<"anthropic-messages"> = {
+			...mockModels[0],
+			provider: "profile-a",
+			id: "known-model",
+		};
+		const registry = {
+			getModels: () => [profileModel],
+			isProfileProvider: (provider: string) => provider === "profile-a",
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+
+		const result = resolveCliModel({
+			cliProvider: "profile-a",
+			cliModel: "new-model",
+			modelRuntime: registry,
+		});
+
+		expect(result.model).toBeUndefined();
+		expect(result.warning).toBeUndefined();
+		expect(result.error).toContain('Model "profile-a/new-model" not found');
 	});
 
 	test("resolves fuzzy patterns within an explicit provider", () => {
@@ -363,7 +467,7 @@ describe("resolveCliModel", () => {
 		});
 
 		expect(result.model).toBeUndefined();
-		expect(result.error).toContain("No models available");
+		expect(result.error).toContain("No profiles configured");
 	});
 
 	test("prefers provider/model split over gateway model with matching id", () => {
@@ -587,6 +691,59 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
+	test("prefers a selectable model from the active Profile for a new session", async () => {
+		const activeModel: Model<"anthropic-messages"> = {
+			...mockModels[0],
+			provider: "profile-a",
+			id: "active-model",
+		};
+		const otherModel: Model<"anthropic-messages"> = {
+			...mockModels[1],
+			provider: "profile-b",
+			id: "other-model",
+		};
+		const registry = {
+			getActiveProfile: () => ({ id: "profile-a" }),
+			getModel: () => otherModel,
+			hasConfiguredAuth: () => true,
+			getAvailable: async () => [otherModel, activeModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "profile-b",
+			defaultModelId: "other-model",
+			modelRuntime: registry,
+		});
+
+		expect(result.model).toBe(activeModel);
+	});
+
+	test("falls back across Profiles when the active Profile has no selectable model", async () => {
+		const fallbackModel: Model<"anthropic-messages"> = {
+			...mockModels[1],
+			provider: "profile-b",
+			id: "fallback-model",
+		};
+		const registry = {
+			getActiveProfile: () => ({ id: "profile-a" }),
+			getModel: () => fallbackModel,
+			hasConfiguredAuth: () => true,
+			getAvailable: async () => [fallbackModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "profile-b",
+			defaultModelId: "fallback-model",
+			modelRuntime: registry,
+		});
+
+		expect(result.model).toBe(fallbackModel);
+	});
+
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.5");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");

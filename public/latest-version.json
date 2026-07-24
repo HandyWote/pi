@@ -1,5 +1,5 @@
 {
-	"version": "0.82.1",
+	"version": "0.83.0",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Profile per-API route discovery and manual routes; Unified Profile/Runtime model identity"
+	"note": "Release v0.83.0"
 }

@@ -56,6 +56,7 @@ function getSortedIds(enabledIds: EnabledIds, allIds: string[]): string[] {
 export interface ModelsConfig {
 	allModels: Model<any>[];
 	enabledModelIds: string[] | null;
+	profileNames?: ReadonlyMap<string, string>;
 }
 
 export interface ModelsCallbacks {
@@ -75,6 +76,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	private readonly footerText: Text;
 	private readonly detailsText: Text;
 	private readonly callbacks: ModelsCallbacks;
+	private readonly profileNames: ReadonlyMap<string, string>;
 	private isDirty = false;
 	private _focused = false;
 
@@ -90,6 +92,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	constructor(config: ModelsConfig, callbacks: ModelsCallbacks) {
 		super();
 		this.callbacks = callbacks;
+		this.profileNames = config.profileNames ?? new Map();
 		for (const model of config.allModels) {
 			const fullId = `${model.provider}/${model.id}`;
 			this.modelsById.set(fullId, model);
@@ -137,7 +140,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 				return {
 					id,
 					label: model.id,
-					description: `[${model.provider}]`,
+					description: `[${this.profileNames.get(model.provider) ?? model.provider}] ${id}`,
 					toggled: isEnabled(this.enabledIds, id),
 					toggleable: true,
 				};
@@ -172,7 +175,14 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	private updateDetails(): void {
 		const selectedId = this.list.getSelectedItem()?.id;
 		const model = selectedId ? this.modelsById.get(selectedId) : undefined;
-		this.detailsText.setText(model ? theme.fg("muted", `\n  Model Name: ${model.name}`) : "");
+		this.detailsText.setText(
+			model
+				? theme.fg(
+						"muted",
+						`\n  Profile: ${this.profileNames.get(model.provider) ?? model.provider}\n  Reference: ${selectedId}\n  Model Name: ${model.name}`,
+					)
+				: "",
+		);
 	}
 
 	private notifyChange(): void {

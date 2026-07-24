@@ -78,6 +78,7 @@ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/htt
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { enrichWithModelsDev, mergeProfileModels } from "../../core/model-metadata.ts";
+import { formatModelReference } from "../../core/model-reference.ts";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import {
@@ -541,7 +542,7 @@ export class InteractiveMode {
 				return createFuzzyAutocompleteItems(items, prefix, getModelSearchText, (item) => ({
 					value: item.label,
 					label: item.id,
-					description: item.provider,
+					description: `${this.session.modelRuntime.getProviderName(item.provider)} · ${item.label}`,
 				}));
 			};
 		}
@@ -650,7 +651,7 @@ export class InteractiveMode {
 			const modelList = this.session.scopedModels
 				.map((sm) => {
 					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
-					return `${sm.model.id}${thinkingStr}`;
+					return `${this.formatModelStatus(sm.model)}${thinkingStr}`;
 				})
 				.join(", ");
 			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
@@ -839,6 +840,16 @@ export class InteractiveMode {
 
 		if (modelFallbackMessage) {
 			this.showWarning(modelFallbackMessage);
+		}
+
+		const profiles = this.session.modelRuntime.getProfiles();
+		const activeProfile = this.session.modelRuntime.getActiveProfile();
+		if (profiles.length > 0 && !activeProfile) {
+			this.showWarning("No active profile. Select one or create a profile before choosing a default model.");
+			await this.showProfileMenu();
+		} else if (profiles.length === 0 && !this.session.model) {
+			this.showWarning("No profiles configured. Create a profile to connect a model service.");
+			await this.showProfileMenu();
 		}
 
 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
@@ -3193,6 +3204,10 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private formatModelStatus(model: Model<any>): string {
+		return `${this.session.modelRuntime.getProviderName(model.provider)} (${formatModelReference(model)})`;
+	}
+
 	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
@@ -3774,7 +3789,7 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				const thinkingStr =
 					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
+				this.showStatus(`Switched to ${this.formatModelStatus(result.model)}${thinkingStr}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
@@ -4340,7 +4355,7 @@ export class InteractiveMode {
 				await this.session.setModel(model);
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
+				this.showStatus(`Model: ${this.formatModelStatus(model)}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
@@ -4354,6 +4369,14 @@ export class InteractiveMode {
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
 		const models = await this.getModelCandidates();
+		const activeProfileId = this.session.modelRuntime.getActiveProfile()?.id;
+		if (activeProfileId) {
+			const activeMatch = findExactModelReferenceMatch(
+				searchTerm,
+				models.filter((model) => model.provider === activeProfileId),
+			);
+			if (activeMatch) return activeMatch;
+		}
 		return findExactModelReferenceMatch(searchTerm, models);
 	}
 
@@ -4475,7 +4498,7 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						done();
-						this.showStatus(`Model: ${model.id}`);
+						this.showStatus(`Model: ${this.formatModelStatus(model)}`);
 						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 						this.checkDaxnutsEasterEgg(model);
 					} catch (error) {
@@ -4551,6 +4574,9 @@ export class InteractiveMode {
 				{
 					allModels,
 					enabledModelIds: currentEnabledIds,
+					profileNames: new Map(
+						allModels.map((model) => [model.provider, this.session.modelRuntime.getProviderName(model.provider)]),
+					),
 				},
 				{
 					onChange: async (enabledIds) => {
@@ -5365,6 +5391,31 @@ export class InteractiveMode {
 			available: true,
 		};
 		await this.saveProfile({ ...profile, models: [...profile.models, model] }, false);
+
+		const action = await this.showExtensionSelector("Model added but not enabled", [
+			"Enable and select",
+			"Keep disabled",
+		]);
+		if (action !== "Enable and select") {
+			this.showStatus(`Added disabled model: ${profile.name} (${profile.id}/${model.id})`);
+			return;
+		}
+
+		const currentProfile = this.session.modelRuntime.getProfile(profile.id);
+		if (!currentProfile) return;
+		const models = currentProfile.models.map((entry) =>
+			entry.id === model.id ? { ...entry, enabled: true } : entry,
+		);
+		await this.saveProfile({ ...currentProfile, models }, false);
+		const runtimeModel = this.session.modelRuntime.getModel(profile.id, model.id);
+		if (!runtimeModel) {
+			this.showError(`Enabled model is not selectable: ${profile.id}/${model.id}. Check its API route in /profile.`);
+			return;
+		}
+		await this.session.setModel(runtimeModel);
+		this.footer.invalidate();
+		this.updateEditorBorderColor();
+		this.showStatus(`Model: ${this.formatModelStatus(runtimeModel)}`);
 	}
 
 	private async showProfileModelGroupEditor(profileId: string, groupId: string): Promise<void> {
@@ -5564,17 +5615,25 @@ export class InteractiveMode {
 		const resolution = resolveProfileModelApi(profile, model, {
 			registrySources: this.session.modelRuntime.getCompatRegistries(),
 		});
+		const routeStatus =
+			resolution.api && profile.apiRoutes?.[resolution.api]?.verified === false ? " · unverified route" : "";
 		if (preference !== "auto") {
 			const label = getProfileApiLabel(preference);
-			return resolution.api ? label : `${label} · unresolved: ${resolution.reason ?? "select an API"}`;
+			return resolution.api
+				? `${label}${routeStatus}`
+				: `${label} · unresolved: ${resolution.reason ?? "select an API"}`;
 		}
 		return resolution.api
-			? `Auto -> ${getProfileApiLabel(resolution.api)}`
+			? `Auto -> ${getProfileApiLabel(resolution.api)}${routeStatus}`
 			: `Auto -> unresolved: ${resolution.reason ?? "select an API"}`;
 	}
 
 	private formatProfileModelDescription(profile: Profile, model: UserModel): string {
-		const details = [model.overrides?.name ?? model.name, this.formatProfileModelApi(profile, model)];
+		const details = [
+			model.overrides?.name ?? model.name,
+			this.formatProfileModelApi(profile, model),
+			model.enabled ? "enabled" : "disabled",
+		];
 		if (model.available === false) details.push("unavailable");
 		return details.join(" · ");
 	}
@@ -5649,6 +5708,7 @@ export class InteractiveMode {
 		};
 		if (isNew) {
 			await this.session.modelRuntime.createProfile(next);
+			this.session.modelRuntime.setActiveProfile(next.id);
 		} else {
 			await this.session.modelRuntime.updateProfile(next.id, () => next);
 		}
@@ -5657,7 +5717,35 @@ export class InteractiveMode {
 	}
 
 	private async reloadProfileRuntime(): Promise<void> {
+		const previousModel = this.session.model;
 		await this.session.modelRuntime.reloadConfig();
+
+		const refreshedScopedModels = this.session.scopedModels.flatMap((scoped) => {
+			const refreshed = this.session.modelRuntime.getModel(scoped.model.provider, scoped.model.id);
+			return refreshed ? [{ ...scoped, model: refreshed }] : [];
+		});
+		this.session.setScopedModels(refreshedScopedModels);
+
+		if (previousModel) {
+			const refreshedCurrent = this.session.modelRuntime.getModel(previousModel.provider, previousModel.id);
+			if (refreshedCurrent) {
+				this.agent.state.model = refreshedCurrent;
+			} else if (this.session.modelRuntime.isProfileProvider(previousModel.provider)) {
+				const available = [...(await this.session.modelRuntime.getAvailable())];
+				const activeProfileId = this.session.modelRuntime.getActiveProfile()?.id;
+				const fallback = available.find((model) => model.provider === activeProfileId) ?? available[0];
+				if (fallback) {
+					await this.session.setModel(fallback);
+					this.showWarning(
+						`Model ${formatModelReference(previousModel)} is no longer selectable. Using ${this.formatModelStatus(fallback)}.`,
+					);
+				} else {
+					this.showWarning(
+						`Model ${formatModelReference(previousModel)} is no longer selectable. Enable a model or configure its API route in /profile.`,
+					);
+				}
+			}
+		}
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();

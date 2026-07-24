@@ -1,5 +1,6 @@
 import { type Model, modelsAreEqual } from "@handy_wote/pi-ai";
 import { Container, EntityList, type Focusable, getKeybindings, Spacer, Text, type TUI } from "@handy_wote/pi-tui";
+import { formatModelReference, getModelReferenceSearchText } from "../../../core/model-reference.ts";
 import type { ModelRuntime } from "../../../core/model-runtime.ts";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
 import { getModelSelectorSearchText } from "../model-search.ts";
@@ -84,11 +85,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.addChild(this.scopeHintText);
 		} else {
 			this.addChild(
-				new Text(
-					theme.fg("warning", "Only showing models from configured providers. Use /profile to manage profiles."),
-					0,
-					0,
-				),
+				new Text(theme.fg("warning", "Only showing selectable models. Use /profile to manage profiles."), 0, 0),
 			);
 		}
 		this.addChild(new Spacer(1));
@@ -105,7 +102,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 							id: modelItem.id,
 							provider: modelItem.provider,
 							name: modelItem.model.name,
-						})
+						}) +
+							` ${this.modelRuntime.getProviderName(modelItem.provider)} ${getModelReferenceSearchText(modelItem.model)}`
 					: item.label;
 			},
 		});
@@ -160,7 +158,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.activeModels.map((item) => ({
 				id: this.getItemId(item),
 				label: item.id,
-				description: `[${item.provider}]${modelsAreEqual(this.currentModel, item.model) ? " ✓" : ""}`,
+				description: `[${this.modelRuntime.getProviderName(item.provider)}] ${formatModelReference(item.model)}${modelsAreEqual(this.currentModel, item.model) ? " ✓" : ""}`,
 			})),
 		);
 		this.updateDetails();
@@ -209,7 +207,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const bIsCurrent = modelsAreEqual(this.currentModel, b.model);
 			if (aIsCurrent && !bIsCurrent) return -1;
 			if (!aIsCurrent && bIsCurrent) return 1;
-			return a.provider.localeCompare(b.provider);
+			const profileOrder = this.modelRuntime
+				.getProviderName(a.provider)
+				.localeCompare(this.modelRuntime.getProviderName(b.provider));
+			return profileOrder !== 0 ? profileOrder : a.id.localeCompare(b.id);
 		});
 	}
 
@@ -247,6 +248,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const selected = this.activeModels.find((item) => this.getItemId(item) === selectedId);
 			if (selected) {
 				this.detailsContainer.addChild(new Spacer(1));
+				this.detailsContainer.addChild(
+					new Text(theme.fg("muted", `  Profile: ${this.modelRuntime.getProviderName(selected.provider)}`), 0, 0),
+				);
+				this.detailsContainer.addChild(
+					new Text(theme.fg("muted", `  Reference: ${formatModelReference(selected.model)}`), 0, 0),
+				);
 				this.detailsContainer.addChild(new Text(theme.fg("muted", `  Model Name: ${selected.model.name}`), 0, 0));
 			}
 		}

@@ -4,8 +4,11 @@ Use `/profile` for a gateway that exposes a model catalog, or add fully explicit
 
 ## Table of Contents
 
-- [Minimal Example](#minimal-example)
 - [Gateway Profiles](#gateway-profiles)
+- [Profile and Runtime Models](#profile-and-runtime-models)
+- [Model References and CLI Selection](#model-references-and-cli-selection)
+- [Manual Profile Models](#manual-profile-models)
+- [Minimal Example](#minimal-example)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
@@ -30,6 +33,57 @@ For an existing Profile, connection settings also expose a fallback API. It is u
 Refreshing discovery preserves model enabled state, family API policies, per-model API choices, and manual metadata overrides. Newly discovered models remain disabled; missing models remain visible as unavailable so their settings are not lost.
 
 Use a Profile when one gateway serves a changing catalog or multiple model families. Use `models.json` when you need a fully explicit provider definition, custom headers, or models that cannot be discovered.
+
+## Profile and Runtime Models
+
+Pi uses four related terms:
+
+| Term | Meaning |
+|------|---------|
+| **Profile model** | A persistent model entry inside a Profile in `~/.pi/agent/profiles.json`. It can be discovered or manual, enabled or disabled, available or unavailable, and can carry metadata and API preferences. |
+| **Runtime model** | A request-ready model produced from an enabled, available Profile model whose API route resolves. Its runtime provider ID is the owning Profile ID. `/model`, `--list-models`, `--model`, and `--models` operate on Runtime models. |
+| **Active Profile** | The Profile preferred when a bare model ID could refer to more than one Profile. It is also marked and sorted first by `--list-models`. Activating a Profile does not disable other Profiles, filter the Runtime model set, or change the current session model by itself. Toggle it with Space in `/profile`. |
+| **Scoped model** | A Runtime model included in the session's Ctrl+P cycling set by `--models`, `enabledModels`, or `/scoped-models`. A scope limits cycling and initial selection; it does not enable or disable Profile models. |
+
+Only Profile models that are enabled, currently available, and have a resolvable configured API become Runtime models. Disabled, unavailable, and unresolved entries remain in the Profile so their settings are preserved, but they do not appear in Runtime model selection.
+
+## Model References and CLI Selection
+
+The canonical Runtime model reference is:
+
+```text
+<profile-id>/<model-id>
+```
+
+The first component is the Profile ID, not its display name. Run `pi --list-models` to see the owning Profile name, model ID, canonical reference, and an `*` on the Active Profile. Use the canonical reference whenever the same model ID exists in multiple Profiles:
+
+```bash
+pi --list-models
+pi --list-models claude
+pi --model profile-id/model-id
+pi --model profile-id/model-id:high
+```
+
+`--model` selects one Runtime model. A bare model ID or fuzzy pattern is accepted; Pi searches the Active Profile first, then all Runtime models. An ambiguous exact ID must be replaced with the full `profile-id/model-id` reference. `--provider <profile-id> --model <model-id>` is the equivalent two-flag form.
+
+`--models` creates the scoped model set used for Ctrl+P cycling and for initial selection in a new session. It accepts comma-separated exact references, fuzzy patterns, and globs, each with an optional `:<thinking>` suffix:
+
+```bash
+pi --models "profile-id/claude-*,other-profile-id/gpt-*:high"
+```
+
+`--models` only matches Runtime models; it does not enable disabled Profile models. The `enabledModels` setting uses the same syntax. In `/model`, use Tab to switch between all Runtime models and the scoped set when a scope exists.
+
+## Manual Profile Models
+
+Use a manual Profile model when discovery fails, the catalog is empty, or the gateway omits a model you need:
+
+1. Open `/profile`, create or edit the Profile, and choose **Configure manually** if automatic discovery cannot be used.
+2. Open **API routes**, add the protocol and its exact serializer/SDK base URL, then verify it with the non-generating `POST {}` check. You may explicitly save a route as unverified.
+3. Open **Models**, choose **Add manual model**, and enter the model ID, display name, and one configured API route.
+4. Open the new model to adjust context window, maximum output, reasoning, vision, tool-call support, or API, then enable it.
+
+A new manual model starts disabled. It becomes a Runtime model, and therefore becomes visible to `--list-models`, `/model`, `--model`, and `--models`, only after it is enabled and its API route resolves. Manual models can be deleted from their model-family list; discovered models are retained across refreshes instead.
 
 ## Minimal Example
 
@@ -159,7 +213,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
 
-For providers with `models`, non-built-in provider configs need `baseUrl` and an `api` value at either provider or model level. `apiKey` is not required to load the file: models become available when auth is configured through `/login`/`auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.
+For providers with `models`, non-built-in provider configs need `baseUrl` and an `api` value at either provider or model level. `apiKey` is not required to load the file: models become available when auth is configured through `/login`/`auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model`; `--list-models` can still show the configured Runtime definitions.
 
 ### Value Resolution
 

@@ -27,8 +27,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `defaultProvider` | string | - | Default provider (e.g., `"anthropic"`, `"openai"`) |
-| `defaultModel` | string | - | Default model ID |
+| `defaultProvider` | string | - | Default Runtime provider ID. For Profile models, this is the Profile ID. |
+| `defaultModel` | string | - | Default Runtime model ID within `defaultProvider` |
 | `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses |
@@ -61,6 +61,27 @@ Use local compatibility registry files to add or override model metadata, API pr
 ```
 
 Relative paths resolve from the settings file that declares them. Files are loaded in order after the built-in registry, so later files take precedence field by field. Invalid or missing files produce a warning and are skipped without disabling the built-in registry. `/reload` rereads the files.
+
+#### Model References, Active Profile, and Scope
+
+Profile-backed models use the canonical Runtime reference `profile-id/model-id`. The Profile ID is the Runtime provider ID; the Profile display name is not part of a model reference. `defaultProvider` and `defaultModel` store the two components separately, while `--model profile-id/model-id` supplies the complete reference on the command line.
+
+The **Active Profile** is persisted with the Profile store and managed from `/profile`, not from `settings.json`. It gives bare model IDs a preferred Profile and is shown first by `--list-models`; it does not disable or hide other Profiles.
+
+The **scoped model** list controls Ctrl+P cycling and initial model selection for a new session. `enabledModels` has the same comma-separated exact, fuzzy, and glob syntax as `--models`, including an optional `:<thinking>` suffix. Patterns match enabled Runtime models only; they do not enable Profile models.
+
+```json
+{
+  "defaultProvider": "profile-id",
+  "defaultModel": "model-id",
+  "enabledModels": [
+    "profile-id/claude-*",
+    "other-profile-id/gpt-*:high"
+  ]
+}
+```
+
+Use `pi --list-models` to copy a canonical reference. If the same model ID exists in more than one Profile, use the full reference rather than relying on Active Profile precedence.
 
 ### UI & Display
 
@@ -228,11 +249,11 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `enabledModels` | string[] | - | Model patterns for Ctrl+P cycling (same format as `--models` CLI flag) |
+| `enabledModels` | string[] | - | Runtime model references, patterns, or globs for Ctrl+P cycling (same format as `--models`; optional `:<thinking>` suffix) |
 
 ```json
 {
-  "enabledModels": ["claude-*", "gpt-4o", "gemini-2*"]
+  "enabledModels": ["profile-id/claude-*", "profile-id/gpt-4o", "profile-id/gemini-2*"]
 }
 ```
 
@@ -289,8 +310,8 @@ See [packages.md](packages.md) for package management details.
 
 ```json
 {
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-sonnet-4-20250514",
+  "defaultProvider": "profile-id",
+  "defaultModel": "model-id",
   "defaultThinkingLevel": "medium",
   "theme": "dark",
   "compaction": {
@@ -302,7 +323,7 @@ See [packages.md](packages.md) for package management details.
     "enabled": true,
     "maxRetries": 3
   },
-  "enabledModels": ["claude-*", "gpt-4o"],
+  "enabledModels": ["profile-id/claude-*", "profile-id/gpt-4o"],
   "warnings": {
     "anthropicExtraUsage": true
   },

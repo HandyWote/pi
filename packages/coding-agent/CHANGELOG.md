@@ -5,6 +5,7 @@
 ### Changed
 
 - Improved Profile endpoint discovery with root URL validation, per-API SDK routes, safe same-origin redirects, non-generating `POST {}` route checks, and manual API-route/model fallback.
+- Unified Profile model and Runtime model identity across `/profile`, `/model`, `--list-models`, `--model`, and `--models`, with canonical `profile-id/model-id` references, Active Profile precedence, scoped model behavior, and a manual model workflow.
 
 ## [0.82.0] - 2026-07-23
 

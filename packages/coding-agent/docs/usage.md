@@ -37,9 +37,10 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | Command | Description |
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
+| `/profile` | Create Profiles, choose the Active Profile, configure API routes, and manage Profile models |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
-| `/model` | Switch models |
-| `/scoped-models` | Enable/disable models for Ctrl+P cycling |
+| `/model [reference]` | Switch Runtime models; accepts a model ID or `profile-id/model-id` reference |
+| `/scoped-models` | Manage the Runtime models used for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
@@ -58,6 +59,29 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
 | `/quit` | Quit pi |
+
+## Model Selection
+
+A **Profile model** is the persistent model configuration stored inside a Profile. An enabled and available Profile model with a resolved API route becomes a request-ready **Runtime model**. Model selection commands operate on Runtime models; enabling or editing Profile models happens in `/profile`.
+
+Every Runtime model has a canonical `profile-id/model-id` reference. The Profile ID is also the Runtime provider ID. Use `pi --list-models` to see Profile names, model IDs, canonical references, and the `*` marking the **Active Profile**. A bare model ID is resolved in the Active Profile first and then across all Profiles; use the canonical reference when an ID is ambiguous. The Active Profile is a lookup and display preference, not a filter, and does not switch the current model by itself.
+
+```bash
+pi --list-models
+pi --list-models qwen
+pi --model profile-id/model-id
+pi --model profile-id/model-id:high
+```
+
+`--model` selects one Runtime model. `--models` creates a **scoped model** set for Ctrl+P cycling and initial selection in a new session. Scope entries are Runtime models with an optional fixed thinking level; they do not enable disabled Profile models. Patterns may be exact references, fuzzy names or IDs, or globs:
+
+```bash
+pi --models "profile-id/claude-*,other-profile-id/gpt-*:high"
+```
+
+The `enabledModels` setting uses the same syntax. `/scoped-models` changes the current session's scope and can persist it; `/model` starts on the scoped list when one exists, and Tab switches between scoped and all Runtime models.
+
+When a gateway has no usable catalog, use `/profile` to configure an API route first, add a manual model, edit its metadata, and enable it. The model appears in Runtime model commands only after it is enabled and its API route resolves. See [Gateway Profiles and manual models](models.md#manual-profile-models).
 
 ## Message Queue
 
@@ -183,12 +207,12 @@ cat README.md | pi -p "Summarize this text"
 
 | Option | Description |
 |--------|-------------|
-| `--provider <name>` | Provider, such as `anthropic`, `openai`, or `google` |
-| `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>` |
+| `--provider <id>` | Runtime provider ID; for Profile models this is the Profile ID |
+| `--model <pattern>` | Select one Runtime model; supports a model ID, canonical `profile-id/model-id`, fuzzy matching, and optional `:<thinking>` |
 | `--api-key <key>` | API key, overriding environment variables |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
-| `--list-models [search]` | List available models |
+| `--models <patterns>` | Comma-separated Runtime model references, patterns, or globs for Ctrl+P cycling |
+| `--list-models [search]` | List Runtime models with Profile ownership and canonical references; optionally fuzzy-filter the output |
 
 ### Session Options
 
@@ -270,17 +294,17 @@ cat README.md | pi -p "Summarize this text"
 # Named one-shot session
 pi --name "release audit" -p "Audit this repository"
 
-# Different model
-pi --provider openai --model gpt-4o "Help me refactor"
+# List Runtime models and canonical references
+pi --list-models
 
-# Model with provider prefix
-pi --model openai/gpt-4o "Help me refactor"
+# Select a model by canonical Profile reference
+pi --model profile-id/model-id "Help me refactor"
 
 # Model with thinking level shorthand
-pi --model sonnet:high "Solve this complex problem"
+pi --model profile-id/model-id:high "Solve this complex problem"
 
 # Limit model cycling
-pi --models "claude-*,gpt-4o"
+pi --models "profile-id/claude-*,other-profile-id/gpt-*"
 
 # Read-only mode
 pi --tools read,grep,find,ls -p "Review the code"

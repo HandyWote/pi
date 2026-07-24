@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Profile per-API route discovery and manual routes** — Validate a gateway service root, build per-API SDK routes (OpenAI Chat/Responses, Anthropic Messages) with safe same-origin redirects and non-generating `POST {}` verification, and edit API routes or add manual models directly in `/profile`. See [Gateway Profiles](docs/models.md#gateway-profiles) and [Manual Profile Models](docs/models.md#manual-profile-models).
+- **Unified Profile/Runtime model identity** — Every selectable model has a canonical `profile-id/model-id` reference surfaced across `/profile`, `/model`, `--list-models`, `--model`, and `--models`; the Active Profile gives bare IDs a preferred lookup, ambiguous IDs are reported, and `/model` shows owning Profile and reference. See [Profile and Runtime Models](docs/models.md#profile-and-runtime-models).
+
 ### Changed
 
 - Improved Profile endpoint discovery with root URL validation, per-API SDK routes, safe same-origin redirects, non-generating `POST {}` route checks, and manual API-route/model fallback.

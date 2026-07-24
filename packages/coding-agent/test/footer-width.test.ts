@@ -80,6 +80,7 @@ function createSession(options: {
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		modelRuntime: {
 			isUsingOAuth: () => false,
+			getProviderName: (providerId: string) => providerId,
 		},
 	};
 

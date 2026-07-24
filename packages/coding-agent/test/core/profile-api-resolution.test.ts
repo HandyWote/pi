@@ -113,4 +113,15 @@ describe("resolveProfileModelApi", () => {
 		expect(result.source).toBe("unresolved");
 		expect(result.reason).toContain("Multiple APIs");
 	});
+
+	it("does not resolve an explicit API without a configured route", () => {
+		const result = resolveProfileModelApi(
+			profile({
+				apiRoutes: { "openai-completions": { sdkBaseUrl: "https://gateway.example/v1" } },
+			}),
+			model({ apiPreference: "anthropic-messages" }),
+		);
+		expect(result.api).toBeUndefined();
+		expect(result.reason).toContain("no API route is configured");
+	});
 });

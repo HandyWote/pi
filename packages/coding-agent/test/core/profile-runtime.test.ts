@@ -33,19 +33,29 @@ function profile(models: UserModel[]): Profile {
 
 describe("createProfileProvider", () => {
 	it("keeps mixed APIs in one Profile provider", () => {
-		const provider = createProfileProvider(
-			profile([
+		const provider = createProfileProvider({
+			...profile([
 				userModel("gpt-test", { apiPreference: "openai-responses" }),
 				userModel("claude-test", { apiPreference: "anthropic-messages" }),
 				userModel("deepseek-test", { apiPreference: "openai-completions" }),
 			]),
-		);
+			apiRoutes: {
+				"openai-responses": { sdkBaseUrl: "https://gateway.example.com/v1" },
+				"anthropic-messages": { sdkBaseUrl: "https://gateway.example.com" },
+				"openai-completions": { sdkBaseUrl: "https://gateway.example.com/v1" },
+			},
+		});
 		expect(provider.id).toBe("test-profile");
-		expect(provider.getModels().map((model) => [model.id, model.api])).toEqual([
-			["gpt-test", "openai-responses"],
-			["claude-test", "anthropic-messages"],
-			["deepseek-test", "openai-completions"],
+		expect(provider.getModels().map((model) => [model.id, model.api, model.baseUrl])).toEqual([
+			["gpt-test", "openai-responses", "https://gateway.example.com/v1"],
+			["claude-test", "anthropic-messages", "https://gateway.example.com"],
+			["deepseek-test", "openai-completions", "https://gateway.example.com/v1"],
 		]);
+	});
+
+	it("falls back to the legacy profile base URL when no API route is stored", () => {
+		const provider = createProfileProvider(profile([userModel("legacy", { apiPreference: "openai-completions" })]));
+		expect(provider.getModels()[0]?.baseUrl).toBe("https://gateway.example.com/v1");
 	});
 
 	it("applies models.dev base, registry metadata/API overlay, then manual fields", () => {

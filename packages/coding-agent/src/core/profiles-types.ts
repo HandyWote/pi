@@ -40,6 +40,13 @@ export interface UserModel {
 	overrides?: ProfileModelOverrides;
 }
 
+export interface ProfileApiRoute {
+	/** Base URL passed to this API's serializer or SDK. */
+	sdkBaseUrl: string;
+	/** Whether this route was confirmed by automatic or manual verification. */
+	verified?: boolean;
+}
+
 export interface Profile {
 	id: string;
 	name: string;
@@ -51,6 +58,8 @@ export interface Profile {
 	discoveryWarnings?: string[];
 	lastDiscoveredAt?: string;
 	baseUrl: string;
+	/** Confirmed automatic or manually configured SDK base URLs, keyed by API. */
+	apiRoutes?: Partial<Record<RegistryApi, ProfileApiRoute>>;
 	apiKey: string;
 	models: UserModel[];
 	createdAt: string;

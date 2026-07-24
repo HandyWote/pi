@@ -1,5 +1,5 @@
 import type { RegistryApi } from "@handy_wote/pi-ai";
-import { PROFILE_API_SERIALIZERS } from "./profile-api-resolution.ts";
+import { buildProtocolRoutes, type ProfileAuthStyle, type ProfileProtocolRoute } from "./profile-endpoints.ts";
 import type { Profile } from "./profiles-types.ts";
 
 export interface DiscoveredProfileModel {
@@ -9,18 +9,57 @@ export interface DiscoveredProfileModel {
 	gatewayPreferredApi?: RegistryApi;
 }
 
-export interface ProfileDiscoveryResult {
+export interface ProfileDiscoveryCandidate {
+	id: string;
 	models: DiscoveredProfileModel[];
 	availableApis: RegistryApi[];
+	protocolRoutes: Partial<Record<RegistryApi, ProfileProtocolRoute>>;
 	warnings: string[];
+}
+
+export interface ProfileDiscoveryFailure {
+	route: Pick<ProfileProtocolRoute, "api" | "catalogUrl" | "inferenceUrl">;
+	stage: "catalog" | "inference";
+	message: string;
+}
+
+export interface ProfileDiscoveryResult {
+	candidates: ProfileDiscoveryCandidate[];
+	failures: ProfileDiscoveryFailure[];
 }
 
 export interface ProfileDiscoveryOptions {
 	fetch?: typeof fetch;
+	/**
+	 * Retained for callers that explicitly want catalog-only diagnostics. Automatic
+	 * discovery confirms inference routes by default.
+	 */
 	probeApis?: boolean;
+	timeoutMs?: number;
 }
 
-type CatalogAuthStyle = "openai" | "anthropic";
+type Catalog = {
+	models: DiscoveredProfileModel[];
+	availableApis: RegistryApi[];
+};
+
+type CatalogRequest = {
+	url: string;
+	authStyle: ProfileAuthStyle;
+	routes: ProfileProtocolRoute[];
+};
+
+type CatalogSuccess = CatalogRequest & {
+	catalog: Catalog;
+};
+
+type CatalogAttempt = {
+	request: CatalogRequest;
+	catalog?: Catalog;
+	error?: unknown;
+};
+
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 const API_ALIASES: Readonly<Record<string, RegistryApi>> = {
 	"openai-completions": "openai-completions",
@@ -32,18 +71,6 @@ const API_ALIASES: Readonly<Record<string, RegistryApi>> = {
 	"anthropic-messages": "anthropic-messages",
 	"anthropic-messages-api": "anthropic-messages",
 	anthropic: "anthropic-messages",
-	"mistral-conversations": "mistral-conversations",
-	mistral: "mistral-conversations",
-	"openai-codex-responses": "openai-codex-responses",
-	"google-generative-ai": "google-generative-ai",
-	"google-vertex": "google-vertex",
-};
-
-const PROBE_PATHS: Readonly<Partial<Record<RegistryApi, string>>> = {
-	"openai-completions": "chat/completions",
-	"openai-responses": "responses",
-	"anthropic-messages": "messages",
-	"mistral-conversations": "conversations",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,14 +82,15 @@ function normalizeApi(value: unknown): RegistryApi | undefined {
 }
 
 function readApis(record: Record<string, unknown>): RegistryApi[] {
-	const raw =
-		record.apis ??
-		record.supported_apis ??
-		record.supportedApis ??
-		record.available_apis ??
-		record.availableApis ??
-		record.protocols;
-	const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+	const rawValues = [
+		record.apis,
+		record.supported_apis,
+		record.supportedApis,
+		record.available_apis,
+		record.availableApis,
+		record.protocols,
+	].filter((value) => value !== undefined);
+	const values = rawValues.flatMap((raw) => (Array.isArray(raw) ? raw : [raw]));
 	return Array.from(new Set(values.map(normalizeApi).filter((api): api is RegistryApi => api !== undefined)));
 }
 
@@ -70,10 +98,10 @@ function readPreferredApi(record: Record<string, unknown>): RegistryApi | undefi
 	return normalizeApi(record.preferred_api ?? record.preferredApi ?? record.api ?? record.protocol);
 }
 
-function parseCatalog(value: unknown): { models: DiscoveredProfileModel[]; availableApis: RegistryApi[] } {
-	if (!isRecord(value)) throw new Error("Model catalog must be a JSON object");
+function parseCatalog(value: unknown): Catalog {
+	if (!isRecord(value)) throw new Error("model catalog must be a JSON object");
 	const rawModels = value.data ?? value.models;
-	if (!Array.isArray(rawModels)) throw new Error("Model catalog did not contain a model list");
+	if (!Array.isArray(rawModels)) throw new Error("model catalog did not contain a model list");
 
 	const models = rawModels.flatMap((raw): DiscoveredProfileModel[] => {
 		if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length === 0) return [];
@@ -93,7 +121,7 @@ function parseCatalog(value: unknown): { models: DiscoveredProfileModel[]; avail
 	return { models, availableApis: readApis(value) };
 }
 
-function authHeaders(profile: Profile, style: CatalogAuthStyle): Record<string, string> {
+function authHeaders(profile: Profile, style: ProfileAuthStyle): Record<string, string> {
 	if (style === "anthropic") {
 		return {
 			"anthropic-version": "2023-06-01",
@@ -104,52 +132,155 @@ function authHeaders(profile: Profile, style: CatalogAuthStyle): Record<string, 
 	return { Authorization: `Bearer ${profile.apiKey}`, "Content-Type": "application/json" };
 }
 
-function catalogStyles(profile: Profile): CatalogAuthStyle[] {
-	if (profile.protocol === "anthropic") return ["anthropic", "openai"];
-	return ["openai", "anthropic"];
+function failureRoute(route: ProfileProtocolRoute): ProfileDiscoveryFailure["route"] {
+	return { api: route.api, catalogUrl: route.catalogUrl, inferenceUrl: route.inferenceUrl };
+}
+
+function describeError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function parseJsonBody(value: string): unknown {
+	try {
+		return JSON.parse(value) as unknown;
+	} catch {
+		return undefined;
+	}
+}
+
+function hasStructuredProtocolError(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	const error = value.error;
+	if (!isRecord(error)) return false;
+	return [error.type, error.code, error.message, error.param, error.status].some(
+		(field) => typeof field === "string" || typeof field === "number",
+	);
+}
+
+function routeSupportsApi(catalog: Catalog, api: RegistryApi): boolean {
+	return catalog.availableApis.length === 0 || catalog.availableApis.includes(api);
+}
+
+function modelsKey(models: DiscoveredProfileModel[]): string {
+	return JSON.stringify(
+		models
+			.map((model) => ({
+				id: model.id,
+				name: model.name,
+				availableApis: model.availableApis,
+				gatewayPreferredApi: model.gatewayPreferredApi,
+			}))
+			.sort((left, right) => left.id.localeCompare(right.id)),
+	);
+}
+
+function candidateKey(catalog: CatalogSuccess): string {
+	return `${catalog.url}\u0000${modelsKey(catalog.catalog.models)}`;
+}
+
+function withTimeout(init: RequestInit, timeoutMs: number): { init: RequestInit; cancel: () => void } {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	return {
+		init: { ...init, signal: controller.signal },
+		cancel: () => clearTimeout(timer),
+	};
+}
+
+/** Fetch a URL while allowing at most one same-origin redirect. */
+async function fetchSameOrigin(
+	fetchImpl: typeof fetch,
+	url: string,
+	init: RequestInit,
+	timeoutMs: number,
+	followSameOriginRedirect = true,
+): Promise<Response> {
+	let currentUrl = url;
+	for (let redirectCount = 0; redirectCount <= 1; redirectCount += 1) {
+		const timed = withTimeout({ ...init, redirect: "manual" }, timeoutMs);
+		let response: Response;
+		try {
+			response = await fetchImpl(currentUrl, timed.init);
+		} finally {
+			timed.cancel();
+		}
+		if (response.status < 300 || response.status >= 400) return response;
+		if (!followSameOriginRedirect) return response;
+		const location = response.headers.get("location");
+		if (!location) throw new Error(`redirect response ${response.status} did not include a Location header`);
+		const nextUrl = new URL(location, currentUrl);
+		const origin = new URL(currentUrl).origin;
+		if (nextUrl.origin !== origin) throw new Error("cross-origin redirect refused");
+		if (nextUrl.username || nextUrl.password) throw new Error("redirect URL must not contain credentials");
+		if (redirectCount === 1) throw new Error("more than one redirect refused");
+		currentUrl = nextUrl.toString();
+	}
+	throw new Error("redirect failed");
 }
 
 async function fetchCatalog(
 	profile: Profile,
+	request: CatalogRequest,
 	fetchImpl: typeof fetch,
-): Promise<{ models: DiscoveredProfileModel[]; availableApis: RegistryApi[] }> {
-	const url = `${profile.baseUrl.replace(/\/+$/, "")}/models`;
-	const failures: string[] = [];
-	for (const style of catalogStyles(profile)) {
-		try {
-			const response = await fetchImpl(url, { headers: authHeaders(profile, style) });
-			if (!response.ok) {
-				failures.push(`${style}: ${response.status} ${response.statusText}`);
-				continue;
-			}
-			return parseCatalog(await response.json());
-		} catch (error) {
-			failures.push(`${style}: ${error instanceof Error ? error.message : String(error)}`);
-		}
-	}
-	throw new Error(`Failed to fetch models from ${url}: ${failures.join("; ")}`);
+	timeoutMs: number,
+): Promise<Catalog> {
+	const response = await fetchSameOrigin(
+		fetchImpl,
+		request.url,
+		{ method: "GET", headers: authHeaders(profile, request.authStyle) },
+		timeoutMs,
+	);
+	if (!response.ok) throw new Error(`HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`);
+	return parseCatalog(await response.json());
 }
 
-async function probeAvailableApis(profile: Profile, fetchImpl: typeof fetch): Promise<RegistryApi[]> {
-	const baseUrl = profile.baseUrl.replace(/\/+$/, "");
-	const headers = {
-		Authorization: `Bearer ${profile.apiKey}`,
-		"anthropic-version": "2023-06-01",
-		"x-api-key": profile.apiKey,
-	};
-	const results = await Promise.all(
-		PROFILE_API_SERIALIZERS.map(async (api): Promise<RegistryApi | undefined> => {
-			const path = PROBE_PATHS[api];
-			if (!path) return undefined;
-			try {
-				const response = await fetchImpl(`${baseUrl}/${path}`, { method: "OPTIONS", headers });
-				return response.ok ? api : undefined;
-			} catch {
-				return undefined;
-			}
-		}),
-	);
-	return results.filter((api): api is RegistryApi => api !== undefined);
+async function verifyInferenceRoute(
+	profile: Profile,
+	route: ProfileProtocolRoute,
+	fetchImpl: typeof fetch,
+	timeoutMs: number,
+): Promise<{ confirmed: boolean; warning?: string; failure?: string }> {
+	let response: Response;
+	try {
+		response = await fetchSameOrigin(
+			fetchImpl,
+			route.inferenceUrl,
+			{ method: "POST", headers: authHeaders(profile, route.authStyle), body: "{}" },
+			timeoutMs,
+			false,
+		);
+	} catch (error) {
+		return { confirmed: false, failure: describeError(error) };
+	}
+
+	if (response.status === 400 || response.status === 415 || response.status === 422 || response.status === 429) {
+		const body = parseJsonBody(await response.text());
+		if (hasStructuredProtocolError(body)) {
+			return response.status === 429
+				? { confirmed: true, warning: "inference route responded with a structured rate-limit error" }
+				: { confirmed: true };
+		}
+		return { confirmed: false, failure: `HTTP ${response.status} with an unrecognized error response` };
+	}
+	if (response.status === 401 || response.status === 403)
+		return { confirmed: false, failure: `HTTP ${response.status} (authentication failed)` };
+	if (response.status >= 300 && response.status < 400)
+		return { confirmed: false, failure: `HTTP ${response.status} (redirect not followed)` };
+	if (response.status >= 500) return { confirmed: false, failure: `HTTP ${response.status} (server error)` };
+	if (response.status === 404 || response.status === 405)
+		return { confirmed: false, failure: `HTTP ${response.status}` };
+	if (response.ok)
+		return { confirmed: false, failure: `HTTP ${response.status} (unexpected success for empty request)` };
+	return { confirmed: false, failure: `HTTP ${response.status}` };
+}
+
+/** Verify a manually configured standard-protocol route without sending a prompt. */
+export async function verifyProfileRoute(
+	profile: Profile,
+	route: ProfileProtocolRoute,
+	options: Pick<ProfileDiscoveryOptions, "fetch" | "timeoutMs"> = {},
+): Promise<{ confirmed: boolean; warning?: string; failure?: string }> {
+	return verifyInferenceRoute(profile, route, options.fetch ?? fetch, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 }
 
 export async function discoverProfile(
@@ -157,18 +288,121 @@ export async function discoverProfile(
 	options: ProfileDiscoveryOptions = {},
 ): Promise<ProfileDiscoveryResult> {
 	const fetchImpl = options.fetch ?? fetch;
-	const catalog = await fetchCatalog(profile, fetchImpl);
-	const probedApis = options.probeApis === false ? [] : await probeAvailableApis(profile, fetchImpl);
-	const availableApis = Array.from(new Set([...catalog.availableApis, ...probedApis]));
-	const warnings: string[] = [];
-	if (availableApis.length === 0) {
-		warnings.push("The model catalog worked, but no generation API was confirmed; select an API manually.");
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	const failures: ProfileDiscoveryFailure[] = [];
+	let routes: ProfileProtocolRoute[];
+	try {
+		routes = buildProtocolRoutes(profile.baseUrl);
+	} catch (error) {
+		return {
+			candidates: [],
+			failures: [
+				{
+					route: { api: "openai-completions", catalogUrl: profile.baseUrl, inferenceUrl: profile.baseUrl },
+					stage: "catalog",
+					message: describeError(error),
+				},
+			],
+		};
 	}
 
-	const models = catalog.models.map((model) => ({
-		...model,
-		availableApis: model.availableApis ?? availableApis,
-	}));
+	const catalogRequests = new Map<string, CatalogRequest>();
+	for (const route of routes) {
+		const key = `${route.catalogUrl}\u0000${route.authStyle}`;
+		const existing = catalogRequests.get(key);
+		if (existing) existing.routes.push(route);
+		else catalogRequests.set(key, { url: route.catalogUrl, authStyle: route.authStyle, routes: [route] });
+	}
 
-	return { models, availableApis, warnings };
+	const catalogAttempts = await Promise.all(
+		Array.from(catalogRequests.values()).map(async (request): Promise<CatalogAttempt> => {
+			try {
+				return { request, catalog: await fetchCatalog(profile, request, fetchImpl, timeoutMs) };
+			} catch (error) {
+				return { request, error };
+			}
+		}),
+	);
+	const catalogResults: CatalogSuccess[] = [];
+	for (const attempt of catalogAttempts) {
+		if ("error" in attempt) {
+			for (const route of attempt.request.routes) {
+				failures.push({
+					route: failureRoute(route),
+					stage: "catalog",
+					message: describeError(attempt.error),
+				});
+			}
+		} else if (attempt.catalog) {
+			catalogResults.push({ ...attempt.request, catalog: attempt.catalog });
+		}
+	}
+
+	const candidateMap = new Map<string, ProfileDiscoveryCandidate>();
+	for (const catalogSuccess of catalogResults) {
+		const candidateRoutes = catalogSuccess.routes.filter((route) =>
+			routeSupportsApi(catalogSuccess.catalog, route.api),
+		);
+		const verifiedRoutes: ProfileProtocolRoute[] = [];
+		const warnings: string[] = [];
+		for (const route of candidateRoutes) {
+			if (options.probeApis === false) {
+				verifiedRoutes.push(route);
+				continue;
+			}
+			const verification = await verifyInferenceRoute(profile, route, fetchImpl, timeoutMs);
+			if (verification.confirmed) {
+				verifiedRoutes.push(route);
+				if (verification.warning) warnings.push(`${route.api}: ${verification.warning}`);
+			} else {
+				failures.push({
+					route: failureRoute(route),
+					stage: "inference",
+					message: verification.failure ?? "route was not confirmed",
+				});
+			}
+		}
+		if (verifiedRoutes.length === 0) continue;
+
+		const key = candidateKey(catalogSuccess);
+		const existing = candidateMap.get(key);
+		if (existing) {
+			for (const route of verifiedRoutes) existing.protocolRoutes[route.api] = route;
+			existing.availableApis = Array.from(
+				new Set([...existing.availableApis, ...verifiedRoutes.map((route) => route.api)]),
+			);
+			for (const model of catalogSuccess.catalog.models) {
+				const existingModel = existing.models.find((candidateModel) => candidateModel.id === model.id);
+				if (!existingModel) continue;
+				const modelApis = model.availableApis ?? verifiedRoutes.map((route) => route.api);
+				existingModel.availableApis = Array.from(new Set([...(existingModel.availableApis ?? []), ...modelApis]));
+			}
+			existing.warnings.push(...warnings);
+			continue;
+		}
+		candidateMap.set(key, {
+			id: key,
+			models: catalogSuccess.catalog.models.map((model) => ({
+				...model,
+				...(model.availableApis
+					? {
+							availableApis: model.availableApis.filter((api) =>
+								verifiedRoutes.some((route) => route.api === api),
+							),
+						}
+					: { availableApis: verifiedRoutes.map((route) => route.api) }),
+			})),
+			availableApis: verifiedRoutes.map((route) => route.api),
+			protocolRoutes: Object.fromEntries(verifiedRoutes.map((route) => [route.api, route])),
+			warnings: [...(catalogSuccess.catalog.models.length === 0 ? ["model catalog is empty"] : []), ...warnings],
+		});
+	}
+
+	const candidates = Array.from(candidateMap.values()).sort((a, b) => a.id.localeCompare(b.id));
+	failures.sort((a, b) => {
+		const left = `${a.route.api}\u0000${a.stage}\u0000${a.route.catalogUrl}\u0000${a.message}`;
+		const right = `${b.route.api}\u0000${b.stage}\u0000${b.route.catalogUrl}\u0000${b.message}`;
+		return left.localeCompare(right);
+	});
+	return { candidates, failures };
 }

@@ -50,13 +50,23 @@ function resolveExplicit(
 	source: Exclude<ProfileApiResolutionSource, "unresolved">,
 	installed: ReadonlySet<RegistryApi>,
 	availableApis: RegistryApi[],
+	configuredRoutes: ReadonlySet<RegistryApi> | undefined,
 ): ProfileApiResolution {
-	if (installed.has(api)) return { api, source, availableApis };
-	return {
-		source: "unresolved",
-		availableApis,
-		reason: `${api} was selected by ${source}, but its serializer is not installed`,
-	};
+	if (!installed.has(api)) {
+		return {
+			source: "unresolved",
+			availableApis,
+			reason: `${api} was selected by ${source}, but its serializer is not installed`,
+		};
+	}
+	if (configuredRoutes && !configuredRoutes.has(api)) {
+		return {
+			source: "unresolved",
+			availableApis,
+			reason: `${api} was selected by ${source}, but no API route is configured`,
+		};
+	}
+	return { api, source, availableApis };
 }
 
 export function resolveProfileModelApi(
@@ -65,20 +75,24 @@ export function resolveProfileModelApi(
 	options: ResolveProfileApiOptions = {},
 ): ProfileApiResolution {
 	const installed = new Set(options.installedApis ?? PROFILE_API_SERIALIZERS);
+	const configuredRoutes = profile.apiRoutes ? new Set(Object.keys(profile.apiRoutes) as RegistryApi[]) : undefined;
 	const discovered = model.availableApis?.length ? model.availableApis : (profile.availableApis ?? []);
-	const availableApis = Array.from(new Set(discovered)).filter((api) => installed.has(api));
+	const availableApis = Array.from(new Set(discovered)).filter(
+		(api) => installed.has(api) && (!configuredRoutes || configuredRoutes.has(api)),
+	);
 
 	const modelPreference = explicitPreference(model.apiPreference);
-	if (modelPreference) return resolveExplicit(modelPreference, "model", installed, availableApis);
+	if (modelPreference) return resolveExplicit(modelPreference, "model", installed, availableApis, configuredRoutes);
 
 	const familyPreference = model.group
 		? explicitPreference(profile.familyApiPreferences?.[model.group.id])
 		: undefined;
-	if (familyPreference) return resolveExplicit(familyPreference, "family", installed, availableApis);
+	if (familyPreference) return resolveExplicit(familyPreference, "family", installed, availableApis, configuredRoutes);
 
 	if (
 		model.gatewayPreferredApi &&
 		installed.has(model.gatewayPreferredApi) &&
+		(!configuredRoutes || configuredRoutes.has(model.gatewayPreferredApi)) &&
 		(discovered.length === 0 || availableApis.includes(model.gatewayPreferredApi))
 	) {
 		return { api: model.gatewayPreferredApi, source: "gateway", availableApis };
@@ -93,10 +107,11 @@ export function resolveProfileModelApi(
 	}
 
 	const profilePreference = explicitPreference(profile.apiPreference);
-	if (profilePreference) return resolveExplicit(profilePreference, "profile", installed, availableApis);
+	if (profilePreference)
+		return resolveExplicit(profilePreference, "profile", installed, availableApis, configuredRoutes);
 
 	const fallback = legacyApi(profile);
-	if (fallback) return resolveExplicit(fallback, "legacy", installed, availableApis);
+	if (fallback) return resolveExplicit(fallback, "legacy", installed, availableApis, configuredRoutes);
 
 	if (availableApis.length === 1) return { api: availableApis[0], source: "available", availableApis };
 

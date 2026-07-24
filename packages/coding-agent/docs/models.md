@@ -19,6 +19,8 @@ Use `/profile` for a gateway that exposes a model catalog, or add fully explicit
 
 A Profile is one gateway connection, not one provider or one protocol. Create it with `/profile` and enter only a connection name, base URL, and API key. Pi then tests the connection, discovers the gateway's models and available APIs, enriches known model metadata, and opens model management.
 
+For automatic discovery, enter the service root URL without `/v1`, `/models`, `/messages`, `/responses`, or `/chat/completions`. Keep any service-specific path prefix, such as `https://gateway.example/anthropic`; Pi derives the catalog and inference URLs for Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses. If discovery cannot confirm a standard route, use the Profile's API routes menu to enter the serializer SDK base URL and optionally save it as unverified, then add models manually when no catalog is available.
+
 Models are grouped into families such as GPT, Claude, Qwen, and DeepSeek. New models start disabled. You can enable or disable the current models in a group, set a persistent API policy for the group, and override enabled state or API on an individual model.
 
 The default API preference is `Auto`. The model row shows the resolved API, for example `Auto -> Anthropic Messages`. Auto chooses only from APIs exposed by the gateway and supported by Pi, preferring a known model's native format when it is actually available. Select an explicit API when gateway discovery is incomplete or incorrect. Pi shows unresolved models, models no longer returned by the gateway, and discovery warnings instead of silently changing formats.

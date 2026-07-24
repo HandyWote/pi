@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved Profile endpoint discovery with root URL validation, per-API SDK routes, safe same-origin redirects, non-generating `POST {}` route checks, and manual API-route/model fallback.
+
 ## [0.82.0] - 2026-07-23
 
 ### New Features

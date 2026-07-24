@@ -85,8 +85,19 @@ import {
 	PROFILE_API_SERIALIZERS,
 	resolveProfileModelApi,
 } from "../../core/profile-api-resolution.ts";
-import { discoverProfile } from "../../core/profile-discovery.ts";
-import type { Profile, ProfileApiPreference, UserModel } from "../../core/profiles-types.ts";
+import { discoverProfile, type ProfileDiscoveryCandidate, verifyProfileRoute } from "../../core/profile-discovery.ts";
+import {
+	buildManualProtocolRoute,
+	type ProfileDiscoveryApi,
+	validateAutomaticProfileRootUrl,
+} from "../../core/profile-endpoints.ts";
+import {
+	DEFAULT_CONTEXT_WINDOW,
+	DEFAULT_MAX_TOKENS,
+	type Profile,
+	type ProfileApiPreference,
+	type UserModel,
+} from "../../core/profiles-types.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
@@ -156,6 +167,8 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+
+const PROFILE_ROUTE_APIS: readonly RegistryApi[] = ["anthropic-messages", "openai-completions", "openai-responses"];
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {
@@ -4913,6 +4926,7 @@ export class InteractiveMode {
 			}
 
 			const enabledCount = profile.models.filter((model) => model.enabled).length;
+			const routeCount = Object.keys(profile.apiRoutes ?? {}).length;
 			const result = await this.showEntityListDialog(
 				`Profile: ${profile.name}`,
 				[
@@ -4925,6 +4939,11 @@ export class InteractiveMode {
 						id: "refresh",
 						label: "Refresh discovery",
 						description: profile.lastDiscoveredAt ? `Last: ${profile.lastDiscoveredAt}` : "Not discovered",
+					},
+					{
+						id: "routes",
+						label: "API routes",
+						description: routeCount > 0 ? `${routeCount} configured` : "None configured",
 					},
 					{ id: "connection", label: "Edit connection", description: profile.baseUrl },
 				],
@@ -4942,6 +4961,8 @@ export class InteractiveMode {
 					await this.saveProfile(refreshed, false);
 					await this.showProfileModelsEditor(profile.id);
 				}
+			} else if (result.item.id === "routes") {
+				await this.showProfileRoutesEditor(profile.id);
 			} else if (result.item.id === "connection") {
 				await this.showProfileEditor(profile, false);
 			}
@@ -4962,7 +4983,11 @@ export class InteractiveMode {
 				isNew ? "Create profile" : `Edit profile: ${draft.name}`,
 				[
 					{ id: "name", label: "Name", description: draft.name },
-					{ id: "url", label: "Base URL", description: draft.baseUrl || "required" },
+					{
+						id: "url",
+						label: "Base URL",
+						description: draft.baseUrl || "service root URL; do not add /v1 or /models",
+					},
 					{ id: "key", label: "Key", description: draft.apiKey ? "configured" : "empty" },
 					...(isNew
 						? []
@@ -4973,6 +4998,7 @@ export class InteractiveMode {
 									description: fallbackPreference === "auto" ? "Auto" : getProfileApiLabel(fallbackPreference),
 								},
 							]),
+					...(isNew ? [{ id: "manual", label: "Configure manually" }] : []),
 					{ id: "save", label: actionLabel },
 				],
 				{
@@ -4991,13 +5017,25 @@ export class InteractiveMode {
 
 			if (result.item.id === "url") {
 				const value = await this.showExtensionEditor("Base URL", draft.baseUrl);
-				if (value !== undefined) draft = { ...draft, baseUrl: value.trim() };
+				if (value !== undefined) {
+					const baseUrl = value.trim();
+					draft =
+						baseUrl === draft.baseUrl
+							? { ...draft, baseUrl }
+							: this.clearProfileDiscoveryState({ ...draft, baseUrl });
+				}
 				continue;
 			}
 
 			if (result.item.id === "key") {
 				const value = await this.showExtensionEditor("API key", draft.apiKey);
-				if (value !== undefined) draft = { ...draft, apiKey: value.trim() };
+				if (value !== undefined) {
+					const apiKey = value.trim();
+					draft =
+						apiKey === draft.apiKey
+							? { ...draft, apiKey }
+							: this.clearProfileDiscoveryState({ ...draft, apiKey });
+				}
 				continue;
 			}
 
@@ -5005,13 +5043,24 @@ export class InteractiveMode {
 				const preference = await this.selectProfileApiPreference(
 					"Fallback API",
 					draft.apiPreference,
-					draft.availableApis ?? [],
+					this.getProfileSelectableApis(draft),
 					"Auto",
+					draft.apiRoutes === undefined,
 				);
 				if (preference !== undefined) {
 					draft = { ...draft, protocol: undefined, apiPreference: preference };
 				}
 				continue;
+			}
+
+			if (result.item.id === "manual") {
+				if (!draft.baseUrl.trim() || !draft.apiKey.trim()) {
+					this.showError("Profile URL and key are required.");
+					continue;
+				}
+				await this.saveProfile({ ...this.clearProfileDiscoveryState(draft), models: [] }, true);
+				await this.showExistingProfileMenu(draft.id);
+				return;
 			}
 
 			if (result.item.id === "save") {
@@ -5048,19 +5097,49 @@ export class InteractiveMode {
 
 		this.showStatus("Discovering models and APIs...");
 		try {
-			const discovery = await discoverProfile(profile);
+			const baseUrl = validateAutomaticProfileRootUrl(profile.baseUrl);
+			const discovery = await discoverProfile({ ...profile, baseUrl });
+			if (discovery.candidates.length === 0) {
+				const failureSummary = discovery.failures
+					.slice(0, 3)
+					.map((failure) => `${failure.route.api} ${failure.stage}: ${failure.message}`)
+					.join("; ");
+				this.showError(
+					failureSummary
+						? `No confirmed API route was discovered. ${failureSummary}`
+						: "No confirmed API route was discovered. Configure an API route manually.",
+				);
+				return undefined;
+			}
+			const candidate = await this.selectProfileDiscoveryCandidate(discovery.candidates);
+			if (!candidate) return undefined;
+			if (candidate.models.length === 0) {
+				this.showError("The model catalog is empty. Configure a model manually before saving this profile.");
+				return undefined;
+			}
 			const enrichedModels = await enrichWithModelsDev(
-				discovery.models,
+				candidate.models,
 				this.session.modelRuntime.getCompatRegistries(),
 			);
 			const models = mergeProfileModels(profile.models, enrichedModels);
+			const apiRoutes = Object.fromEntries(
+				Object.entries(candidate.protocolRoutes).map(([api, route]) => [
+					api,
+					{ sdkBaseUrl: route.sdkBaseUrl, verified: true },
+				]),
+			) as Profile["apiRoutes"];
+			const failureWarnings = discovery.failures.map(
+				(failure) => `${failure.route.api} ${failure.stage}: ${failure.message}`,
+			);
 			const now = new Date().toISOString();
-			this.showStatus(`Discovered ${discovery.models.length} models for ${profile.name}.`);
+			this.showStatus(`Discovered ${candidate.models.length} models for ${profile.name}.`);
 			return {
 				...profile,
+				baseUrl,
 				models,
-				availableApis: discovery.availableApis,
-				discoveryWarnings: discovery.warnings,
+				availableApis: candidate.availableApis,
+				apiRoutes,
+				discoveryWarnings: [...candidate.warnings, ...failureWarnings],
 				lastDiscoveredAt: now,
 				updatedAt: now,
 			};
@@ -5068,6 +5147,131 @@ export class InteractiveMode {
 			this.showError(`Profile test failed: ${error instanceof Error ? error.message : String(error)}`);
 			return undefined;
 		}
+	}
+
+	private async selectProfileDiscoveryCandidate(
+		candidates: readonly ProfileDiscoveryCandidate[],
+	): Promise<ProfileDiscoveryCandidate | undefined> {
+		if (candidates.length === 1) return candidates[0];
+		const items: EntityListItem[] = candidates.map((candidate, index) => ({
+			id: candidate.id,
+			label: `Discovery candidate ${index + 1}`,
+			description: [
+				`${candidate.models.length} models`,
+				candidate.availableApis.map((api) => getProfileApiLabel(api)).join(", "),
+				...Object.values(candidate.protocolRoutes)
+					.filter((route): route is NonNullable<typeof route> => route !== undefined)
+					.map((route) => `${getProfileApiLabel(route.api)}: ${route.sdkBaseUrl}`),
+			].join(" · "),
+		}));
+		const result = await this.showEntityListDialog("Choose discovered routes", items, {
+			renderEmpty: () => [theme.fg("muted", "  No discovery candidates")],
+		});
+		return result?.action === "activate"
+			? candidates.find((candidate) => candidate.id === result.item.id)
+			: undefined;
+	}
+
+	private clearProfileDiscoveryState(profile: Profile): Profile {
+		const rest = { ...profile };
+		const manualRoutes: NonNullable<Profile["apiRoutes"]> = Object.fromEntries(
+			Object.entries(profile.apiRoutes ?? {}).filter(([, route]) => route.verified === false),
+		);
+		if (Object.keys(manualRoutes).length > 0) {
+			rest.apiRoutes = manualRoutes;
+			rest.availableApis = Object.keys(manualRoutes) as RegistryApi[];
+		} else {
+			delete rest.apiRoutes;
+			delete rest.availableApis;
+		}
+		delete rest.discoveryWarnings;
+		delete rest.lastDiscoveredAt;
+		return rest;
+	}
+
+	private async showProfileRoutesEditor(profileId: string): Promise<void> {
+		let selectedId: string | undefined;
+		while (true) {
+			const profile = this.session.modelRuntime.getProfile(profileId);
+			if (!profile) return;
+			const routes = Object.entries(profile.apiRoutes ?? {});
+			const items: EntityListItem[] = routes.map(([api, route]) => ({
+				id: `route:${api}`,
+				label: getProfileApiLabel(api as RegistryApi),
+				description: `${route.sdkBaseUrl} · ${route.verified === false ? "unverified" : "verified"}`,
+				deletable: true,
+			}));
+			items.push({ id: "__add__", label: "[ Add API route ]" });
+			const result = await this.showEntityListDialog(`API routes: ${profile.name}`, items, {
+				initialSelectedId: selectedId,
+				renderEmpty: () => [theme.fg("muted", "  No API routes configured")],
+			});
+			if (!result) return;
+			selectedId = result.item.id;
+			if (result.item.id === "__add__" && result.action === "activate") {
+				await this.addProfileApiRoute(profile);
+				continue;
+			}
+			if (result.action === "delete" && result.item.id.startsWith("route:")) {
+				const api = result.item.id.slice("route:".length) as RegistryApi;
+				const apiRoutes = { ...profile.apiRoutes };
+				delete apiRoutes[api];
+				const availableApis = (profile.availableApis ?? []).filter((entry) => entry !== api);
+				const models = profile.models.map((model) =>
+					model.apiPreference === api ? { ...model, apiPreference: "auto" as const } : model,
+				);
+				const familyApiPreferences = Object.fromEntries(
+					Object.entries(profile.familyApiPreferences ?? {}).map(([groupId, preference]) => [
+						groupId,
+						preference === api ? "auto" : preference,
+					]),
+				);
+				await this.saveProfile({ ...profile, apiRoutes, availableApis, models, familyApiPreferences }, false);
+			}
+		}
+	}
+
+	private async addProfileApiRoute(profile: Profile): Promise<void> {
+		const api = await this.selectProfileRouteApi("API route type", PROFILE_ROUTE_APIS);
+		if (!api) return;
+		const current = profile.apiRoutes?.[api]?.sdkBaseUrl ?? profile.baseUrl;
+		const sdkBaseUrl = (await this.showExtensionEditor("SDK base URL", current))?.trim();
+		if (!sdkBaseUrl) return;
+		try {
+			const parsed = new URL(sdkBaseUrl);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("use http or https");
+		} catch (error) {
+			this.showError(`SDK base URL is invalid: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		const route = buildManualProtocolRoute(api as ProfileDiscoveryApi, sdkBaseUrl);
+		const verification = await verifyProfileRoute(profile, route);
+		const verified = verification.confirmed;
+		if (!verified) {
+			const saveUnverified = await this.showExtensionConfirm(
+				"Route not confirmed",
+				`${verification.failure ?? "The endpoint did not return a recognized protocol error."} Save it as unverified?`,
+			);
+			if (!saveUnverified) return;
+			this.showWarning("Saving an unverified API route; requests may fail.");
+		}
+		const apiRoutes = { ...profile.apiRoutes, [api]: { sdkBaseUrl: route.sdkBaseUrl, verified } };
+		const availableApis = Array.from(new Set([...(profile.availableApis ?? []), api]));
+		await this.saveProfile({ ...profile, apiRoutes, availableApis }, false);
+		this.showStatus(`${getProfileApiLabel(api)} route saved${verified ? " and verified" : " as unverified"}.`);
+	}
+
+	private async selectProfileRouteApi(
+		title: string,
+		allowedApis: readonly RegistryApi[],
+		current?: RegistryApi,
+	): Promise<RegistryApi | undefined> {
+		const apis = Array.from(new Set([...allowedApis, ...(current ? [current] : [])]));
+		const selection = await this.showExtensionSelector(
+			title,
+			apis.map((api) => getProfileApiLabel(api)),
+		);
+		return apis.find((api) => getProfileApiLabel(api) === selection);
 	}
 
 	private async showProfileModelsEditor(profileId: string): Promise<void> {
@@ -5102,12 +5306,17 @@ export class InteractiveMode {
 			for (const [index, warning] of (profile.discoveryWarnings ?? []).entries()) {
 				items.push({ id: `warning:${index}`, label: "Discovery warning", description: warning });
 			}
+			items.push({ id: "__add_manual__", label: "[ Add manual model ]" });
 			const result = await this.showEntityListDialog(`Models: ${profile.name}`, items, {
 				initialSelectedId: selectedId,
 				renderEmpty: () => [theme.fg("muted", "  No models discovered. Refresh discovery from the Profile menu.")],
 			});
 			if (!result) return;
 			selectedId = result.item.id;
+			if (result.action === "activate" && result.item.id === "__add_manual__") {
+				await this.addManualProfileModel(profile);
+				continue;
+			}
 			if (!result.item.id.startsWith("group:")) continue;
 			const groupId = result.item.id.slice("group:".length);
 			const group = groups.get(groupId);
@@ -5124,6 +5333,38 @@ export class InteractiveMode {
 			const models = profile.models.map((model) => (ids.has(model.id) ? { ...model, enabled: enable } : model));
 			await this.saveProfile({ ...profile, models }, false);
 		}
+	}
+
+	private async addManualProfileModel(profile: Profile): Promise<void> {
+		const id = (await this.showExtensionEditor("Model ID", ""))?.trim();
+		if (!id) return;
+		if (profile.models.some((model) => model.id === id)) {
+			this.showError(`Model already exists: ${id}`);
+			return;
+		}
+		const routeApis = Object.keys(profile.apiRoutes ?? {}) as RegistryApi[];
+		if (routeApis.length === 0) {
+			this.showError("Configure an API route before adding a manual model.");
+			return;
+		}
+		const api = await this.selectProfileRouteApi("Model API", routeApis);
+		if (!api) return;
+		const name = (await this.showExtensionEditor("Model name", id))?.trim() || id;
+		const model: UserModel = {
+			id,
+			name,
+			enabled: false,
+			contextWindow: DEFAULT_CONTEXT_WINDOW,
+			maxTokens: DEFAULT_MAX_TOKENS,
+			supportsReasoning: false,
+			supportsVision: false,
+			supportsToolCall: false,
+			metadataSource: "manual",
+			availableApis: [api],
+			apiPreference: api,
+			available: true,
+		};
+		await this.saveProfile({ ...profile, models: [...profile.models, model] }, false);
 	}
 
 	private async showProfileModelGroupEditor(profileId: string, groupId: string): Promise<void> {
@@ -5149,6 +5390,7 @@ export class InteractiveMode {
 					description: this.formatProfileModelDescription(profile, model),
 					toggled: model.enabled,
 					toggleable: true,
+					deletable: model.metadataSource === "manual",
 				})),
 			];
 			const result = await this.showEntityListDialog(`Models: ${groupLabel}`, items, {
@@ -5180,16 +5422,18 @@ export class InteractiveMode {
 						),
 					),
 				);
+				const selectableApis = profile.apiRoutes ? this.getProfileSelectableApis(profile) : availableApis;
 				const current = profile.familyApiPreferences?.[groupId];
 				const preference = await this.selectProfileApiPreference(
 					`API policy: ${groupLabel}`,
 					current,
-					availableApis,
+					selectableApis,
 					this.formatProfileFamilyApi(
 						{ ...profile, familyApiPreferences: { ...profile.familyApiPreferences, [groupId]: "auto" } },
 						groupId,
 						groupModels,
 					),
+					profile.apiRoutes === undefined,
 				);
 				if (preference === undefined) continue;
 				await this.saveProfile(
@@ -5204,6 +5448,13 @@ export class InteractiveMode {
 
 			const model = groupModels.find((entry) => entry.id === result.item.id);
 			if (!model) continue;
+			if (result.action === "delete" && model.metadataSource === "manual") {
+				await this.saveProfile(
+					{ ...profile, models: profile.models.filter((entry) => entry.id !== model.id) },
+					false,
+				);
+				continue;
+			}
 			if (result.action === "toggle") {
 				const models = profile.models.map((entry) =>
 					entry.id === model.id ? { ...entry, enabled: !entry.enabled } : entry,
@@ -5275,15 +5526,14 @@ export class InteractiveMode {
 			if (result.action !== "activate") continue;
 
 			if (result.item.id === "api") {
-				const availableApis = Array.from(
-					new Set(draft.availableApis?.length ? draft.availableApis : (profile.availableApis ?? [])),
-				);
+				const availableApis = this.getProfileSelectableApis(profile, draft);
 				const autoDraft = { ...draft, apiPreference: "auto" as const };
 				const preference = await this.selectProfileApiPreference(
 					`API: ${draft.id}`,
 					draft.apiPreference,
 					availableApis,
 					this.formatProfileModelApi(profile, autoDraft),
+					profile.apiRoutes === undefined,
 				);
 				if (preference !== undefined) draft = { ...draft, apiPreference: preference };
 				continue;
@@ -5346,18 +5596,24 @@ export class InteractiveMode {
 		return api ? `Auto -> ${getProfileApiLabel(api)}` : "Auto -> Unresolved";
 	}
 
+	private getProfileSelectableApis(profile: Profile, model?: UserModel): RegistryApi[] {
+		if (profile.apiRoutes) return Object.keys(profile.apiRoutes) as RegistryApi[];
+		return Array.from(new Set(model?.availableApis?.length ? model.availableApis : (profile.availableApis ?? [])));
+	}
+
 	private async selectProfileApiPreference(
 		title: string,
 		current: ProfileApiPreference | undefined,
 		availableApis: readonly RegistryApi[],
 		autoDescription: string,
+		includeAllInstalled = true,
 	): Promise<ProfileApiPreference | undefined> {
 		const explicitCurrent = current && current !== "auto" ? current : undefined;
 		const installedApis = new Set<RegistryApi>(PROFILE_API_SERIALIZERS);
 		const apis = Array.from(
 			new Set([
 				...availableApis.filter((api) => installedApis.has(api)),
-				...PROFILE_API_SERIALIZERS,
+				...(includeAllInstalled ? PROFILE_API_SERIALIZERS : []),
 				...(explicitCurrent ? [explicitCurrent] : []),
 			]),
 		);

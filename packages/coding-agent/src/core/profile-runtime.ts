@@ -43,7 +43,6 @@ function profileModelToModel(
 		name: manual?.name ?? metadata?.name ?? userModel.name,
 		provider: profile.id,
 		api,
-		baseUrl: profile.baseUrl,
 		reasoning: manual?.supportsReasoning ?? metadata?.reasoning ?? userModel.supportsReasoning,
 		input:
 			(manual?.supportsVision ?? metadata?.vision ?? userModel.supportsVision)
@@ -52,6 +51,7 @@ function profileModelToModel(
 		contextWindow: manual?.contextWindow ?? metadata?.contextWindow ?? userModel.contextWindow,
 		maxTokens: manual?.maxTokens ?? metadata?.maxTokens ?? userModel.maxTokens,
 		cost,
+		baseUrl: profile.apiRoutes?.[api]?.sdkBaseUrl ?? profile.baseUrl,
 		...(Object.keys(compat).length > 0 ? { compat } : {}),
 		...(Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
 	} as Model<Api>;

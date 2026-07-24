@@ -57,6 +57,21 @@ describe("ProfilesStore", () => {
 		expect(store.get("a")?.name).toBe("Renamed");
 	});
 
+	it("preserves API routes through updates and JSON round-trips", () => {
+		const file = join(tmpDir, "profiles.json");
+		const routes = {
+			"openai-completions": { sdkBaseUrl: "https://example.com/v1" },
+			"anthropic-messages": { sdkBaseUrl: "https://example.com", verified: false },
+		} as const;
+		const store = new ProfilesStore(file);
+		store.create({ ...makeProfile("a", "A"), apiRoutes: routes });
+
+		store.update("a", (p) => ({ ...p, name: "Renamed" }));
+
+		const reloaded = new ProfilesStore(file).get("a");
+		expect(reloaded?.apiRoutes).toEqual(routes);
+	});
+
 	it("throws on update of non-existent profile", () => {
 		const store = new ProfilesStore(join(tmpDir, "profiles.json"));
 		expect(() => store.update("nope", (p) => p)).toThrow("not found");

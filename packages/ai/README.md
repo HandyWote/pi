@@ -308,13 +308,13 @@ const anthropic = getBuiltinModels('anthropic');
 
 ### Dynamic Providers
 
-Providers may have dynamic model lists (a llama.cpp server, a live OpenRouter listing). Reads stay sync; fetching is an explicit async verb:
+Providers may have dynamic model lists (a local OpenAI-compatible server, a live OpenRouter listing). Reads stay sync; fetching is an explicit async verb:
 
 ```typescript
 // getModels() returns the last-known list (empty before the first refresh)
-await models.refresh('llamacpp');        // fetch one provider's list; rejects on failure
+await models.refresh('local-server');   // fetch one provider's list; rejects on failure
 await models.refresh();                  // refresh all providers concurrently, best-effort
-const fresh = models.getModel('llamacpp', 'qwen3-30b');
+const fresh = models.getModel('local-server', 'qwen3-30b');
 ```
 
 Static built-in providers are no-ops for `refresh()`. See [createProvider()](#createprovider) for building a dynamic provider.
@@ -407,7 +407,7 @@ const credential = {
 Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` explicitly):
 
 | Provider | Environment Variable(s) |
-|----------|------------------------|
+| ---------- | ------------------------ |
 | OpenAI | `OPENAI_API_KEY` |
 | Ant Ling | `ANT_LING_API_KEY` |
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` (e.g. `https://{resource}.ai.azure.com`) or `AZURE_OPENAI_RESOURCE_NAME`. Supports `*.openai.azure.com`, `*.cognitiveservices.azure.com` and `*.ai.azure.com`; root endpoints auto-normalize to `/openai/v1`. Optional: `AZURE_OPENAI_API_VERSION` (default `v1`), `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`. |
@@ -562,6 +562,7 @@ for await (const event of s) {
 ```
 
 **Important notes about partial tool arguments:**
+
 - During `toolcall_delta` events, `arguments` contains the best-effort parse of partial JSON
 - Fields may be missing or incomplete - always check for existence before use
 - String values may be truncated mid-word
@@ -609,7 +610,7 @@ for await (const event of s) {
 All streaming events emitted during assistant message generation:
 
 | Event Type | Description | Key Properties |
-|------------|-------------|----------------|
+| ------------ | ------------- | ---------------- |
 | `start` | Stream begins | `partial`: Initial assistant message structure |
 | `text_start` | Text block starts | `contentIndex`: Position in content array |
 | `text_delta` | Text chunk received | `delta`: New text, `contentIndex`: Position |
@@ -1035,15 +1036,15 @@ Dynamic model lists use `fetchModels`. `Models.refresh()` refreshes every config
 
 ```typescript
 const models = createModels({ credentials, modelsStore });
-const llamacpp = createProvider({
-  id: 'llamacpp',
-  auth: { apiKey: { name: 'llama.cpp', resolve: async () => ({ auth: {} }) } },
+const localServer = createProvider({
+  id: 'local-server',
+  auth: { apiKey: { name: 'Local server', resolve: async () => ({ auth: {} }) } },
   models: [],
   fetchModels: async ({ signal }) => fetchModelsFromServer('http://localhost:8080', signal),
   api: openAICompletionsApi(),
 });
 
-models.setProvider(llamacpp);
+models.setProvider(localServer);
 const result = await models.refresh({ signal });
 if (result.aborted) console.log('refresh cancelled');
 for (const [provider, error] of result.errors) console.error(provider, error);
@@ -1100,7 +1101,7 @@ const s = stream(claudeModel, context, {
 Built-in API implementations live under `./api/<api-id>`:
 
 | API id | Options type |
-|--------|--------------|
+| -------- | -------------- |
 | `anthropic-messages` | `AnthropicOptions` |
 | `openai-completions` | `OpenAICompletionsOptions` |
 | `openai-responses` | `OpenAIResponsesOptions` |
@@ -1228,6 +1229,7 @@ console.log(faux.state.callCount);
 ```
 
 Notes:
+
 - Responses are consumed from a queue in request start order.
 - If the queue is empty, the faux provider returns an assistant error message with `errorMessage: "No more faux responses queued"`.
 - Use `faux.setResponses([...])` to replace the remaining queue and `faux.appendResponses([...])` to add more responses.
@@ -1520,7 +1522,7 @@ import { getModel, complete } from '@handy_wote/pi-ai/compat';
 Compat is a strict superset of the root entrypoint, so a file can switch its import path wholesale. It will be removed in a future release; migrate to `createModels()` + provider factories:
 
 | Old | New |
-|-----|-----|
+| ----- | ----- |
 | `getModel('openai', 'gpt-4o-mini')` | `models.getModel('openai', 'gpt-4o-mini')` or `getBuiltinModel()` from `providers/all` |
 | `getModels('anthropic')` / `getProviders()` | `models.getModels('anthropic')` / `models.getProviders()` or `getBuiltin*` |
 | `stream(model, ctx, opts)` (env-key injection) | `models.stream(model, ctx, opts)` (provider auth resolution) |

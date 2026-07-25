@@ -281,11 +281,11 @@ For comparison: Vercel AI SDK attaches the implementation to the model object, w
 
 ## Provider model listing
 
-Reads are sync; fetching is an explicit async verb. `Provider.getModels()` returns the current known list — the full catalog for static providers, the last-refreshed list for dynamic ones (llama.cpp, OpenRouter live listing). `refreshModels()` is where dynamic providers fetch.
+Reads are sync; fetching is an explicit async verb. `Provider.getModels()` returns the current known list — the full catalog for static providers, the last-refreshed list for dynamic ones (local OpenAI-compatible servers, OpenRouter live listing). `refreshModels()` is where dynamic providers fetch.
 
 This split exists because a sync-or-async union (`Promise<T> | T`) invites latent sync assumptions that detonate on the first async provider, while async-only reads force every consumer (UI lists, extension `find`/`getAll` surfaces) through Promises for data that is almost always static. Sync reads + explicit refresh keeps the staleness visible and the contract single: `getModels()` = last known, `refresh()` = make it current. A fetched list is stale the moment it returns anyway; naming the refresh point is honest about it.
 
-Apps own the refresh lifecycle: startup, registry reload, opening a model selector. Freshness-critical lookups are two-step: `await models.refresh("llamacpp"); models.getModel("llamacpp", id)`.
+Apps own the refresh lifecycle: startup, registry reload, opening a model selector. Freshness-critical lookups are two-step: `await models.refresh("local-server"); models.getModel("local-server", id)`.
 
 Dynamic refresh must be side-effect-free discovery:
 
@@ -549,7 +549,7 @@ The end state for coding-agent: AuthStorage is deleted; its capabilities map ont
 Today's `getApiKey` priority and its new home:
 
 | AuthStorage today | New design |
-|---|---|
+| --- | --- |
 | runtime override (CLI `--api-key`) | `withRuntimeOverrides(store, overrides)` decorator: `read` returns the override as an `ApiKeyCredential`; never persisted |
 | stored `api_key` (with `$ENV`/`!command` via `resolveConfigValue`) | stored `ApiKeyCredential`; config-value resolution happens at `read` in coding-agent's adapter/decorator (command execution stays app policy) |
 | stored `oauth` + locked refresh, undefined on failure | `getAuth` decision tree above; failure rejects with cause instead of silently unconfiguring |

@@ -1,0 +1,68 @@
+name: Publish Extensions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/extensions/*/package.json'
+  workflow_dispatch:
+    inputs:
+      extensions:
+        description: 'Comma-separated extension slugs to publish at their current versions'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: publish-extensions
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      BASE_REF: ${{ github.event.before }}
+      EXTENSIONS: ${{ github.event.inputs.extensions }}
+      HEAD_REF: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s $(which fdfind) /usr/local/bin/fd
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build extension dependencies
+        run: npm run build:offline
+
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@11.16.0 --ignore-scripts
+          npm --version
+
+      - name: Publish changed extensions
+        if: ${{ github.event_name == 'push' }}
+        run: node scripts/publish-extensions.mjs --base "$BASE_REF" --head "$HEAD_REF"
+
+      - name: Publish selected extensions
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: node scripts/publish-extensions.mjs --extensions "$EXTENSIONS" --head "$HEAD_REF"

@@ -4,6 +4,12 @@
 
 ## Install
 
+From npm:
+
+```bash
+pi install npm:@handy_wote/pi-todo
+```
+
 From this repository:
 
 ```bash

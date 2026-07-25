@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-todo",
-	"version": "0.83.0",
+	"version": "0.1.0",
 	"description": "Dependency-aware todo orchestration for pi",
 	"type": "module",
 	"keywords": [
@@ -31,7 +31,11 @@
 	"scripts": {
 		"clean": "node -e \"import('node:fs/promises').then(fs=>fs.rm('dist',{recursive:true,force:true}))\"",
 		"build": "tsgo -p tsconfig.build.json",
-		"check": "echo 'checked by the root workspace'"
+		"check": "tsgo --noEmit -p tsconfig.build.json",
+		"test": "vitest --run"
+	},
+	"publishConfig": {
+		"access": "public"
 	},
 	"dependencies": {
 		"typebox": "1.1.38"

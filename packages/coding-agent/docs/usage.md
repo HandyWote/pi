@@ -18,7 +18,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 ### Editor Features
 
 | Feature | How |
-|---------|-----|
+| --------- | ----- |
 | File reference | Type `@` to fuzzy-search project files |
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
@@ -35,10 +35,9 @@ See [Keybindings](keybindings.md) for all shortcuts and customization.
 Type `/` in the editor to open command completion. Extensions can register custom commands, skills are available as `/skill:name`, and prompt templates expand via `/templatename`.
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | `/profile` | Create Profiles, choose the Active Profile, configure API routes, and manage Profile models |
-| [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
 | `/model [reference]` | Switch Runtime models; accepts a model ID or `profile-id/model-id` reference |
 | `/scoped-models` | Manage the Runtime models used for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
@@ -152,7 +151,6 @@ If no extension or saved decision applies, `defaultProjectTrust` controls the fa
 
 Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.pi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
 
-
 ## Exporting and Sharing Sessions
 
 Use `/export [file]` to write a session to HTML.
@@ -190,7 +188,7 @@ See [Pi Packages](packages.md) for package sources and security notes.
 ### Modes
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | default | Interactive mode |
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
@@ -206,7 +204,7 @@ cat README.md | pi -p "Summarize this text"
 ### Model Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--provider <id>` | Runtime provider ID; for Profile models this is the Profile ID |
 | `--model <pattern>` | Select one Runtime model; supports a model ID, canonical `profile-id/model-id`, fuzzy matching, and optional `:<thinking>` |
 | `--api-key <key>` | API key, overriding environment variables |
@@ -217,7 +215,7 @@ cat README.md | pi -p "Summarize this text"
 ### Session Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `-c`, `--continue` | Continue the most recent session |
 | `-r`, `--resume` | Browse and select a session |
 | `--session <path\|id>` | Use a specific session file or partial UUID |
@@ -229,7 +227,7 @@ cat README.md | pi -p "Summarize this text"
 ### Tool Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools |
 | `--exclude-tools <list>`, `-xt <list>` | Disable specific built-in, extension, and custom tools |
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
@@ -240,7 +238,7 @@ Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 ### Resource Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `-e`, `--extension <source>` | Load an extension from path, npm, or git; repeatable |
 | `--no-extensions` | Disable extension discovery |
 | `--skill <path>` | Load a skill; repeatable |
@@ -260,7 +258,7 @@ pi --no-extensions -e ./my-extension.ts
 ### Other Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--system-prompt <text>` | Replace default prompt; context files and skills are still appended |
 | `--append-system-prompt <text>` | Append to system prompt |
 | `--verbose` | Force verbose startup |
@@ -316,7 +314,7 @@ pi --exclude-tools ask_question
 ### Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `PI_CODING_AGENT_DIR` | Override config directory; default is `~/.pi/agent` |
 | `PI_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |

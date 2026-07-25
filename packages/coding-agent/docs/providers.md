@@ -8,7 +8,6 @@ Pi supports subscription-based providers via OAuth and API key providers via env
 - [API Keys](#api-keys)
 - [Auth File](#auth-file)
 - [Cloud Providers](#cloud-providers)
-- [llama.cpp](#llamacpp)
 - [Custom Providers](#custom-providers)
 - [Resolution Order](#resolution-order)
 
@@ -59,7 +58,7 @@ pi
 ```
 
 | Provider | Environment Variable | `auth.json` key |
-|----------|----------------------|------------------|
+| ---------- | ---------------------- | ------------------ |
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
 | Ant Ling | `ANT_LING_API_KEY` | `ant-ling` |
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
@@ -145,22 +144,29 @@ Use this when pi should use different provider settings than the project shell e
 The `key` field supports command execution, environment interpolation, and literals:
 
 - **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout (cached for process lifetime)
+
   ```json
   { "type": "api_key", "key": "!security find-generic-password -ws 'anthropic'" }
   { "type": "api_key", "key": "!op read 'op://vault/item/credential'" }
   ```
+
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
+
   ```json
   { "type": "api_key", "key": "$MY_ANTHROPIC_KEY" }
   { "type": "api_key", "key": "${KEY_PREFIX}_${KEY_SUFFIX}" }
   ```
+
   `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
 - **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
+
   ```json
   { "type": "api_key", "key": "$$literal-dollar-prefix" }
   { "type": "api_key", "key": "$!literal-bang-prefix" }
   ```
+
 - **Literal value:** Used directly. Plain uppercase strings such as `MY_API_KEY` are literals; use `$MY_API_KEY` for environment variables.
+
   ```json
   { "type": "api_key", "key": "sk-ant-..." }
   { "type": "api_key", "key": "public" }
@@ -247,7 +253,7 @@ Routes to OpenAI, Anthropic, and Workers AI through Cloudflare AI Gateway. Worke
 AI Gateway authentication uses `CLOUDFLARE_API_KEY` as `cf-aig-authorization`. Upstream authentication can be one of:
 
 | Mode | Request auth | Upstream auth |
-|------|--------------|---------------|
+| ------ | -------------- | --------------- |
 | Workers AI | Cloudflare token only | Cloudflare-native |
 | Unified billing | Cloudflare token only | Cloudflare handles upstream auth and deducts credits |
 | Stored BYOK | Cloudflare token only | Cloudflare injects provider keys stored in the AI Gateway dashboard |
@@ -278,12 +284,6 @@ export GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
 Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
-
-## llama.cpp
-
-Pi supports the llama.cpp router server. Configure it with `/login llama.cpp`, manage loaded models with `/llama`, and select a loaded model with `/model`.
-
-See [llama.cpp](llama-cpp.md) for server setup, model directory layout, environment variables, and command usage.
 
 ## Custom Providers
 

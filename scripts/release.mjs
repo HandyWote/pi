@@ -21,7 +21,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { findPackageDirectories } from "./package-workspaces.mjs";
+import { findLockstepPackageDirectories, findPackageDirectories } from "./package-workspaces.mjs";
 
 const RELEASE_TARGET = process.argv[2];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
@@ -121,7 +121,7 @@ function bumpOrSetVersion(target) {
 		}
 
 		console.log(`Setting explicit version (${target})...`);
-		run(`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`);
+		run(`node scripts/version-workspaces.mjs ${target} && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`);
 	}
 
 	// npm version can temporarily install the previous workspace versions before
@@ -134,7 +134,7 @@ function bumpOrSetVersion(target) {
 }
 
 function getChangelogs() {
-	return findPackageDirectories()
+	return findLockstepPackageDirectories()
 		.map((directory) => join(directory, "CHANGELOG.md"))
 		.filter((path) => existsSync(path));
 }

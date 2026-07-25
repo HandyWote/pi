@@ -10,7 +10,6 @@ const packages = [
 	{ directory: "packages/storage/sqlite-node", name: "@handy_wote/pi-storage-sqlite-node" },
 	{ directory: "packages/tui", name: "@handy_wote/pi-tui" },
 	{ directory: "packages/coding-agent", name: "@handy_wote/pi-coding-agent" },
-	{ directory: "packages/extensions/pi-todo", name: "@handy_wote/pi-todo" },
 ];
 
 const dryRun = process.argv.includes("--dry-run");

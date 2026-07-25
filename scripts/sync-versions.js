@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Syncs all non-private workspace package dependency versions to match their current versions.
- * This ensures release packages, including unpublished packages, use lockstep versioning.
+ * Syncs non-private core workspace dependency versions to match their current versions.
+ * Extensions use independent versioning and are intentionally excluded.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { findPackageDirectories } from "./package-workspaces.mjs";
+import { findLockstepPackageDirectories } from "./package-workspaces.mjs";
 
-const packages = findPackageDirectories()
+const packages = findLockstepPackageDirectories()
 	.map((directory) => {
 		const path = join(directory, "package.json");
 		return { data: JSON.parse(readFileSync(path, "utf8")), path };

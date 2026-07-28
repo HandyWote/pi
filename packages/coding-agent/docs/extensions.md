@@ -2467,7 +2467,7 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Settings toggles (SettingsList)
 - Status indicators (setStatus)
 - Working message, visibility, and indicator during streaming (`setWorkingMessage`, `setWorkingVisible`, `setWorkingIndicator`)
-- Widgets above/below editor (setWidget)
+- Widgets above status, above editor, or below editor (setWidget)
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
 
@@ -2571,6 +2571,10 @@ ctx.ui.setWorkingIndicator();  // Restore default spinner
 
 // Widget above editor (default)
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"]);
+// Widget above pending messages, status rows, and editor
+ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], {
+  placement: "aboveStatus",
+});
 // Widget below editor
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], { placement: "belowEditor" });
 ctx.ui.setWidget("my-widget", (tui, theme) => new Text(theme.fg("accent", "Custom"), 0, 0));
@@ -2947,7 +2951,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `custom-header.ts` | Replace startup header | `on("session_start")`, `setHeader` |
 | `modal-editor.ts` | Vim-style modal editor | `setEditorComponent`, `CustomEditor` |
 | `rainbow-editor.ts` | Custom editor styling | `setEditorComponent` |
-| `widget-placement.ts` | Widget above/below editor | `setWidget` |
+| `widget-placement.ts` | Widget placement around status rows and editor | `setWidget` |
 | `overlay-test.ts` | Overlay components | `ui.custom` with overlay options |
 | `overlay-qa-tests.ts` | Comprehensive overlay tests | `ui.custom`, all overlay options |
 | `notify.ts` | Simple notifications | `ui.notify` |

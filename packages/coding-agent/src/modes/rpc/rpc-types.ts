@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@handy_wote/pi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { WidgetPlacement } from "../../core/extensions/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
@@ -267,7 +268,7 @@ export type RpcExtensionUIRequest =
 			method: "setWidget";
 			widgetKey: string;
 			widgetLines: string[] | undefined;
-			widgetPlacement?: "aboveEditor" | "belowEditor";
+			widgetPlacement?: WidgetPlacement;
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };

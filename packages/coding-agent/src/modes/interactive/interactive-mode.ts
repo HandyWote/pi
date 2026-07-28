@@ -379,9 +379,11 @@ export class InteractiveMode {
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
-	// Extension widgets (components rendered above/below the editor)
+	// Extension widgets (components rendered above status, above editor, or below editor)
+	private extensionWidgetsAboveStatus = new Map<string, Component & { dispose?(): void }>();
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
 	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
+	private widgetContainerAboveStatus!: Container;
 	private widgetContainerAbove!: Container;
 	private widgetContainerBelow!: Container;
 
@@ -433,6 +435,7 @@ export class InteractiveMode {
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
+		this.widgetContainerAboveStatus = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -668,9 +671,10 @@ export class InteractiveMode {
 		this.ui.addChild(this.loadedResourcesContainer);
 
 		this.ui.addChild(this.chatContainer);
+		this.renderWidgets(); // Initialize with default spacer
+		this.ui.addChild(this.widgetContainerAboveStatus);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
 		this.ui.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
@@ -1872,6 +1876,7 @@ export class InteractiveMode {
 			map.delete(key);
 		};
 
+		removeExisting(this.extensionWidgetsAboveStatus);
 		removeExisting(this.extensionWidgetsAbove);
 		removeExisting(this.extensionWidgetsBelow);
 
@@ -1897,18 +1902,27 @@ export class InteractiveMode {
 			component = content(this.ui, theme);
 		}
 
-		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;
+		const targetMap =
+			placement === "aboveStatus"
+				? this.extensionWidgetsAboveStatus
+				: placement === "belowEditor"
+					? this.extensionWidgetsBelow
+					: this.extensionWidgetsAbove;
 		targetMap.set(key, component);
 		this.renderWidgets();
 	}
 
 	private clearExtensionWidgets(): void {
+		for (const widget of this.extensionWidgetsAboveStatus.values()) {
+			widget.dispose?.();
+		}
 		for (const widget of this.extensionWidgetsAbove.values()) {
 			widget.dispose?.();
 		}
 		for (const widget of this.extensionWidgetsBelow.values()) {
 			widget.dispose?.();
 		}
+		this.extensionWidgetsAboveStatus.clear();
 		this.extensionWidgetsAbove.clear();
 		this.extensionWidgetsBelow.clear();
 		this.renderWidgets();
@@ -1954,7 +1968,8 @@ export class InteractiveMode {
 	 * Render all extension widgets to the widget container.
 	 */
 	private renderWidgets(): void {
-		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
+		if (!this.widgetContainerAboveStatus || !this.widgetContainerAbove || !this.widgetContainerBelow) return;
+		this.renderWidgetContainer(this.widgetContainerAboveStatus, this.extensionWidgetsAboveStatus, false, true);
 		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
 		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
 		this.ui.requestRender();
@@ -2922,80 +2937,17 @@ export class InteractiveMode {
 				}
 				break;
 
-			case "message_update":
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage);
-
-					for (const content of this.streamingMessage.content) {
-						if (content.type === "toolCall") {
-							if (!this.pendingTools.has(content.id)) {
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.id,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-										imageWidthCells: this.settingsManager.getImageWidthCells(),
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
-									this.sessionManager.getCwd(),
-								);
-								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
-								this.pendingTools.set(content.id, component);
-							} else {
-								const component = this.pendingTools.get(content.id);
-								if (component) {
-									component.updateArgs(content.arguments);
-								}
-							}
-						}
-					}
-					this.ui.requestRender();
-				}
+			case "message_update": {
+				this.updateStreamingAssistantMessage(event.message);
 				break;
+			}
 
-			case "message_end":
+			case "message_end": {
 				if (event.message.role === "user") break;
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					let errorMessage: string | undefined;
-					if (this.streamingMessage.stopReason === "aborted") {
-						const retryAttempt = this.session.retryAttempt;
-						errorMessage =
-							retryAttempt > 0
-								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
-					}
-					this.streamingComponent.updateContent(this.streamingMessage);
-
-					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
-						if (!errorMessage) {
-							errorMessage = this.streamingMessage.errorMessage || "Error";
-						}
-						for (const [, component] of this.pendingTools.entries()) {
-							component.updateResult({
-								content: [{ type: "text", text: errorMessage }],
-								isError: true,
-							});
-						}
-						this.pendingTools.clear();
-					} else {
-						// Args are now complete - trigger diff computation for edit tools
-						for (const [, component] of this.pendingTools.entries()) {
-							component.setArgsComplete();
-						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
-					}
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-					this.footer.invalidate();
-				}
+				this.completeStreamingAssistantMessage(event.message);
 				this.ui.requestRender();
 				break;
+			}
 
 			case "tool_execution_start": {
 				let component = this.pendingTools.get(event.toolCallId);
@@ -3168,6 +3120,79 @@ export class InteractiveMode {
 		}
 	}
 
+	private updateStreamingAssistantMessage(message: AgentMessage): void {
+		if (!this.streamingComponent || message.role !== "assistant") return;
+
+		this.streamingMessage = message;
+		this.streamingComponent.updateContent(message);
+
+		for (const content of message.content) {
+			if (content.type === "toolCall") {
+				if (!this.pendingTools.has(content.id)) {
+					const component = new ToolExecutionComponent(
+						content.name,
+						content.id,
+						content.arguments,
+						{
+							showImages: this.settingsManager.getShowImages(),
+							imageWidthCells: this.settingsManager.getImageWidthCells(),
+						},
+						this.getRegisteredToolDefinition(content.name),
+						this.ui,
+						this.sessionManager.getCwd(),
+					);
+					component.setExpanded(this.toolOutputExpanded);
+					this.chatContainer.addChild(component);
+					this.pendingTools.set(content.id, component);
+				} else {
+					const component = this.pendingTools.get(content.id);
+					if (component) {
+						component.updateArgs(content.arguments);
+					}
+				}
+			}
+		}
+		this.ui.requestRender();
+	}
+
+	private completeStreamingAssistantMessage(message: AgentMessage): void {
+		if (!this.streamingComponent || message.role !== "assistant") return;
+
+		this.streamingMessage = message;
+		let errorMessage: string | undefined;
+		if (message.stopReason === "aborted") {
+			const retryAttempt = this.session.retryAttempt;
+			errorMessage =
+				retryAttempt > 0
+					? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
+					: "Operation aborted";
+			message.errorMessage = errorMessage;
+		}
+		this.streamingComponent.updateContent(message);
+
+		if (message.stopReason === "aborted" || message.stopReason === "error") {
+			if (!errorMessage) {
+				errorMessage = message.errorMessage || "Error";
+			}
+			for (const [, component] of this.pendingTools.entries()) {
+				component.updateResult({
+					content: [{ type: "text", text: errorMessage }],
+					isError: true,
+				});
+			}
+			this.pendingTools.clear();
+		} else {
+			// Args are now complete - trigger diff computation for edit tools
+			for (const [, component] of this.pendingTools.entries()) {
+				component.setArgsComplete();
+			}
+			this.maybeShowCacheMissNotice(message);
+		}
+		this.streamingComponent = undefined;
+		this.streamingMessage = undefined;
+		this.footer.invalidate();
+	}
+
 	/** Extract text content from a user message */
 	private getUserMessageText(message: Message): string {
 		if (message.role !== "user") return "";
@@ -3231,102 +3256,103 @@ export class InteractiveMode {
 	}
 
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
-		switch (message.role) {
-			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(
-					message.exitCode,
-					message.cancelled,
-					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-					message.fullOutputPath,
-				);
-				this.chatContainer.addChild(component);
-				break;
+		if (message.role === "bashExecution") {
+			const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
+			if (message.output) {
+				component.appendOutput(message.output);
 			}
-			case "custom": {
-				if (message.display) {
-					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
+			component.setComplete(
+				message.exitCode,
+				message.cancelled,
+				message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
+				message.fullOutputPath,
+			);
+			this.chatContainer.addChild(component);
+			return;
+		}
+
+		if (message.role === "custom") {
+			if (message.display) {
+				const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
+				const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
+				component.setExpanded(this.toolOutputExpanded);
+				this.chatContainer.addChild(component);
+			}
+			return;
+		}
+
+		if (message.role === "compactionSummary") {
+			this.chatContainer.addChild(new Spacer(1));
+			const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
+			component.setExpanded(this.toolOutputExpanded);
+			this.chatContainer.addChild(component);
+			return;
+		}
+
+		if (message.role === "branchSummary") {
+			this.chatContainer.addChild(new Spacer(1));
+			const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
+			component.setExpanded(this.toolOutputExpanded);
+			this.chatContainer.addChild(component);
+			return;
+		}
+
+		if (message.role === "user") {
+			const textContent = this.getUserMessageText(message);
+			if (textContent) {
+				if (this.chatContainer.children.length > 0) {
+					this.chatContainer.addChild(new Spacer(1));
+				}
+				const skillBlock = parseSkillBlock(textContent);
+				if (skillBlock) {
+					// Render skill block (collapsible)
+					const component = new SkillInvocationMessageComponent(skillBlock, this.getMarkdownThemeWithSettings());
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
-				}
-				break;
-			}
-			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "user": {
-				const textContent = this.getUserMessageText(message);
-				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
+					// Render user message separately if present
+					if (skillBlock.userMessage) {
 						this.chatContainer.addChild(new Spacer(1));
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
 						const userComponent = new UserMessageComponent(
-							textContent,
+							skillBlock.userMessage,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
 						);
 						this.chatContainer.addChild(userComponent);
 					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
-					}
+				} else {
+					const userComponent = new UserMessageComponent(
+						textContent,
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+					);
+					this.chatContainer.addChild(userComponent);
 				}
-				break;
+				if (options?.populateHistory) {
+					this.editor.addToHistory?.(textContent);
+				}
 			}
-			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-				);
-				this.chatContainer.addChild(assistantComponent);
-				break;
-			}
-			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
-				break;
-			}
-			default: {
-				const _exhaustive: never = message;
-			}
+			return;
 		}
+
+		if (message.role === "assistant") {
+			const assistantComponent = new AssistantMessageComponent(
+				message,
+				this.hideThinkingBlock,
+				this.getMarkdownThemeWithSettings(),
+				this.hiddenThinkingLabel,
+				this.outputPad,
+			);
+			this.chatContainer.addChild(assistantComponent);
+			return;
+		}
+
+		if (message.role === "toolResult") {
+			// Tool results are rendered inline with tool calls, handled separately
+			return;
+		}
+
+		const _exhaustive: never = message;
+		void _exhaustive;
 	}
 
 	private renderSessionItems(
@@ -3612,13 +3638,19 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		try {
 			this.unregisterSignalHandlers();
-		} catch {}
+		} catch {
+			// Best-effort cleanup during crash handling.
+		}
 		try {
 			killTrackedDetachedChildren();
-		} catch {}
+		} catch {
+			// Best-effort cleanup during crash handling.
+		}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch {
+			// Best-effort cleanup during crash handling.
+		}
 		console.error("pi exiting due to uncaughtException:");
 		console.error(error);
 		process.exit(1);
@@ -4007,7 +4039,7 @@ export class InteractiveMode {
 				const text = theme.fg("dim", `Follow-up: ${message}`);
 				this.pendingMessagesContainer.addChild(new TruncatedText(text, 1, 0));
 			}
-			const dequeueHint = this.getAppKeyDisplay("app.message.dequeue");
+			const dequeueHint = keyDisplayText("app.message.dequeue");
 			const hintText = theme.fg("dim", `↳ ${dequeueHint} to edit all queued messages`);
 			this.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
@@ -6166,13 +6198,6 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Get capitalized display string for an app keybinding action.
-	 */
-	private getAppKeyDisplay(action: AppKeybinding): string {
-		return keyDisplayText(action);
-	}
-
-	/**
 	 * Get capitalized display string for an editor keybinding action.
 	 */
 	private getEditorKeyDisplay(action: Keybinding): string {
@@ -6207,21 +6232,21 @@ export class InteractiveMode {
 		const tab = this.getEditorKeyDisplay("tui.input.tab");
 
 		// App keybindings
-		const interrupt = this.getAppKeyDisplay("app.interrupt");
-		const clear = this.getAppKeyDisplay("app.clear");
-		const exit = this.getAppKeyDisplay("app.exit");
-		const suspend = this.getAppKeyDisplay("app.suspend");
-		const cycleThinkingLevel = this.getAppKeyDisplay("app.thinking.cycle");
-		const cycleModelForward = this.getAppKeyDisplay("app.model.cycleForward");
-		const selectModel = this.getAppKeyDisplay("app.model.select");
-		const expandTools = this.getAppKeyDisplay("app.tools.expand");
-		const toggleThinking = this.getAppKeyDisplay("app.thinking.toggle");
-		const externalEditor = this.getAppKeyDisplay("app.editor.external");
-		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
-		const copyMessage = this.getAppKeyDisplay("app.message.copy");
-		const followUp = this.getAppKeyDisplay("app.message.followUp");
-		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
-		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
+		const interrupt = keyDisplayText("app.interrupt");
+		const clear = keyDisplayText("app.clear");
+		const exit = keyDisplayText("app.exit");
+		const suspend = keyDisplayText("app.suspend");
+		const cycleThinkingLevel = keyDisplayText("app.thinking.cycle");
+		const cycleModelForward = keyDisplayText("app.model.cycleForward");
+		const selectModel = keyDisplayText("app.model.select");
+		const expandTools = keyDisplayText("app.tools.expand");
+		const toggleThinking = keyDisplayText("app.thinking.toggle");
+		const externalEditor = keyDisplayText("app.editor.external");
+		const cycleModelBackward = keyDisplayText("app.model.cycleBackward");
+		const copyMessage = keyDisplayText("app.message.copy");
+		const followUp = keyDisplayText("app.message.followUp");
+		const dequeue = keyDisplayText("app.message.dequeue");
+		const pasteImage = keyDisplayText("app.clipboard.pasteImage");
 
 		let hotkeys = `
 **Navigation**

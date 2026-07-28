@@ -20,7 +20,7 @@ interface Component {
 ```
 
 | Method | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `render(width)` | Return array of strings (one per line). Each line **must not exceed `width`**. |
 | `handleInput?(data)` | Receive keyboard input when component has focus. |
 | `wantsKeyRelease?` | If true, component receives key release events (Kitty protocol). Default: false. |
@@ -47,6 +47,7 @@ class MyInput implements Component, Focusable {
 ```
 
 When a `Focusable` component has focus, TUI:
+
 1. Sets `focused = true` on the component
 2. Scans rendered output for `CURSOR_MARKER` (a zero-width APC escape sequence)
 3. Positions the hardware terminal cursor at that location
@@ -302,6 +303,7 @@ handleInput(data: string) {
 ```
 
 **Key identifiers** (use `Key.*` for autocomplete, or string literals):
+
 - Basic keys: `Key.enter`, `Key.escape`, `Key.tab`, `Key.space`, `Key.backspace`, `Key.delete`, `Key.home`, `Key.end`
 - Arrow keys: `Key.up`, `Key.down`, `Key.left`, `Key.right`
 - With modifiers: `Key.ctrl("c")`, `Key.shift("tab")`, `Key.alt("left")`, `Key.ctrlShift("p")`
@@ -321,6 +323,7 @@ render(width: number): string[] {
 ```
 
 Utilities:
+
 - `visibleWidth(str)` - Get display width (ignores ANSI codes)
 - `truncateToWidth(str, width, ellipsis?)` - Truncate with optional ellipsis
 - `wrapTextWithAnsi(str, width)` - Word wrap preserving ANSI codes
@@ -430,7 +433,7 @@ renderResult(result, options, theme, context) {
 **Foreground colors** (`theme.fg(color, text)`):
 
 | Category | Colors |
-|----------|--------|
+| ---------- | -------- |
 | General | `text`, `accent`, `muted`, `dim` |
 | Status | `success`, `error`, `warning` |
 | Borders | `border`, `borderAccent`, `borderMuted` |
@@ -789,13 +792,19 @@ This only affects the normal streaming working indicator. Compaction and retry l
 
 **Examples:** [working-indicator.ts](../examples/extensions/working-indicator.ts)
 
-### Pattern 5: Widgets Above/Below Editor
+### Pattern 5: Persistent Widgets
 
-Show persistent content above or below the input editor. Good for todo lists, progress.
+Show persistent content above the status area, above the input editor, or below
+the input editor. Good for todo lists, progress.
 
 ```typescript
 // Simple string array (above editor by default)
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"]);
+
+// Render above pending messages, status rows, and editor
+ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], {
+  placement: "aboveStatus",
+});
 
 // Render below the editor
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], { placement: "belowEditor" });

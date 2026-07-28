@@ -294,6 +294,10 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
+interface AutoCompactionOptions {
+	continueAfterThreshold?: boolean;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -330,6 +334,7 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _thresholdSelfContinuationUsedInTurn = false;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -376,6 +381,7 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
+	private _continueAfterStoppedTurn = false;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -528,6 +534,20 @@ export class AgentSession {
 			(this.agent.prepareNextTurn
 				? async (_turn: PrepareNextTurnContext, signal?: AbortSignal) => await this.agent.prepareNextTurn?.(signal)
 				: undefined);
+		const previousShouldStopAfterTurn = this.agent.shouldStopAfterTurn;
+		this.agent.shouldStopAfterTurn = async (turn) => {
+			if (await previousShouldStopAfterTurn?.(turn)) {
+				return true;
+			}
+
+			if (await this._checkCompaction(turn.message)) {
+				this._lastAssistantMessage = undefined;
+				this._continueAfterStoppedTurn = true;
+				return true;
+			}
+
+			return false;
+		};
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 			const previousContext = previousSnapshot?.context ?? turn.context;
@@ -602,6 +622,7 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			this._thresholdSelfContinuationUsedInTurn = false;
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -1078,6 +1099,12 @@ export class AgentSession {
 	}
 
 	private async _handlePostAgentRun(): Promise<boolean> {
+		if (this._continueAfterStoppedTurn) {
+			this._continueAfterStoppedTurn = false;
+			this._lastAssistantMessage = undefined;
+			return true;
+		}
+
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
 		if (!msg) {
@@ -1959,7 +1986,7 @@ export class AgentSession {
 	 *
 	 * Two cases:
 	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
-	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
+	 * 2. Threshold: Context over threshold, compact, and continue only after a normal post-run assistant message
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
@@ -2050,15 +2077,36 @@ export class AgentSession {
 			contextTokens = directContextTokens;
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+			if (skipAbortedCheck && this._thresholdSelfContinuationUsedInTurn && !this.agent.hasQueuedMessages()) {
+				return false;
+			}
+			const continueAfterThreshold =
+				skipAbortedCheck && assistantMessage.stopReason !== "error" && assistantMessage.stopReason !== "aborted";
+			return await this._runAutoCompaction("threshold", false, { continueAfterThreshold });
 		}
 		return false;
+	}
+
+	private async _hasQueuedMessagesAfterCompactionEvents(): Promise<boolean> {
+		if (this.agent.hasQueuedMessages()) {
+			return true;
+		}
+
+		// compaction_end listeners may enqueue follow-ups asynchronously with a
+		// fire-and-forget call. Let that microtask reach AgentSession's queues before
+		// deciding whether to synthesize an internal continuation message.
+		await Promise.resolve();
+		return this.agent.hasQueuedMessages();
 	}
 
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		options: AutoCompactionOptions = {},
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 
@@ -2168,7 +2216,21 @@ export class AgentSession {
 				return false;
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			const shouldSelfContinueAfterThreshold =
+				reason === "threshold" && options.continueAfterThreshold && !this._thresholdSelfContinuationUsedInTurn;
+			let continuation =
+				shouldSelfContinueAfterThreshold && !this.agent.hasQueuedMessages()
+					? ({ reason: "threshold_auto_compaction" } as const)
+					: undefined;
+			const compactionEntryId = this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+				usage,
+				continuation,
+			);
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2209,8 +2271,22 @@ export class AgentSession {
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Continue once so queued messages are delivered without adding synthetic context.
+			if (await this._hasQueuedMessagesAfterCompactionEvents()) {
+				if (continuation) {
+					continuation = undefined;
+					this.sessionManager.setCompactionContinuation(compactionEntryId, undefined);
+					this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+				}
+				return true;
+			}
+
+			if (continuation) {
+				this._thresholdSelfContinuationUsedInTurn = true;
+				return true;
+			}
+
+			return false;
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {

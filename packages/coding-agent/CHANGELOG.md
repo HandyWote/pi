@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed threshold auto-compaction to resume the active agent run by default after compacting.
+
 ## [0.83.1] - 2026-07-25
 
 ### Removed

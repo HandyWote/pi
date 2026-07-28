@@ -3351,6 +3351,10 @@ export class InteractiveMode {
 			return;
 		}
 
+		if (message.role === "compactionContinuation") {
+			return;
+		}
+
 		const _exhaustive: never = message;
 		void _exhaustive;
 	}

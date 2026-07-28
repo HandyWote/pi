@@ -24,6 +24,13 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: [
+			{ find: /^@handy_wote\/pi-ai$/, replacement: aiSrcIndex },
+			{ find: /^@handy_wote\/pi-ai\/api\/(.+)$/, replacement: `${aiSrcApi}/$1.ts` },
+			{ find: /^@handy_wote\/pi-ai\/compat$/, replacement: aiSrcCompat },
+			{ find: /^@handy_wote\/pi-ai\/oauth$/, replacement: aiSrcOAuth },
+			{ find: /^@handy_wote\/pi-ai\/providers\/(.+)$/, replacement: `${aiSrcProviders}/$1.ts` },
+			{ find: /^@handy_wote\/pi-agent-core$/, replacement: agentSrcIndex },
+			{ find: /^@handy_wote\/pi-tui$/, replacement: tuiSrcIndex },
 			{ find: /^@earendil-works\/pi-ai$/, replacement: aiSrcIndex },
 			{ find: /^@earendil-works\/pi-ai\/api\/(.+)$/, replacement: `${aiSrcApi}/$1.ts` },
 			{ find: /^@earendil-works\/pi-ai\/compat$/, replacement: aiSrcCompat },

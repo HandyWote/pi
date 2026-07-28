@@ -9,7 +9,7 @@ import type { AgentMessage, StreamFn, ThinkingLevel } from "@handy_wote/pi-agent
 import { contentText, type RetryCallbacks, type RetryPolicy, retryAssistantCall } from "@handy_wote/pi-ai";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@handy_wote/pi-ai/compat";
 import { completeSimple } from "@handy_wote/pi-ai/compat";
-import { convertToLlm } from "../messages.ts";
+import { convertToLlm, THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT } from "../messages.ts";
 import {
 	buildSessionContext,
 	type CompactionEntry,
@@ -300,6 +300,9 @@ export function estimateTokens(message: AgentMessage): number {
 			chars = message.summary.length;
 			return Math.ceil(chars / 4);
 		}
+		case "compactionContinuation": {
+			return Math.ceil(THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT.length / 4);
+		}
 	}
 
 	return 0;
@@ -313,6 +316,7 @@ function isCutPointMessage(message: AgentMessage): boolean {
 		case "custom":
 		case "branchSummary":
 		case "compactionSummary":
+		case "compactionContinuation":
 			return true;
 		case "toolResult":
 			return false;
@@ -327,6 +331,7 @@ function isTurnStartMessage(message: AgentMessage): boolean {
 		case "custom":
 		case "branchSummary":
 		case "compactionSummary":
+		case "compactionContinuation":
 			return true;
 		case "assistant":
 		case "toolResult":

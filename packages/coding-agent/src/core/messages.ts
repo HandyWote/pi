@@ -16,6 +16,9 @@ export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this p
 export const COMPACTION_SUMMARY_SUFFIX = `
 </summary>`;
 
+export const THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT =
+	"Continue the user's active task from the compacted context. Do not repeat completed work. Do not ask for confirmation. If the task is complete, state that briefly and stop.";
+
 export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch that this conversation came back from:
 
 <summary>
@@ -66,6 +69,16 @@ export interface CompactionSummaryMessage {
 	timestamp: number;
 }
 
+export interface CompactionContinuationMessage {
+	role: "compactionContinuation";
+	continuation: CompactionContinuation;
+	timestamp: number;
+}
+
+export interface CompactionContinuation {
+	reason: "threshold_auto_compaction";
+}
+
 // Extend CustomAgentMessages via declaration merging
 declare module "@handy_wote/pi-agent-core" {
 	interface CustomAgentMessages {
@@ -73,6 +86,7 @@ declare module "@handy_wote/pi-agent-core" {
 		custom: CustomMessage;
 		branchSummary: BranchSummaryMessage;
 		compactionSummary: CompactionSummaryMessage;
+		compactionContinuation: CompactionContinuationMessage;
 	}
 }
 
@@ -115,6 +129,17 @@ export function createCompactionSummaryMessage(
 		role: "compactionSummary",
 		summary: summary,
 		tokensBefore,
+		timestamp: new Date(timestamp).getTime(),
+	};
+}
+
+export function createCompactionContinuationMessage(
+	continuation: CompactionContinuation,
+	timestamp: string,
+): CompactionContinuationMessage {
+	return {
+		role: "compactionContinuation",
+		continuation,
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
@@ -173,12 +198,22 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						content: [{ type: "text" as const, text: BRANCH_SUMMARY_PREFIX + m.summary + BRANCH_SUMMARY_SUFFIX }],
 						timestamp: m.timestamp,
 					};
-				case "compactionSummary":
+				case "compactionSummary": {
 					return {
 						role: "user",
 						content: [
-							{ type: "text" as const, text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX },
+							{
+								type: "text" as const,
+								text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX,
+							},
 						],
+						timestamp: m.timestamp,
+					};
+				}
+				case "compactionContinuation":
+					return {
+						role: "user",
+						content: [{ type: "text" as const, text: THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT }],
 						timestamp: m.timestamp,
 					};
 				case "user":

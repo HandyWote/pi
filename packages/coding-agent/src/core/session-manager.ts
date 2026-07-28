@@ -21,8 +21,10 @@ import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts"
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import {
 	type BashExecutionMessage,
+	type CompactionContinuation,
 	type CustomMessage,
 	createBranchSummaryMessage,
+	createCompactionContinuationMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
@@ -71,6 +73,7 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	summary: string;
 	firstKeptEntryId: string;
 	tokensBefore: number;
+	continuation?: CompactionContinuation;
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
 	details?: T;
 	/** Usage from the LLM call(s) that generated this summary, if available */
@@ -465,7 +468,24 @@ export function buildSessionContext(
 ): SessionContext {
 	const path = buildSessionPath(entries, leafId, byId);
 	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const messages = buildContextEntries(entries, leafId, byId).flatMap(sessionEntryToContextMessages);
+	const contextEntries = buildContextEntries(entries, leafId, byId);
+	const latestCompaction = contextEntries.find((entry): entry is CompactionEntry => entry.type === "compaction");
+	const compactionPathIndex = latestCompaction ? path.findIndex((entry) => entry.id === latestCompaction.id) : -1;
+	const afterCompactionIds = new Set(
+		compactionPathIndex >= 0 ? path.slice(compactionPathIndex + 1).map((entry) => entry.id) : [],
+	);
+	const messages: AgentMessage[] = [];
+	let insertedContinuation = false;
+	for (const entry of contextEntries) {
+		if (latestCompaction?.continuation && afterCompactionIds.has(entry.id) && !insertedContinuation) {
+			messages.push(createCompactionContinuationMessage(latestCompaction.continuation, latestCompaction.timestamp));
+			insertedContinuation = true;
+		}
+		messages.push(...sessionEntryToContextMessages(entry));
+	}
+	if (latestCompaction?.continuation && !insertedContinuation) {
+		messages.push(createCompactionContinuationMessage(latestCompaction.continuation, latestCompaction.timestamp));
+	}
 	return { messages, thinkingLevel, model };
 }
 
@@ -1101,6 +1121,7 @@ export class SessionManager {
 		details?: T,
 		fromHook?: boolean,
 		usage?: Usage,
+		continuation?: CompactionContinuation,
 	): string {
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
@@ -1110,12 +1131,26 @@ export class SessionManager {
 			summary,
 			firstKeptEntryId,
 			tokensBefore,
+			...(continuation ? { continuation } : {}),
 			details,
 			usage,
 			fromHook,
 		};
 		this._appendEntry(entry);
 		return entry.id;
+	}
+
+	setCompactionContinuation(id: string, continuation: CompactionContinuation | undefined): void {
+		const entry = this.byId.get(id);
+		if (!entry || entry.type !== "compaction") {
+			return;
+		}
+		if (continuation) {
+			entry.continuation = continuation;
+		} else {
+			delete entry.continuation;
+		}
+		this._rewriteFile();
 	}
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */

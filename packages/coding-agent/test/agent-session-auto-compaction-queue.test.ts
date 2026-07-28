@@ -1,16 +1,33 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "@handy_wote/pi-agent-core";
+import { Agent, type AgentMessage } from "@handy_wote/pi-agent-core";
 import { type AssistantMessage, createAssistantMessageEventStream, fauxAssistantMessage } from "@handy_wote/pi-ai";
 import { getModel, streamSimple } from "@handy_wote/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { SessionManager } from "../src/core/session-manager.ts";
+import {
+	type CompactionContinuationMessage,
+	convertToLlm,
+	THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT,
+} from "../src/core/messages.ts";
+import { type CompactionEntry, SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader } from "./utilities.ts";
+
+type AutoCompactionOptionsForTest = { continueAfterThreshold?: boolean };
+
+type SessionCompactionInternals = {
+	_runAutoCompaction: (
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		options?: AutoCompactionOptionsForTest,
+	) => Promise<boolean>;
+	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
+	_runAgentPrompt: (messages: AgentMessage | AgentMessage[]) => Promise<void>;
+};
 
 describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
@@ -54,6 +71,166 @@ describe("AgentSession auto-compaction queue resume", () => {
 		if (tempDir && existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true });
 		}
+	});
+
+	it("should continue the current run after post-run threshold compaction by default", async () => {
+		settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+		const model = session.model!;
+		const thresholdTokens =
+			(model.contextWindow ?? 200_000) - settingsManager.getCompactionSettings().reserveTokens + 1;
+		let callCount = 0;
+		const compactionEnds: Array<{ reason: "manual" | "threshold" | "overflow"; willRetry: boolean }> = [];
+		session.subscribe((event) => {
+			if (event.type === "compaction_end") {
+				compactionEnds.push({ reason: event.reason, willRetry: event.willRetry });
+			}
+		});
+
+		session.agent.streamFunction = (streamModel) => {
+			callCount++;
+			const stream = createAssistantMessageEventStream();
+			const text =
+				callCount === 1
+					? "first response before compact"
+					: callCount === 2
+						? "compacted summary"
+						: "continued work";
+			const usageTokens = callCount === 2 ? 10 : thresholdTokens;
+			void Promise.resolve().then(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: {
+						...fauxAssistantMessage(text),
+						api: streamModel.api,
+						provider: streamModel.provider,
+						model: streamModel.id,
+						usage: {
+							input: usageTokens,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: usageTokens,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					},
+				});
+			});
+			return stream;
+		};
+
+		const continueSpy = vi.spyOn(session.agent, "continue");
+
+		const runAgentPrompt = (session as unknown as SessionCompactionInternals)._runAgentPrompt.bind(session);
+
+		await expect(
+			runAgentPrompt({
+				role: "user",
+				content: [{ type: "text", text: "start long task" }],
+				timestamp: Date.now(),
+			}),
+		).resolves.toBeUndefined();
+
+		expect(callCount).toBe(3);
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(compactionEnds).toEqual([{ reason: "threshold", willRetry: false }]);
+		expect(
+			sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && !entry.display),
+		).toHaveLength(0);
+
+		const compactionEntries = sessionManager
+			.getEntries()
+			.filter((entry): entry is CompactionEntry => entry.type === "compaction");
+		expect(compactionEntries).toHaveLength(1);
+		expect(compactionEntries[0]?.continuation).toEqual({ reason: "threshold_auto_compaction" });
+
+		const continuationMessage = session.agent.state.messages.find(
+			(message): message is CompactionContinuationMessage => message.role === "compactionContinuation",
+		);
+		expect(continuationMessage?.continuation).toEqual({ reason: "threshold_auto_compaction" });
+		if (!continuationMessage) {
+			throw new Error("missing compaction continuation");
+		}
+		const [llmSummary] = convertToLlm([continuationMessage]);
+		const llmContent = llmSummary?.content;
+		const llmText = Array.isArray(llmContent) && llmContent[0]?.type === "text" ? llmContent[0].text : "";
+		expect(llmText).toContain(THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT);
+	});
+
+	it("should allow another threshold compaction before a later queued turn", async () => {
+		settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+		const model = session.model!;
+		const thresholdTokens =
+			(model.contextWindow ?? 200_000) - settingsManager.getCompactionSettings().reserveTokens + 1;
+		let callCount = 0;
+		let queuedFollowUp = false;
+		const compactionEnds: Array<{ reason: "manual" | "threshold" | "overflow"; willRetry: boolean }> = [];
+		session.subscribe((event) => {
+			if (event.type === "compaction_end") {
+				compactionEnds.push({ reason: event.reason, willRetry: event.willRetry });
+			}
+		});
+
+		session.agent.streamFunction = (streamModel) => {
+			callCount++;
+			const currentCall = callCount;
+			const stream = createAssistantMessageEventStream();
+			const usageTokens = currentCall === 1 || currentCall === 3 ? thresholdTokens : 10;
+			void Promise.resolve().then(() => {
+				if (currentCall === 3 && !queuedFollowUp) {
+					queuedFollowUp = true;
+					session.agent.followUp({
+						role: "user",
+						content: [{ type: "text", text: "queued follow-up" }],
+						timestamp: Date.now(),
+					});
+				}
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: {
+						...fauxAssistantMessage(`response ${currentCall}`),
+						api: streamModel.api,
+						provider: streamModel.provider,
+						model: streamModel.id,
+						usage: {
+							input: usageTokens,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: usageTokens,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					},
+				});
+			});
+			return stream;
+		};
+
+		const continueSpy = vi.spyOn(session.agent, "continue");
+		const runAgentPrompt = (session as unknown as SessionCompactionInternals)._runAgentPrompt.bind(session);
+
+		await runAgentPrompt({
+			role: "user",
+			content: [{ type: "text", text: "start long task" }],
+			timestamp: Date.now(),
+		});
+
+		expect(callCount).toBe(5);
+		expect(continueSpy).toHaveBeenCalledTimes(2);
+		expect(compactionEnds).toEqual([
+			{ reason: "threshold", willRetry: false },
+			{ reason: "threshold", willRetry: false },
+		]);
+		expect(
+			sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && !entry.display),
+		).toHaveLength(0);
+		const compactionEntries = sessionManager
+			.getEntries()
+			.filter((entry): entry is CompactionEntry => entry.type === "compaction");
+		expect(compactionEntries).toHaveLength(2);
+		expect(compactionEntries[0]?.continuation).toEqual({ reason: "threshold_auto_compaction" });
+		expect(compactionEntries[1]?.continuation).toBeUndefined();
 	});
 
 	it("should resume after threshold compaction when only agent-level queued messages exist", async () => {
@@ -121,15 +298,18 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
-		const runAutoCompaction = (
-			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
-			}
-		)._runAutoCompaction.bind(session);
+		const runAutoCompaction = (session as unknown as SessionCompactionInternals)._runAutoCompaction.bind(session);
 
-		await expect(runAutoCompaction("threshold", false)).resolves.toBe(true);
+		await expect(runAutoCompaction("threshold", false, { continueAfterThreshold: true })).resolves.toBe(true);
 
 		expect(continueSpy).not.toHaveBeenCalled();
+		expect(
+			sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && !entry.display),
+		).toHaveLength(0);
+		const compactionEntries = sessionManager
+			.getEntries()
+			.filter((entry): entry is CompactionEntry => entry.type === "compaction");
+		expect(compactionEntries[0]?.continuation).toBeUndefined();
 	});
 
 	it("should not compact repeatedly after overflow recovery already attempted", async () => {
@@ -154,13 +334,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 		};
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(session as unknown as SessionCompactionInternals, "_runAutoCompaction")
+			.mockResolvedValue(true);
 
 		const events: Array<{ type: string; reason: string; errorMessage?: string }> = [];
 		session.subscribe((event) => {
@@ -169,11 +344,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			}
 		});
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = (session as unknown as SessionCompactionInternals)._checkCompaction.bind(session);
 
 		await checkCompaction(overflowMessage);
 		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
@@ -225,19 +396,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		});
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(session as unknown as SessionCompactionInternals, "_runAutoCompaction")
+			.mockResolvedValue(true);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = (session as unknown as SessionCompactionInternals)._checkCompaction.bind(session);
 
 		await checkCompaction(staleAssistant, false);
 
@@ -298,23 +460,14 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(session as unknown as SessionCompactionInternals, "_runAutoCompaction")
+			.mockResolvedValue(true);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = (session as unknown as SessionCompactionInternals)._checkCompaction.bind(session);
 
 		await checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, { continueAfterThreshold: false });
 	});
 
 	it("should not trigger threshold compaction for error messages when no prior usage exists", async () => {
@@ -346,19 +499,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(session as unknown as SessionCompactionInternals, "_runAutoCompaction")
+			.mockResolvedValue(true);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = (session as unknown as SessionCompactionInternals)._checkCompaction.bind(session);
 
 		await checkCompaction(errorAssistant);
 
@@ -427,19 +571,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(session as unknown as SessionCompactionInternals, "_runAutoCompaction")
+			.mockResolvedValue(true);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = (session as unknown as SessionCompactionInternals)._checkCompaction.bind(session);
 
 		await checkCompaction(errorAssistant);
 

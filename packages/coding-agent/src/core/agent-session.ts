@@ -734,6 +734,24 @@ export class AgentSession {
 		Object.assign(targetRecord, replacement);
 	}
 
+	private _messageIsBeforeCompaction(
+		message: AgentMessage,
+		compactionEntry: CompactionEntry | null,
+		branch: SessionEntry[],
+	): boolean {
+		if (!compactionEntry) {
+			return false;
+		}
+
+		const compactionEntryIndex = branch.findIndex((entry) => entry.id === compactionEntry.id);
+		const messageEntryIndex = branch.findIndex((entry) => entry.type === "message" && entry.message === message);
+		if (compactionEntryIndex >= 0 && messageEntryIndex >= 0) {
+			return messageEntryIndex < compactionEntryIndex;
+		}
+
+		return message.timestamp < new Date(compactionEntry.timestamp).getTime();
+	}
+
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
@@ -2010,10 +2028,9 @@ export class AgentSession {
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
 		// from retriggering compaction on the first prompt after compaction.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
-		if (assistantIsFromBeforeCompaction) {
+		const branch = this.sessionManager.getBranch();
+		const compactionEntry = getLatestCompactionEntry(branch);
+		if (this._messageIsBeforeCompaction(assistantMessage, compactionEntry, branch)) {
 			return false;
 		}
 
@@ -2068,7 +2085,7 @@ export class AgentSession {
 			if (
 				compactionEntry &&
 				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+				this._messageIsBeforeCompaction(usageMsg, compactionEntry, branch)
 			) {
 				return false;
 			}

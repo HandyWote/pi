@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { ExtensionAPI } from "@handy_wote/pi-coding-agent";
+import { buildTodoPlanMessageContent } from "./plan-message.ts";
 
 const EMPTY_PLAN_ERROR = "请提供 md 路径或 inline 计划文本";
 
@@ -37,7 +38,7 @@ export function registerTodoCommand(pi: ExtensionAPI): void {
 			pi.sendMessage(
 				{
 					customType: "pi-todo-plan",
-					content: `[PI TODO PLAN]\nSource: ${source}\n\n${plan}\n\nConvert this plan into a dependency-aware todo graph by calling write_todo. Preserve the plan's intent in global_direction and give every task concrete acceptance criteria. Then call next_wave and execute the returned work.`,
+					content: buildTodoPlanMessageContent({ source, plan }),
 					display: true,
 				},
 				{ triggerTurn: true },

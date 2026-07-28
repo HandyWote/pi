@@ -41,6 +41,7 @@
 		"typebox": "1.1.38"
 	},
 	"devDependencies": {
+		"@handy_wote/pi-ai": "^0.83.1",
 		"vitest": "4.1.9"
 	},
 	"peerDependencies": {

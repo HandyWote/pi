@@ -82,7 +82,7 @@ export function registerTodoTools(pi: ExtensionAPI, store: TodoStore): void {
 		description: "Initialize or replace the pi-todo dependency graph for the current main session",
 		promptSnippet: "Create a dependency-aware todo graph from an explicit plan",
 		promptGuidelines: [
-			"Use write_todo when a [PI TODO PLAN] message asks you to structure a plan, then call next_wave.",
+			"Use write_todo when a [PI TODO PLAN] message asks you to structure a plan, or when the user confirms execution of an existing explicit or implicit plan. Then call next_wave.",
 		],
 		parameters: WriteTodoParamsSchema,
 		executionMode: "sequential",

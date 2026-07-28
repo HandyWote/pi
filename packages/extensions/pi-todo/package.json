@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-todo",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Dependency-aware todo orchestration for pi",
 	"type": "module",
 	"keywords": [

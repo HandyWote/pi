@@ -48,6 +48,8 @@ export interface AgentManagerOptions {
 	concurrency?: number;
 	invocation?: PiInvocation;
 	killGraceMs?: number;
+	processIdentityProbe?: (pid: number) => Promise<string | undefined>;
+	sessionProcessProbe?: (sessionId: string) => Promise<number[]>;
 	onLifecycle?: (event: AgentLifecycleEvent) => void;
 	onTerminal?: (record: AgentRecord, event: AgentLifecycleEvent) => void;
 }
@@ -80,7 +82,25 @@ function abortError(): Error {
 	return error;
 }
 
-async function processStartToken(pid: number): Promise<string | undefined> {
+async function defaultProcessIdentityProbe(pid: number): Promise<string | undefined> {
+	if (process.platform === "win32") {
+		try {
+			const { stdout } = await execFileAsync(
+				"powershell.exe",
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					`(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
+				],
+				{ encoding: "utf8" },
+			);
+			const started = stdout.trim();
+			return started ? `windows:${started}` : undefined;
+		} catch {
+			return undefined;
+		}
+	}
 	try {
 		const stat = await fs.promises.readFile(`/proc/${pid}/stat`, "utf8");
 		const fields = stat
@@ -97,6 +117,60 @@ async function processStartToken(pid: number): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error: unknown) {
+		return isRecord(error) && error.code !== "ESRCH";
+	}
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function defaultSessionProcessProbe(sessionId: string): Promise<number[]> {
+	const matches = new Set<number>();
+	if (process.platform === "linux") {
+		const entries = await fs.promises.readdir("/proc", { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+			const pid = Number(entry.name);
+			if (pid === process.pid) continue;
+			try {
+				const args = (await fs.promises.readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0").filter(Boolean);
+				if (args.some((argument, index) => argument === "--session-id" && args[index + 1] === sessionId))
+					matches.add(pid);
+			} catch {}
+		}
+		return [...matches];
+	}
+	const escapedSessionId = escapeRegExp(sessionId);
+	if (process.platform === "win32") {
+		const script = `$pattern = '(?:^|\\s)--session-id\\s+"?${escapedSessionId}"?(?:\\s|$)'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match $pattern } | ForEach-Object { $_.ProcessId }`;
+		const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+			encoding: "utf8",
+		});
+		for (const line of stdout.split(/\r?\n/)) {
+			const pid = Number(line.trim());
+			if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) matches.add(pid);
+		}
+		return [...matches];
+	}
+	const { stdout } = await execFileAsync("ps", ["-axww", "-o", "pid=,command="], { encoding: "utf8" });
+	const pattern = new RegExp(
+		`(?:^|\\s)--session-id\\s+(?:"${escapedSessionId}"|'${escapedSessionId}'|${escapedSessionId})(?:\\s|$)`,
+	);
+	for (const line of stdout.split("\n")) {
+		const parsed = /^\s*(\d+)\s+(.*)$/.exec(line);
+		if (!parsed || !pattern.test(parsed[2] ?? "")) continue;
+		const pid = Number(parsed[1]);
+		if (pid !== process.pid) matches.add(pid);
+	}
+	return [...matches];
 }
 
 async function findChildSessionPath(sessionDir: string, sessionId: string): Promise<string | undefined> {
@@ -131,6 +205,8 @@ export class AgentManager {
 	private readonly concurrency: number;
 	private readonly invocation: PiInvocation;
 	private readonly killGraceMs: number;
+	private readonly processIdentityProbe: (pid: number) => Promise<string | undefined>;
+	private readonly sessionProcessProbe: (sessionId: string) => Promise<number[]>;
 	private readonly worktrees: WorktreeService;
 	private readonly queue: PendingRun[] = [];
 	private readonly active = new Map<string, ActiveRun>();
@@ -143,6 +219,8 @@ export class AgentManager {
 		this.concurrency = Math.max(1, Math.min(options.concurrency ?? 4, MAX_CONCURRENCY));
 		this.invocation = options.invocation ?? getPiInvocation();
 		this.killGraceMs = options.killGraceMs ?? 5000;
+		this.processIdentityProbe = options.processIdentityProbe ?? defaultProcessIdentityProbe;
+		this.sessionProcessProbe = options.sessionProcessProbe ?? defaultSessionProcessProbe;
 		this.registry = new AgentRegistry(options.rootDir, options.parentSessionId);
 		this.worktrees = new WorktreeService(options.rootDir);
 	}
@@ -151,7 +229,8 @@ export class AgentManager {
 		await this.registry.load();
 		for (const record of this.registry.list()) {
 			if (record.status !== "queued" && record.status !== "running") continue;
-			if (record.status === "running") await this.terminateRecoveredProcess(record);
+			if (record.status === "queued") await this.terminateRecoveredQueuedProcesses(record);
+			else await this.terminateRecoveredProcess(record);
 			await this.finishWithoutProcess(
 				record.agentId,
 				"interrupted",
@@ -206,7 +285,7 @@ export class AgentManager {
 			task: input.task,
 			mode: input.mode,
 			status: "queued",
-			cwd: path.resolve(input.cwd ?? this.options.defaultCwd),
+			cwd: input.cwd ? path.resolve(this.options.defaultCwd, input.cwd) : path.resolve(this.options.defaultCwd),
 			isolation: input.isolation ?? definition.isolation,
 			metadata: { ...input.metadata },
 			createdAt: now,
@@ -237,19 +316,30 @@ export class AgentManager {
 		const current = this.registry.get(agentId);
 		if (!current) throw new Error(`Unknown agent: ${agentId}`);
 		if (!isTerminalStatus(current.status)) throw new Error(`Agent ${agentId} is ${current.status}, not resumable`);
+		if (!current.childSessionPath)
+			throw new Error(`Agent ${agentId} cannot resume because its durable child session is unavailable`);
+		const childSessionPath = await findChildSessionPath(current.childSessionDir, current.childSessionId);
+		if (childSessionPath !== current.childSessionPath)
+			throw new Error(`Agent ${agentId} cannot resume because its durable child session is unavailable`);
+		if (signal?.aborted) throw abortError();
 		const now = new Date().toISOString();
-		const record = await this.registry.update(agentId, (entry) => ({
-			...entry,
-			mode: mode ?? entry.mode,
-			status: "queued",
-			updatedAt: now,
-			endedAt: undefined,
-			exitCode: undefined,
-			error: undefined,
-			cleanupError: undefined,
-			notified: false,
-			lifecycleEventId: randomUUID(),
-		}));
+		const record = await this.registry.update(agentId, (entry) => {
+			if (!isTerminalStatus(entry.status)) throw new Error(`Agent ${agentId} is ${entry.status}, not resumable`);
+			if (entry.childSessionPath !== childSessionPath)
+				throw new Error(`Agent ${agentId} cannot resume because its durable child session changed`);
+			return {
+				...entry,
+				mode: mode ?? entry.mode,
+				status: "queued",
+				updatedAt: now,
+				endedAt: undefined,
+				exitCode: undefined,
+				error: undefined,
+				cleanupError: undefined,
+				notified: false,
+				lifecycleEventId: randomUUID(),
+			};
+		});
 		this.publish(record);
 		const result = this.schedule(record, prompt, signal);
 		if (signal?.aborted) {
@@ -346,7 +436,7 @@ export class AgentManager {
 		let runCwd = record.cwd;
 		if (record.isolation === "worktree") {
 			const worktree = await this.worktrees.create(record.agentId, record.cwd);
-			runCwd = worktree.path;
+			runCwd = worktree.cwd;
 			record = await this.registry.update(record.agentId, (entry) => ({
 				...entry,
 				worktreePath: worktree.path,
@@ -403,6 +493,7 @@ export class AgentManager {
 		const active = this.active.get(agentId);
 		if (active) active.process = child;
 		let stdoutBuffer = "";
+		let stderrBuffer = "";
 		let processing = Promise.resolve();
 		child.stdout.on("data", (chunk: Buffer) => {
 			stdoutBuffer += chunk.toString("utf8");
@@ -413,9 +504,9 @@ export class AgentManager {
 		const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", resolve));
 		child.stderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
+			stderrBuffer += text;
 			processing = processing.then(async () => {
 				await this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
-				await this.registry.update(agentId, (entry) => ({ ...entry, error: `${entry.error ?? ""}${text}` }));
 			});
 		});
 		const stderrEnded = new Promise<void>((resolve) => child.stderr.once("end", resolve));
@@ -427,7 +518,14 @@ export class AgentManager {
 		});
 		const started = new Date().toISOString();
 		const pid = child.pid;
-		const startToken = pid === undefined ? undefined : await processStartToken(pid);
+		const startToken = pid === undefined ? undefined : await this.processIdentityProbe(pid);
+		if (pid !== undefined && startToken === undefined && processIsAlive(pid)) {
+			this.terminate(child);
+			await exitPromise;
+			await Promise.all([stdoutEnded, stderrEnded]);
+			await processing;
+			throw new Error(`Cannot establish process identity for agent ${record.agentId}`);
+		}
 		record = await this.registry.update(record.agentId, (entry) => ({
 			...entry,
 			status: "running",
@@ -454,7 +552,7 @@ export class AgentManager {
 					? "Parent session stopped"
 					: exit.code === 0
 						? undefined
-						: `Agent exited with code ${exit.code ?? "null"}${exit.signal ? ` (${exit.signal})` : ""}`;
+						: `Agent exited with code ${exit.code ?? "null"}${exit.signal ? ` (${exit.signal})` : ""}${stderrBuffer.trim() ? `\n${stderrBuffer.trim()}` : ""}`;
 		return this.finish(record.agentId, status, message, exit.code ?? undefined);
 	}
 
@@ -518,22 +616,26 @@ export class AgentManager {
 
 	private async finish(agentId: string, status: AgentStatus, error?: string, exitCode?: number): Promise<AgentRecord> {
 		const endedAt = new Date().toISOString();
+		const current = this.registry.get(agentId);
+		if (!current) throw new Error(`Unknown agent: ${agentId}`);
+		const childSessionPath = await findChildSessionPath(current.childSessionDir, current.childSessionId);
+		const cleanupError = current.worktreePath
+			? await this.worktrees.cleanup(current.worktreePath, current.cwd)
+			: undefined;
 		let record = await this.registry.update(agentId, (entry) => ({
 			...entry,
 			status,
 			endedAt,
 			updatedAt: endedAt,
+			childSessionPath,
+			worktreePath: cleanupError ? entry.worktreePath : undefined,
+			cleanupError,
 			pid: undefined,
 			processStartToken: undefined,
 			exitCode,
 			error: error ?? entry.error,
 			lifecycleEventId: randomUUID(),
 		}));
-		record = {
-			...record,
-			childSessionPath: await findChildSessionPath(record.childSessionDir, record.childSessionId),
-		};
-		await this.registry.save(record);
 		const event = this.publish(record);
 		if (record.mode === "background" && !record.notified) {
 			record = await this.registry.update(agentId, (entry) => ({ ...entry, notified: true }));
@@ -545,14 +647,6 @@ export class AgentManager {
 		}
 		this.active.delete(agentId);
 		this.completions.delete(agentId);
-		if (record.worktreePath) {
-			const cleanupError = await this.worktrees.cleanup(record.worktreePath, record.cwd);
-			record = await this.registry.update(agentId, (entry) => ({
-				...entry,
-				worktreePath: cleanupError ? entry.worktreePath : undefined,
-				cleanupError,
-			}));
-		}
 		this.drain();
 		return record;
 	}
@@ -615,8 +709,13 @@ export class AgentManager {
 
 	private async terminateRecoveredProcess(record: AgentRecord): Promise<void> {
 		if (record.pid === undefined || record.processStartToken === undefined) return;
-		const identity = await processStartToken(record.pid);
-		if (identity === undefined || identity !== record.processStartToken) return;
+		const identity = await this.processIdentityProbe(record.pid);
+		if (identity === undefined) {
+			if (processIsAlive(record.pid))
+				throw new Error(`Cannot verify recovered agent process ${record.pid}; refusing unsafe recovery`);
+			return;
+		}
+		if (identity !== record.processStartToken) return;
 		try {
 			process.kill(record.pid, "SIGTERM");
 		} catch (error: unknown) {
@@ -635,11 +734,63 @@ export class AgentManager {
 		}
 	}
 
+	private async terminateRecoveredQueuedProcesses(record: AgentRecord): Promise<void> {
+		for (const pid of await this.sessionProcessProbe(record.childSessionId)) {
+			const identity = await this.processIdentityProbe(pid);
+			if (!(await this.sessionProcessMatches(record.childSessionId, pid))) continue;
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch (error: unknown) {
+				if (isRecord(error) && error.code === "ESRCH") continue;
+				throw error;
+			}
+			if (await this.waitForRecoveredSessionExit(pid, record.childSessionId, identity, this.killGraceMs)) continue;
+			if (!(await this.sessionProcessMatches(record.childSessionId, pid))) continue;
+			if (identity !== undefined) {
+				const currentIdentity = await this.processIdentityProbe(pid);
+				if (currentIdentity !== undefined && currentIdentity !== identity) continue;
+			}
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch (error: unknown) {
+				if (isRecord(error) && error.code === "ESRCH") continue;
+				throw error;
+			}
+			if (!(await this.waitForRecoveredSessionExit(pid, record.childSessionId, identity, this.killGraceMs))) {
+				throw new Error(`Unable to terminate recovered queued agent process ${pid}`);
+			}
+		}
+	}
+
+	private async sessionProcessMatches(sessionId: string, pid: number): Promise<boolean> {
+		return (await this.sessionProcessProbe(sessionId)).includes(pid);
+	}
+
+	private async waitForRecoveredSessionExit(
+		pid: number,
+		sessionId: string,
+		identity: string | undefined,
+		timeoutMs: number,
+	): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		do {
+			if (!(await this.sessionProcessMatches(sessionId, pid))) return true;
+			if (identity !== undefined) {
+				const currentIdentity = await this.processIdentityProbe(pid);
+				if (currentIdentity !== undefined && currentIdentity !== identity) return true;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		} while (Date.now() < deadline);
+		return false;
+	}
+
 	private async waitForRecoveredExit(pid: number, token: string, timeoutMs: number): Promise<boolean> {
 		const deadline = Date.now() + timeoutMs;
 		do {
-			const current = await processStartToken(pid);
-			if (current === undefined || current !== token) return true;
+			const current = await this.processIdentityProbe(pid);
+			if (current === undefined) {
+				if (!processIsAlive(pid)) return true;
+			} else if (current !== token) return true;
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		} while (Date.now() < deadline);
 		return false;

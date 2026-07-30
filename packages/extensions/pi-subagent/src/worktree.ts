@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export interface AgentWorktree {
 	path: string;
+	cwd: string;
 	branch: string;
 }
 
@@ -20,10 +21,14 @@ export class WorktreeService {
 	async create(agentId: string, cwd: string): Promise<AgentWorktree> {
 		const destination = path.join(this.worktreesDir, agentId);
 		const branch = `pi-subagent/${agentId}`;
-		if (fs.existsSync(path.join(destination, ".git"))) return { path: destination, branch };
 		const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
 		const repository = stdout.trim();
 		if (!repository) throw new Error(`Cannot find a git repository from ${cwd}`);
+		const relativeCwd = path.relative(repository, path.resolve(cwd));
+		if (relativeCwd === ".." || relativeCwd.startsWith(`..${path.sep}`) || path.isAbsolute(relativeCwd))
+			throw new Error(`Working directory is outside repository: ${cwd}`);
+		const worktreeCwd = path.join(destination, relativeCwd);
+		if (fs.existsSync(path.join(destination, ".git"))) return { path: destination, cwd: worktreeCwd, branch };
 		await fs.promises.mkdir(this.worktreesDir, { recursive: true });
 		try {
 			await execFileAsync("git", ["-C", repository, "show-ref", "--verify", `refs/heads/${branch}`], {
@@ -35,7 +40,7 @@ export class WorktreeService {
 		await execFileAsync("git", ["-C", repository, "worktree", "add", destination, branch], {
 			encoding: "utf8",
 		});
-		return { path: destination, branch };
+		return { path: destination, cwd: worktreeCwd, branch };
 	}
 
 	async cleanup(worktreePath: string, cwd: string): Promise<string | undefined> {

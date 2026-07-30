@@ -36,9 +36,9 @@ Project definitions require a trusted project and explicit interactive confirmat
 
 Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. A batch may contain up to eight items and runs under the same concurrency limit.
 
-`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it is the only way to restart terminal work.
+`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks.
 
-State is stored under the pi agent directory in `subagents/`: the registry, JSONL transcripts, child sessions, prompts, and temporary worktrees. On reload, queued work is marked interrupted. A surviving running child is identified by PID plus process start token, terminated, and confirmed gone before its record becomes interrupted.
+State is stored under the pi agent directory in `subagents/`: the registry, JSONL transcripts, child sessions, prompts, and temporary worktrees. On reload, a queued child that may have spawned before its PID was persisted is found by the random `--session-id <agentId>` command-line argument and terminated before the record becomes interrupted. A surviving running child is identified by PID plus process start token, terminated, and confirmed gone before its record becomes interrupted. Process discovery and identity use `/proc` with a `ps` fallback on Unix and PowerShell on Windows. Recovery stops with an explicit error when a live process cannot be identified safely.
 
 Worktree isolation uses the persistent branch `pi-subagent/<agentId>`. Terminal cleanup removes the worktree checkout but retains the branch, so explicit resume can attach the same commits.
 

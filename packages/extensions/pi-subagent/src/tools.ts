@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@handy_wote/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@handy_wote/pi-coding-agent";
 import { Type } from "typebox";
 import { discoverAgents, loadAgentPrompt } from "./agents.ts";
+import { approveProjectAgents } from "./approval.ts";
 import type { AgentManager } from "./manager.ts";
 import { type AgentToolDetails, BoundedText, renderAgentResult } from "./render.ts";
 import type { AgentDefinition, AgentIsolation, AgentMode, AgentRecord, AgentScope, StartResult } from "./types.ts";
@@ -70,19 +71,6 @@ function validateDefinition(pi: ExtensionAPI, ctx: ExtensionContext, definition:
 	if (!modelExists) throw new Error(`Agent ${definition.name} configures unknown model: ${definition.model}`);
 }
 
-async function approveProjectAgents(definitions: AgentDefinition[], ctx: ExtensionContext): Promise<void> {
-	const projectAgents = definitions.filter((definition) => definition.source === "project");
-	if (projectAgents.length === 0) return;
-	if (!ctx.isProjectTrusted())
-		throw new Error("Project-local agents are disabled because this project is not trusted");
-	if (!ctx.hasUI) throw new Error("Project-local agents require interactive confirmation");
-	const approved = await ctx.ui.confirm(
-		"Run project-local agents?",
-		`Agents: ${projectAgents.map((agent) => agent.name).join(", ")}\n\nProject agents are repository-controlled.`,
-	);
-	if (!approved) throw new Error("Project-local agents were not approved");
-}
-
 function outputText(record: AgentRecord, transcript: string, ready: boolean): string {
 	const lines = [
 		`Agent ${record.agentId}: ${record.status}`,
@@ -95,6 +83,10 @@ function outputText(record: AgentRecord, transcript: string, ready: boolean): st
 	if (record.error) lines.push(`Error:\n${record.error.trim()}`);
 	if (transcript) lines.push(`Transcript:\n${transcript}`);
 	return lines.join("\n");
+}
+
+function availableAgentNames(definitions: readonly AgentDefinition[]): string {
+	return definitions.length > 0 ? definitions.map((definition) => definition.name).join(", ") : "none";
 }
 
 export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentManager | undefined): void {
@@ -112,6 +104,8 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 				if (Number(hasSingle) + Number(hasBatch) !== 1)
 					throw new Error("Provide exactly one agent/task or a non-empty tasks array");
 				const scope: AgentScope = params.scope ?? "user";
+				if (scope !== "user" && !ctx.isProjectTrusted())
+					throw new Error("Project-local agents are disabled because this project is not trusted");
 				const discovery = discoverAgents(ctx.cwd, scope);
 				throwIfAborted(signal);
 				if (discovery.diagnostics.length > 0) {
@@ -133,7 +127,10 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 						];
 				const resolved = requests.map((request) => {
 					const definition = discovery.agents.find((agent) => agent.name === request.agent);
-					if (!definition) throw new Error(`Unknown agent: ${request.agent}`);
+					if (!definition)
+						throw new Error(
+							`Unknown agent: ${request.agent}. Available agents: ${availableAgentNames(discovery.agents)}`,
+						);
 					return { request, definition };
 				});
 				await approveProjectAgents(
@@ -221,26 +218,45 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 	pi.registerTool({
 		name: "agent_list",
 		label: "Agent List",
-		description: "List active and historical subagents for the current parent session.",
+		description: "List available subagent definitions and execution history for the current parent session.",
 		parameters: Type.Object({}),
-		async execute() {
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			try {
-				const records = requireManager(getManager).list();
-				return textResult(
-					records.length
-						? records
-								.map((record) => `${record.agentId} ${record.status} ${record.definition.name}: ${record.task}`)
-								.join("\n")
-						: "No agents",
-					{ operation: "list", records },
-				);
+				const projectTrusted = ctx.isProjectTrusted();
+				const records = requireManager(getManager)
+					.list()
+					.filter((record) => projectTrusted || record.definition.source === "user");
+				const definitions = discoverAgents(ctx.cwd, projectTrusted ? "both" : "user").agents;
+				const definitionSummaries = definitions.map(({ name, source, description }) => ({
+					name,
+					source,
+					description,
+				}));
+				const sections: string[] = [];
+				if (definitions.length > 0)
+					sections.push(
+						`Available agents:\n${definitions
+							.map((definition) => `${definition.name} [${definition.source}]: ${definition.description}`)
+							.join("\n")}`,
+					);
+				if (records.length > 0)
+					sections.push(
+						`History:\n${records
+							.map((record) => `${record.agentId} ${record.status} ${record.definition.name}: ${record.task}`)
+							.join("\n")}`,
+					);
+				return textResult(sections.join("\n\n") || "No agents", {
+					operation: "list",
+					records,
+					definitions: definitionSummaries,
+				});
 			} catch (error: unknown) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textResult(message, { operation: "list", records: [], error: message }, true);
 			}
 		},
 		renderResult(result, options, theme) {
-			return renderAgentResult(result.details, options, theme);
+			return renderAgentResult(result.details as AgentToolDetails | undefined, options, theme);
 		},
 	});
 
@@ -268,7 +284,7 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 			}
 		},
 		renderResult(result, options, theme) {
-			return renderAgentResult(result.details, options, theme);
+			return renderAgentResult(result.details as AgentToolDetails | undefined, options, theme);
 		},
 	});
 
@@ -296,11 +312,15 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 		label: "Agent Resume",
 		description: "Explicitly resume a terminal agent with new instructions, keeping its stable ID and child session.",
 		parameters: ResumeParams,
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				throwIfAborted(signal);
 				if (!params.prompt.trim()) throw new Error("Resume prompt cannot be empty");
 				const manager = requireManager(getManager);
+				const current = manager.get(params.agentId);
+				if (!current) throw new Error(`Unknown agent: ${params.agentId}`);
+				await approveProjectAgents([current.definition], ctx);
+				throwIfAborted(signal);
 				const started = await manager.resume(params.agentId, params.prompt, params.mode, signal);
 				throwIfAborted(signal);
 				if ((params.mode ?? started.record.mode) === "background") {
@@ -322,7 +342,7 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 			}
 		},
 		renderResult(result, options, theme) {
-			return renderAgentResult(result.details, options, theme);
+			return renderAgentResult(result.details as AgentToolDetails | undefined, options, theme);
 		},
 	});
 }

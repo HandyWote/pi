@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@handy_wote/pi-coding-agent";
+import { discoverAgents } from "./agents.ts";
+import { approveProjectAgents } from "./approval.ts";
 import type { AgentManager } from "./manager.ts";
 import { formatAgentRow } from "./render.ts";
 import type { AgentRecord } from "./types.ts";
@@ -33,6 +35,7 @@ async function manageAgent(manager: AgentManager, record: AgentRecord, ctx: Exte
 		const stopped = await manager.stop(record.agentId);
 		ctx.ui.notify(`${stopped.agentId} stopped`, "info");
 	} else if (action === "Resume") {
+		await approveProjectAgents([record.definition], ctx);
 		const prompt = await ctx.ui.input("Resume agent", "Additional instructions");
 		if (!prompt?.trim()) return;
 		const resumed = await manager.resume(record.agentId, prompt, "background");
@@ -50,25 +53,47 @@ export function registerAgentsCommand(pi: ExtensionAPI, getManager: () => AgentM
 				return;
 			}
 			const requestedId = args.trim();
+			const projectTrusted = ctx.isProjectTrusted();
+			const definitions = discoverAgents(ctx.cwd, projectTrusted ? "both" : "user").agents;
+			const availableNames = definitions.map((definition) => definition.name).join(", ") || "none";
 			if (requestedId) {
 				const record = manager.get(requestedId);
-				if (!record) ctx.ui.notify(`Unknown agent: ${requestedId}`, "error");
+				if (!record || (!projectTrusted && record.definition.source === "project"))
+					ctx.ui.notify(`Unknown agent: ${requestedId}. Available agents: ${availableNames}`, "error");
 				else await manageAgent(manager, record, ctx);
 				return;
 			}
-			const records = manager.list();
-			if (records.length === 0) {
+			const records = manager.list().filter((record) => projectTrusted || record.definition.source === "user");
+			if (records.length === 0 && definitions.length === 0) {
 				ctx.ui.notify("No agents", "info");
 				return;
 			}
 			if (!ctx.hasUI) {
-				ctx.ui.notify(records.map((record) => formatAgentRow(record, 120)).join("\n"), "info");
+				const lines = definitions.map(
+					(definition) => `${definition.name} [${definition.source}]: ${definition.description}`,
+				);
+				lines.push(...records.map((record) => formatAgentRow(record, 120)));
+				ctx.ui.notify(lines.join("\n"), "info");
 				return;
 			}
-			const choices = records.map((record) => `${formatAgentRow(record, 100)} | ${record.agentId}`);
+			const definitionChoices = definitions.map(
+				(definition) => `${definition.name} [${definition.source}] | ${definition.description}`,
+			);
+			const historyChoices = records.map((record) => `${formatAgentRow(record, 100)} | ${record.agentId}`);
+			const choices = [...definitionChoices, ...historyChoices];
 			const selected = await ctx.ui.select("Agents", choices);
-			const index = selected ? choices.indexOf(selected) : -1;
-			if (index >= 0) await manageAgent(manager, records[index], ctx);
+			const selectedIndex = selected ? choices.indexOf(selected) : -1;
+			if (selectedIndex >= 0 && selectedIndex < definitions.length) {
+				const definition = definitions[selectedIndex];
+				if (definition)
+					ctx.ui.notify(`${definition.name} [${definition.source}]\n${definition.description}`, "info");
+				return;
+			}
+			const historyIndex = selectedIndex - definitions.length;
+			if (historyIndex >= 0) {
+				const record = records[historyIndex];
+				if (record) await manageAgent(manager, record, ctx);
+			}
 		},
 	});
 }

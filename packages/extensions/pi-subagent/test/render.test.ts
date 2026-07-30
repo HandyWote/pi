@@ -57,7 +57,18 @@ function record(): AgentRecord {
 describe("renderAgentResult", () => {
 	it.each([20, 120])("keeps every dynamic line within a %i-column viewport", (width) => {
 		const component = renderAgentResult(
-			{ operation: "output", records: [record()], transcript: "transcript line that is also deliberately long" },
+			{
+				operation: "output",
+				records: [record()],
+				definitions: [
+					{
+						name: "worker",
+						source: "user",
+						description: "a discoverable definition description that is intentionally wider than the viewport",
+					},
+				],
+				transcript: "transcript line that is also deliberately long",
+			},
 			{ expanded: true, isPartial: false },
 			theme,
 		);

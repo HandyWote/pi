@@ -1,10 +1,17 @@
 import type { Theme, ToolRenderResultOptions } from "@handy_wote/pi-coding-agent";
 import { type Component, truncateToWidth } from "@handy_wote/pi-tui";
-import type { AgentRecord } from "./types.ts";
+import type { AgentRecord, AgentSource } from "./types.ts";
+
+export interface AgentDefinitionSummary {
+	name: string;
+	source: AgentSource;
+	description: string;
+}
 
 export interface AgentToolDetails {
 	operation: "start" | "list" | "output" | "stop" | "resume";
 	records: AgentRecord[];
+	definitions?: AgentDefinitionSummary[];
 	transcript?: string;
 	ready?: boolean;
 	error?: string;
@@ -82,8 +89,22 @@ export function renderAgentResult(
 ): Component {
 	if (!details) return new BoundedText(theme.fg("muted", "No agent details"));
 	if (details.error) return new BoundedText(theme.fg("error", details.error));
-	if (details.records.length === 0) return new BoundedText(theme.fg("muted", "No agents"));
-	let text = details.records.map((record) => renderRecord(record, options.expanded, theme)).join("\n\n");
+	if (details.records.length === 0 && !details.definitions?.length)
+		return new BoundedText(theme.fg("muted", "No agents"));
+	const sections: string[] = [];
+	if (details.definitions?.length) {
+		sections.push(
+			details.definitions
+				.map(
+					(definition) =>
+						`${theme.fg("accent", definition.name)} ${theme.fg("dim", `[${definition.source}]`)} ${definition.description}`,
+				)
+				.join("\n"),
+		);
+	}
+	if (details.records.length)
+		sections.push(details.records.map((record) => renderRecord(record, options.expanded, theme)).join("\n\n"));
+	let text = sections.join("\n\n");
 	if (details.operation === "output" && details.transcript && options.expanded) {
 		text += `\n\n${theme.fg("muted", "Transcript")}`;
 		text += `\n${theme.fg("toolOutput", details.transcript.trim())}`;

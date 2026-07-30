@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -127,6 +127,24 @@ describe("AgentManager", () => {
 		expect(manager.list()).toEqual([]);
 	});
 
+	it("resolves relative invocation cwd from the parent session cwd", async () => {
+		const root = temporaryDirectory();
+		const nested = path.join(root, "packages", "worker");
+		fs.mkdirSync(nested, { recursive: true });
+		const manager = createManager(root);
+		await manager.initialize();
+
+		const started = await manager.start(definition, {
+			task: "relative cwd",
+			mode: "foreground",
+			cwd: "packages/worker",
+		});
+		const completed = await started.completion;
+
+		expect(completed.cwd).toBe(nested);
+		expect(await manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${nested}`);
+	});
+
 	it("stops a running agent when its start signal aborts", async () => {
 		const root = temporaryDirectory();
 		const manager = createManager(root);
@@ -214,7 +232,25 @@ describe("AgentManager", () => {
 		expect(completed.childSessionId).toBe(failed.childSessionId);
 		expect(completed.status).toBe("completed");
 		expect(completed.usage.turns).toBe(3);
+		expect(completed.lastOutput).toContain("finished Task: resumed");
+		expect(await manager.registry.readTranscript(completed.agentId)).toContain("prior-context:true");
+		expect(fs.readFileSync(completed.childSessionPath!, "utf8")).toContain("Task: resumed");
 		expect(events.filter((event) => event.status === "running")).toHaveLength(2);
+	});
+
+	it("refuses resume when the durable child session is missing", async () => {
+		const root = temporaryDirectory();
+		const manager = createManager(root);
+		await manager.initialize();
+		const started = await manager.start(definition, { task: "initial", mode: "foreground" });
+		const completed = await started.completion;
+		if (!completed.childSessionPath) throw new Error("Expected a child session path");
+		fs.rmSync(completed.childSessionPath);
+
+		await expect(manager.resume(completed.agentId, "must not restart")).rejects.toThrow(
+			"durable child session is unavailable",
+		);
+		expect(manager.get(completed.agentId)?.status).toBe("completed");
 	});
 
 	it("records spawn errors as failed instead of completed", async () => {
@@ -232,6 +268,19 @@ describe("AgentManager", () => {
 		expect(failed.status).toBe("failed");
 		expect(failed.error).toMatch(/ENOENT|not found|spawn/i);
 		expect(events.some((event) => event.status === "completed")).toBe(false);
+	});
+
+	it("keeps successful stderr diagnostics out of terminal error state", async () => {
+		const root = temporaryDirectory();
+		const manager = createManager(root);
+		await manager.initialize();
+		const started = await manager.start(definition, { task: "benign-stderr", mode: "foreground" });
+
+		const completed = await started.completion;
+
+		expect(completed.status).toBe("completed");
+		expect(completed.error).toBeUndefined();
+		expect(await manager.registry.readTranscript(completed.agentId)).toContain("Created new session");
 	});
 
 	it("marks orphaned running records interrupted without restarting them", async () => {
@@ -286,6 +335,84 @@ describe("AgentManager", () => {
 
 		expect(manager.get(result.agentId)?.status).toBe("interrupted");
 		expect(processIsAlive(result.pid)).toBe(false);
+	});
+
+	it("terminates a child spawned before its PID could be persisted", async () => {
+		const root = temporaryDirectory();
+		const resultPath = path.join(root, "launch-crash-result.json");
+		execFileSync(
+			process.execPath,
+			["--experimental-strip-types", crashParentPath, root, resultPath, fixturePath, "block-probe"],
+			{ timeout: 5000 },
+		);
+		const result = JSON.parse(fs.readFileSync(resultPath, "utf8")) as { agentId: string; pid: number };
+		expect(processIsAlive(result.pid)).toBe(true);
+
+		try {
+			const persistedBeforeRecovery = JSON.parse(
+				fs.readFileSync(path.join(root, "state", "registries", "parent-1.json"), "utf8"),
+			) as { records: AgentRecord[] };
+			expect(persistedBeforeRecovery.records[0]?.status).toBe("queued");
+			expect(persistedBeforeRecovery.records[0]?.pid).toBeUndefined();
+
+			const manager = createManager(root);
+			await manager.initialize();
+
+			expect(manager.get(result.agentId)?.status).toBe("interrupted");
+		} finally {
+			if (processIsAlive(result.pid)) process.kill(result.pid, "SIGKILL");
+			for (let attempt = 0; attempt < 100 && processIsAlive(result.pid); attempt++)
+				await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		expect(processIsAlive(result.pid)).toBe(false);
+	});
+
+	it("uses an injected Windows-style identity probe for safe recovery", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+		if (child.pid === undefined) throw new Error("Expected child pid");
+		const token = "windows:638895000000000000";
+		const now = new Date().toISOString();
+		const record: AgentRecord = {
+			version: 1,
+			agentId: "agent-windows-recovery",
+			parentSessionId: "parent-1",
+			definition,
+			task: "recover",
+			mode: "background",
+			status: "running",
+			cwd: root,
+			isolation: "none",
+			metadata: {},
+			createdAt: now,
+			startedAt: now,
+			updatedAt: now,
+			childSessionId: "agent-windows-recovery",
+			childSessionDir: path.join(stateRoot, "sessions", "agent-windows-recovery"),
+			transcriptPath: path.join(stateRoot, "transcripts", "agent-windows-recovery.jsonl"),
+			pid: child.pid,
+			processStartToken: token,
+			usage: emptyUsage(),
+			toolCount: 0,
+			lastOutput: "",
+			activities: [],
+			notified: false,
+			lifecycleEventId: "event-windows-recovery",
+		};
+		const registry = new AgentRegistry(stateRoot, "parent-1");
+		await registry.save(record);
+		const unsafeManager = createManager(root, { processIdentityProbe: async () => undefined });
+		await expect(unsafeManager.initialize()).rejects.toThrow("refusing unsafe recovery");
+		expect(unsafeManager.get(record.agentId)?.status).toBe("running");
+		const manager = createManager(root, {
+			processIdentityProbe: async (pid) => (pid === child.pid && child.exitCode === null ? token : undefined),
+		});
+
+		await manager.initialize();
+
+		expect(manager.get(record.agentId)?.status).toBe("interrupted");
+		expect(processIsAlive(child.pid)).toBe(false);
 	});
 
 	it("propagates parent shutdown to active children", async () => {
@@ -353,10 +480,13 @@ describe("WorktreeService", () => {
 		execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"], {
 			cwd: repository,
 		});
+		const nestedCwd = path.join(repository, "packages", "worker");
+		fs.mkdirSync(nestedCwd, { recursive: true });
 		const service = new WorktreeService(path.join(root, "state"));
 
-		const worktree = await service.create("agent-worktree", repository);
+		const worktree = await service.create("agent-worktree", nestedCwd);
 		expect(worktree.branch).toBe("pi-subagent/agent-worktree");
+		expect(worktree.cwd).toBe(path.join(worktree.path, "packages", "worker"));
 		expect(fs.existsSync(path.join(worktree.path, "README.md"))).toBe(true);
 		fs.writeFileSync(path.join(worktree.path, "result.txt"), "preserved\n");
 		execFileSync("git", ["add", "result.txt"], { cwd: worktree.path });
@@ -366,7 +496,7 @@ describe("WorktreeService", () => {
 		expect(await service.cleanup(worktree.path, repository)).toBeUndefined();
 		expect(fs.existsSync(worktree.path)).toBe(false);
 
-		const resumed = await service.create("agent-worktree", repository);
+		const resumed = await service.create("agent-worktree", nestedCwd);
 		expect(resumed).toEqual(worktree);
 		expect(fs.readFileSync(path.join(resumed.path, "result.txt"), "utf8")).toBe("preserved\n");
 		expect(execFileSync("git", ["branch", "--show-current"], { cwd: resumed.path, encoding: "utf8" }).trim()).toBe(

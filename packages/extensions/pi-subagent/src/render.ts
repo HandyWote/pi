@@ -1,5 +1,5 @@
 import type { Theme, ToolRenderResultOptions } from "@handy_wote/pi-coding-agent";
-import { Text, truncateToWidth } from "@handy_wote/pi-tui";
+import { type Component, truncateToWidth } from "@handy_wote/pi-tui";
 import type { AgentRecord } from "./types.ts";
 
 export interface AgentToolDetails {
@@ -8,6 +8,21 @@ export interface AgentToolDetails {
 	transcript?: string;
 	ready?: boolean;
 	error?: string;
+}
+
+export class BoundedText implements Component {
+	private readonly text: string;
+
+	constructor(text: string) {
+		this.text = text;
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(1, width);
+		return this.text.split("\n").map((line) => truncateToWidth(line, safeWidth));
+	}
+
+	invalidate(): void {}
 }
 
 function formatTokens(count: number): string {
@@ -64,10 +79,10 @@ export function renderAgentResult(
 	details: AgentToolDetails | undefined,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-): Text {
-	if (!details) return new Text(theme.fg("muted", "No agent details"), 0, 0);
-	if (details.error) return new Text(theme.fg("error", details.error), 0, 0);
-	if (details.records.length === 0) return new Text(theme.fg("muted", "No agents"), 0, 0);
+): Component {
+	if (!details) return new BoundedText(theme.fg("muted", "No agent details"));
+	if (details.error) return new BoundedText(theme.fg("error", details.error));
+	if (details.records.length === 0) return new BoundedText(theme.fg("muted", "No agents"));
 	let text = details.records.map((record) => renderRecord(record, options.expanded, theme)).join("\n\n");
 	if (details.operation === "output" && details.transcript && options.expanded) {
 		text += `\n\n${theme.fg("muted", "Transcript")}`;
@@ -76,5 +91,5 @@ export function renderAgentResult(
 	if (!options.expanded && details.records.some((record) => record.activities.length > 1)) {
 		text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 	}
-	return new Text(text, 0, 0);
+	return new BoundedText(text);
 }

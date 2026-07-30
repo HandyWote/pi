@@ -1,5 +1,6 @@
 {
 	"extends": "../../../tsconfig.base.json",
 	"compilerOptions": { "noEmit": true, "module": "NodeNext", "moduleResolution": "NodeNext" },
-	"include": ["src/**/*", "test/**/*"]
+	"include": ["src/**/*", "test/**/*"],
+	"exclude": ["test/e2e.test.ts"]
 }

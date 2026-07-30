@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@handy_wote/pi-coding-agent
 import { Type } from "typebox";
 import { discoverAgents, loadAgentPrompt } from "./agents.ts";
 import type { AgentManager } from "./manager.ts";
-import { BoundedText, type AgentToolDetails, renderAgentResult } from "./render.ts";
+import { type AgentToolDetails, BoundedText, renderAgentResult } from "./render.ts";
 import type { AgentDefinition, AgentIsolation, AgentMode, AgentRecord, AgentScope, StartResult } from "./types.ts";
 
 const AgentScopeSchema = Type.Union([Type.Literal("user"), Type.Literal("project"), Type.Literal("both")]);

@@ -60,7 +60,7 @@ Claims use an owner, opaque token, task revision, and a cross-process file lock.
 
 ## Persistence
 
-Lists are stored under `~/.pi/agent/todo/lists` by default. Set `PI_AGENT_DIR` to relocate all Pi agent data. Writes use temporary files, atomic rename, file and directory sync, backups, and recoverable process-owned locks. The main document keeps a bounded recent history; per-revision snapshots retain older branch points.
+Lists are stored under `~/.pi/agent/todo/lists` by default. Set `PI_AGENT_DIR` to relocate all Pi agent data. Writes use temporary files, atomic rename, file and directory sync, backups, and recoverable process-owned locks. The main document keeps 20 recent revisions and up to 1000 per-revision snapshots; branch points older than that retention window expire.
 
 The active list and revision are recorded in session custom entries. Reload and resume restore the list. Forks and historical session-tree navigation clone the visible revision, so branches do not mutate one another. Live claims are not inherited by a fork. After compaction, a compact active digest is inserted into model context independently of the widget.
 
@@ -76,6 +76,6 @@ pi.todo/claim-token
 
 An Agent child may receive the same metadata through the generic `PI_AGENT_CONTEXT` JSON value. Todo parses its namespace itself.
 
-`queued`, `started`, or `running` events transfer a matching claim to the stable agent ID. `failed`, `stopped`, or `interrupted` events release only that matching owner and token. A `completed` event synchronizes the revision after the worker explicitly updates the task; Agent success never completes a Todo by itself.
+`queued`, `started`, or `running` events transfer a matching claim to the stable agent ID. `failed`, `stopped`, or `interrupted` events release only the matching claim token. Events for the same claim are serialized, and terminal events take priority over late active events. A `completed` event synchronizes the revision after the worker explicitly updates the task; Agent success never completes a Todo by itself.
 
-On reload or resume, Todo emits protocol version `1` on `pi:agent:status-request`. A compatible Agent plugin may answer by re-emitting `pi:agent:lifecycle` with `running` and the original metadata. Matching claim-token evidence preserves that owner. Current-session ownership is preserved directly, while unconfirmed external owners are atomically released to `pending`. This recovers from missing lifecycle events without coupling either plugin to the other.
+Before the first agent turn or `/todo` command after reload or resume, Todo emits protocol version `1` on `pi:agent:status-request`. This happens after every extension has handled `session_start`, so plugin loading order does not affect recovery. A compatible Agent plugin may answer by re-emitting `pi:agent:lifecycle` with `running` and the original metadata. Matching claim-token evidence preserves that owner. Current-session ownership is preserved directly, while unconfirmed external owners are atomically released to `pending`. This recovers from missing lifecycle events without coupling either plugin to the other.

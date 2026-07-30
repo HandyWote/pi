@@ -8,6 +8,7 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): voi
 	pi.registerCommand("todo", {
 		description: "List, inspect, import, delete, or clear persistent todo tasks",
 		handler: async (args, ctx) => {
+			await runtime.reconcileOwners();
 			const input = args.trim();
 			if (!input || input === "list") {
 				const view = await runtime.view();

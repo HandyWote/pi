@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -130,8 +130,15 @@ describe("FileTodoStore", () => {
 	it("reclaims a lock left by a dead process", async () => {
 		await store.create("Recover lock", [task("A")], "list-1");
 		await execFileAsync(process.execPath, [CRASH_LOCK_WORKER.pathname, directory]);
-		const claim = await store.claim("list-1", "A", "main");
-		expect(claim.task.owner).toBe("main");
+		const results = await Promise.allSettled([
+			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-1"]),
+			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-2"]),
+			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-3"]),
+		]);
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		const claimed = (await store.read("list-1")).tasks[0];
+		expect(claimed?.status).toBe("in_progress");
+		expect(["agent-1", "agent-2", "agent-3"]).toContain(claimed?.owner);
 	});
 
 	it("reconciles orphaned owners while preserving owners with live evidence", async () => {
@@ -191,6 +198,15 @@ describe("FileTodoStore", () => {
 		const current = await store.read("list-1");
 		expect(current.history).toHaveLength(20);
 		expect((await store.read("list-1", 1)).tasks[0]?.subject).toBe("Task A");
+	});
+
+	it("garbage-collects revision snapshots at the configured retention boundary", async () => {
+		const limited = new FileTodoStore(directory, { revisionSnapshotLimit: 2 });
+		await limited.create("Bound snapshots", [task("A")], "limited");
+		for (let revision = 2; revision <= 5; revision++) {
+			await limited.update("limited", "A", { subject: `Task A revision ${revision}` });
+		}
+		expect((await readdir(join(directory, "limited", "revisions"))).sort()).toEqual(["3.json", "4.json"]);
 	});
 
 	it("does not inherit live claims into a fork or overwrite an existing target", async () => {

@@ -31,6 +31,7 @@ export class TodoRuntime {
 	private agentContext: AgentContext | undefined;
 	private readonly liveOwners = new Set<string>();
 	private readonly pendingOwnerEvidence = new Set<Promise<void>>();
+	private ownerReconciliationPending = false;
 
 	constructor(pi: ExtensionAPI, options: TodoRuntimeOptions = {}) {
 		this.pi = pi;
@@ -55,6 +56,7 @@ export class TodoRuntime {
 	async initialize(event: SessionStartEvent, ctx: ExtensionContext): Promise<void> {
 		this.context = ctx;
 		this.liveOwners.clear();
+		this.ownerReconciliationPending = false;
 		const agentTask = this.getTaskContext();
 		if (agentTask) {
 			if (agentTask.agentId) this.liveOwners.add(agentTask.agentId);
@@ -84,15 +86,7 @@ export class TodoRuntime {
 			this.setBinding(await this.store.read(restored.list_id), false);
 			const sessionId = ctx.sessionManager.getSessionId();
 			this.liveOwners.add(sessionId);
-			this.pi.events.emit(AGENT_STATUS_REQUEST_CHANNEL, {
-				version: 1,
-				parentSessionId: sessionId,
-				timestamp: new Date().toISOString(),
-			});
-			await new Promise((resolve) => setTimeout(resolve, OWNER_EVIDENCE_WAIT_MS));
-			await this.waitForOwnerEvidence();
-			const list = await this.store.reconcileOwners(restored.list_id, this.liveOwners);
-			this.setBinding(list, true);
+			this.ownerReconciliationPending = true;
 		}
 		await this.refresh();
 	}
@@ -179,6 +173,29 @@ export class TodoRuntime {
 
 	async syncCurrent(): Promise<TodoListDocument> {
 		return this.record(await this.store.read(this.requireListId()));
+	}
+
+	async releaseClaim(taskId: string, claimToken: string): Promise<TodoListDocument> {
+		return this.record(await this.store.releaseClaim(this.requireListId(), taskId, claimToken));
+	}
+
+	async reconcileOwners(): Promise<boolean> {
+		if (!this.ownerReconciliationPending || this.agentContext) return false;
+		const listId = this.requireListId();
+		const sessionId = this.context?.sessionManager.getSessionId();
+		if (!sessionId) return false;
+		this.pi.events.emit(AGENT_STATUS_REQUEST_CHANNEL, {
+			version: 1,
+			parentSessionId: sessionId,
+			timestamp: new Date().toISOString(),
+		});
+		await new Promise((resolve) => setTimeout(resolve, OWNER_EVIDENCE_WAIT_MS));
+		await this.waitForOwnerEvidence();
+		const list = await this.store.reconcileOwners(listId, this.liveOwners);
+		this.setBinding(list, true);
+		this.ownerReconciliationPending = false;
+		await this.refresh();
+		return true;
 	}
 
 	async delete(taskId: string): Promise<TodoListDocument> {

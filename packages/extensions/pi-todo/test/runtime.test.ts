@@ -108,6 +108,7 @@ describe("TodoRuntime recovery", () => {
 			{ type: "session_start", reason: "resume", previousSessionFile: "old.jsonl" },
 			resumedEnvironment.ctx,
 		);
+		await resumed.reconcileOwners();
 		expect((await resumed.getTask("A"))?.status).toBe("in_progress");
 		expect((await resumed.getTask("B"))?.depends_on).toEqual(["A"]);
 		expect((await resumed.getTask("C"))?.status).toBe("pending");
@@ -188,10 +189,56 @@ describe("TodoRuntime recovery", () => {
 		});
 		try {
 			await resumed.initialize({ type: "session_start", reason: "resume" }, resumedEnvironment.ctx);
+			await resumed.reconcileOwners();
 			expect(await resumed.getTask("A")).toMatchObject({ status: "in_progress", owner: "agent-live" });
 		} finally {
 			disposeResponder();
 			disposeProtocol();
+		}
+	});
+
+	it("recovers live owners after session_start in either extension loading order", async () => {
+		for (const order of ["todo-first", "agent-first"] as const) {
+			const original = fakeEnvironment(`session-${order}`);
+			const runtime = new TodoRuntime(original.pi, { dataDir });
+			await runtime.initialize({ type: "session_start", reason: "startup" }, original.ctx);
+			await runtime.replace(order, [{ id: "A", subject: "Agent task", depends_on: [] }]);
+			const claim = await runtime.claim("A");
+			await runtime.transfer("A", `agent-${order}`, claim.claim_token);
+			const binding = bindingEntry(original);
+
+			const resumedEnvironment = fakeEnvironment(`session-${order}`, branchWithBinding(binding));
+			const resumed = new TodoRuntime(resumedEnvironment.pi, { dataDir });
+			let managerReady = order === "agent-first";
+			const disposeProtocol = registerAgentLifecycleProtocol(resumedEnvironment.eventBus, resumed);
+			const disposeResponder = resumedEnvironment.eventBus.on("pi:agent:status-request", () => {
+				if (!managerReady) return;
+				resumedEnvironment.eventBus.emit(AGENT_LIFECYCLE_CHANNEL, {
+					version: 1,
+					eventId: `running-${order}`,
+					agentId: `agent-${order}`,
+					parentSessionId: `session-${order}`,
+					status: "running",
+					timestamp: new Date().toISOString(),
+					metadata: {
+						"pi.todo/list-id": binding.list_id,
+						"pi.todo/task-id": "A",
+						"pi.todo/claim-token": claim.claim_token,
+					},
+				});
+			});
+			try {
+				await resumed.initialize({ type: "session_start", reason: "resume" }, resumedEnvironment.ctx);
+				managerReady = true;
+				await resumed.reconcileOwners();
+				expect(await resumed.getTask("A")).toMatchObject({
+					status: "in_progress",
+					owner: `agent-${order}`,
+				});
+			} finally {
+				disposeResponder();
+				disposeProtocol();
+			}
 		}
 	});
 
@@ -240,8 +287,11 @@ describe("TodoRuntime recovery", () => {
 			await vi.waitFor(async () => expect((await runtime.getTask("A"))?.status).toBe("completed"), {
 				timeout: 5000,
 			});
+			await vi.waitFor(
+				async () => expect(bindingEntry(environment).revision).toBe((await runtime.view())?.list.revision),
+				{ timeout: 5000 },
+			);
 			const completedBinding = bindingEntry(environment);
-			expect(completedBinding.revision).toBe((await runtime.view())?.list.revision);
 
 			const forkEnvironment = fakeEnvironment("session-fork", branchWithBinding(completedBinding));
 			const fork = new TodoRuntime(forkEnvironment.pi, { dataDir });
@@ -276,6 +326,86 @@ describe("TodoRuntime recovery", () => {
 				metadata: failedMetadata,
 			});
 			await vi.waitFor(async () => expect((await runtime.getTask("B"))?.status).toBe("pending"), { timeout: 5000 });
+		} finally {
+			dispose();
+			events.clear();
+		}
+	});
+
+	it("serializes lifecycle races, gives terminal states priority, and retries unapplied event ids", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Race", [
+			{ id: "A", subject: "Terminal first", depends_on: [] },
+			{ id: "B", subject: "Active first", depends_on: [] },
+			{ id: "C", subject: "Retry event", depends_on: [] },
+		]);
+		const events = environment.eventBus;
+		const dispose = registerAgentLifecycleProtocol(events, runtime);
+		try {
+			for (const [id, ordering] of [
+				["A", "terminal-first"],
+				["B", "active-first"],
+			] as const) {
+				const claim = await runtime.claim(id);
+				const metadata = {
+					"pi.todo/list-id": runtime.getListId(),
+					"pi.todo/task-id": id,
+					"pi.todo/claim-token": claim.claim_token,
+				};
+				const active = {
+					version: 1,
+					eventId: `${id}-running`,
+					agentId: `agent-${id}`,
+					parentSessionId: "session-1",
+					status: "running",
+					timestamp: new Date().toISOString(),
+					metadata,
+				};
+				const terminal = { ...active, eventId: `${id}-failed`, status: "failed" };
+				if (ordering === "terminal-first") {
+					events.emit(AGENT_LIFECYCLE_CHANNEL, terminal);
+					events.emit(AGENT_LIFECYCLE_CHANNEL, active);
+				} else {
+					events.emit(AGENT_LIFECYCLE_CHANNEL, active);
+					events.emit(AGENT_LIFECYCLE_CHANNEL, terminal);
+				}
+				await vi.waitFor(async () => expect((await runtime.getTask(id))?.status).toBe("pending"), {
+					timeout: 5000,
+				});
+				expect((await runtime.getTask(id))?.owner).toBeUndefined();
+			}
+
+			const claim = await runtime.claim("C");
+			const baseEvent = {
+				version: 1,
+				eventId: "retry-same-id",
+				agentId: "agent-C",
+				parentSessionId: "session-1",
+				status: "running",
+				timestamp: new Date().toISOString(),
+			};
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
+				...baseEvent,
+				metadata: {
+					"pi.todo/list-id": runtime.getListId(),
+					"pi.todo/task-id": "C",
+					"pi.todo/claim-token": "wrong-token",
+				},
+			});
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
+				...baseEvent,
+				metadata: {
+					"pi.todo/list-id": runtime.getListId(),
+					"pi.todo/task-id": "C",
+					"pi.todo/claim-token": claim.claim_token,
+				},
+			});
+			await vi.waitFor(async () => expect(await runtime.getTask("C")).toMatchObject({ owner: "agent-C" }), {
+				timeout: 5000,
+			});
 		} finally {
 			dispose();
 			events.clear();

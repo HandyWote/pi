@@ -19,7 +19,7 @@ export default function piTodo(pi: ExtensionAPI, options: TodoRuntimeOptions = {
 	pi.on("session_start", async (event, ctx) => {
 		try {
 			await runtime.initialize(event, ctx);
-			if (event.reason === "reload" || event.reason === "resume" || event.reason === "fork") {
+			if (event.reason === "fork") {
 				await runtime.injectDigest();
 			}
 		} catch (error) {

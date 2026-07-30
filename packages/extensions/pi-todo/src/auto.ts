@@ -42,11 +42,16 @@ const PLAN_LIST_LINE_PATTERN = /(?:^|\n)\s*(?:[-*]|\d+[.)]|\[[ x]\])\s+\S/g;
 
 export function registerTodoAutoTrigger(pi: ExtensionAPI, runtime: TodoRuntime): void {
 	pi.on("before_agent_start", async (event, ctx): Promise<BeforeAgentStartEventResult | undefined> => {
+		const recovered = await runtime.reconcileOwners();
 		if (!isExplicitlyNonExecution(event.prompt) && hasExecutionIntent(event.prompt)) {
 			const digest = await runtime.digest();
 			if (digest) {
 				return { message: { customType: "pi-todo-continuation", content: digest, display: false } };
 			}
+		}
+		if (recovered) {
+			const digest = await runtime.digest();
+			if (digest) return { message: { customType: "pi-todo-digest", content: digest, display: false } };
 		}
 
 		const content = buildAutoPlan(event, ctx);

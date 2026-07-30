@@ -4,12 +4,17 @@ import { join } from "node:path";
 
 const [directory] = process.argv.slice(2);
 if (!directory) throw new Error("Usage: crash-lock-worker <directory>");
-const lockPath = join(directory, ".locks", "list-1.lock");
-const reaperPath = `${lockPath}.reaper`;
+const lockPath = join(directory, ".locks", "list-1");
 await mkdir(lockPath, { recursive: true });
-await mkdir(reaperPath, { recursive: true });
 await writeFile(
-	join(lockPath, "owner.json"),
-	JSON.stringify({ pid: process.pid, host: hostname(), nonce: "crashed", createdAt: new Date().toISOString() }),
+	join(lockPath, "crashed.json"),
+	JSON.stringify({
+		version: 1,
+		nonce: "crashed",
+		pid: process.pid,
+		host: hostname(),
+		choosing: false,
+		ticket: 1,
+	}),
 	"utf8",
 );

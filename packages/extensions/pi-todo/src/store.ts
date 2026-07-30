@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -22,13 +22,21 @@ import { TODO_STATUSES } from "./types.ts";
 
 const LOCK_WAIT_MS = 25;
 const LOCK_TIMEOUT_MS = 3000;
-const FOREIGN_LOCK_STALE_MS = 30_000;
-const MISSING_LOCK_OWNER_STALE_MS = 1000;
 const DOCUMENT_HISTORY_LIMIT = 20;
 const REVISION_SNAPSHOT_LIMIT = 1000;
 
 interface FileTodoStoreOptions {
 	revisionSnapshotLimit?: number;
+	lockHook?: (phase: "published" | "acquired", listId: string) => Promise<void>;
+}
+
+interface LockContender {
+	version: 1;
+	nonce: string;
+	pid: number;
+	host: string;
+	choosing: boolean;
+	ticket: number;
 }
 
 export class TodoPersistenceError extends Error {
@@ -109,11 +117,13 @@ function assertDocument(value: unknown, path: string, expectedId: string): asser
 export class FileTodoStore {
 	private readonly rootDir: string;
 	private readonly revisionSnapshotLimit: number;
+	private readonly lockHook: FileTodoStoreOptions["lockHook"];
 	private diagnostic: string | undefined;
 
 	constructor(rootDir: string, options: FileTodoStoreOptions = {}) {
 		this.rootDir = rootDir;
 		this.revisionSnapshotLimit = options.revisionSnapshotLimit ?? REVISION_SNAPSHOT_LIMIT;
+		this.lockHook = options.lockHook;
 		if (!Number.isInteger(this.revisionSnapshotLimit) || this.revisionSnapshotLimit < 1) {
 			throw new TodoValidationError("Revision snapshot limit must be a positive integer");
 		}
@@ -535,65 +545,47 @@ export class FileTodoStore {
 
 	private async withLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
 		validateListId(id);
-		await mkdir(join(this.rootDir, ".locks"), { recursive: true });
-		const lockPath = join(this.rootDir, ".locks", `${id}.lock`);
-		const ownerPath = join(lockPath, "owner.json");
+		const lockDir = join(this.rootDir, ".locks", id);
+		await mkdir(lockDir, { recursive: true });
 		const nonce = randomUUID();
+		const contenderPath = join(lockDir, `${nonce}.json`);
+		const contender: LockContender = {
+			version: 1,
+			nonce,
+			pid: process.pid,
+			host: hostname(),
+			choosing: true,
+			ticket: 0,
+		};
 		const deadline = Date.now() + LOCK_TIMEOUT_MS;
-		while (true) {
-			if (await pathExists(`${lockPath}.reaper`)) {
-				await this.reapStaleLock(lockPath);
-				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
-				await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
-				continue;
-			}
-			try {
-				await mkdir(lockPath);
-				await this.atomicWrite(
-					ownerPath,
-					JSON.stringify({ pid: process.pid, host: hostname(), nonce, createdAt: new Date().toISOString() }),
-				);
-				if ((await lockNonce(ownerPath)) === nonce && !(await pathExists(`${lockPath}.reaper`))) break;
-				await quarantineOwnedDirectory(lockPath, nonce);
-			} catch (error) {
-				if (!isAlreadyExists(error)) throw error;
-				if (await this.reapStaleLock(lockPath)) {
-					continue;
-				}
-				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
-				await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
-			}
-		}
+		await this.atomicWrite(contenderPath, JSON.stringify(contender));
 		try {
+			await this.lockHook?.("published", id);
+			const published = await readLockContenders(lockDir);
+			contender.choosing = false;
+			contender.ticket = Math.max(0, ...published.valid.map((candidate) => candidate.ticket)) + 1;
+			await this.atomicWrite(contenderPath, JSON.stringify(contender));
+			while (true) {
+				const contenders = await readLockContenders(lockDir);
+				for (const stalePath of contenders.stalePaths) await rm(stalePath, { force: true });
+				if (contenders.malformed || !contenders.valid.some((candidate) => candidate.nonce === nonce)) {
+					throw new TodoPersistenceError(`Todo list "${id}" lock state is malformed`);
+				}
+				const blocked = contenders.valid.some(
+					(candidate) =>
+						candidate.nonce !== nonce &&
+						(candidate.choosing ||
+							candidate.ticket < contender.ticket ||
+							(candidate.ticket === contender.ticket && candidate.nonce < nonce)),
+				);
+				if (!blocked) break;
+				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
+				await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+			}
+			await this.lockHook?.("acquired", id);
 			return await operation();
 		} finally {
-			await quarantineOwnedDirectory(lockPath, nonce);
-		}
-	}
-
-	private async reapStaleLock(lockPath: string): Promise<boolean> {
-		if (!(await isStaleLock(lockPath, join(lockPath, "owner.json")))) return false;
-		const reaperPath = `${lockPath}.reaper`;
-		const reaperOwnerPath = join(reaperPath, "owner.json");
-		const nonce = randomUUID();
-		while (true) {
-			try {
-				await mkdir(reaperPath);
-				await this.atomicWrite(
-					reaperOwnerPath,
-					JSON.stringify({ pid: process.pid, host: hostname(), nonce, createdAt: new Date().toISOString() }),
-				);
-				break;
-			} catch (error) {
-				if (!isAlreadyExists(error)) throw error;
-				if (!(await quarantineStaleDirectory(reaperPath))) return false;
-			}
-		}
-		try {
-			if ((await lockNonce(reaperOwnerPath)) !== nonce) return false;
-			return await quarantineStaleDirectory(lockPath, async () => (await lockNonce(reaperOwnerPath)) === nonce);
-		} finally {
-			await quarantineOwnedDirectory(reaperPath, nonce);
+			await rm(contenderPath, { force: true });
 		}
 	}
 
@@ -621,10 +613,6 @@ function isNotFound(error: unknown): boolean {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-function isAlreadyExists(error: unknown): boolean {
-	return error instanceof Error && "code" in error && error.code === "EEXIST";
-}
-
 function parseRevisionSnapshotName(name: string): number | undefined {
 	const match = /^(\d+)\.json$/.exec(name);
 	if (!match) return undefined;
@@ -632,66 +620,46 @@ function parseRevisionSnapshotName(name: string): number | undefined {
 	return isPositiveInteger(revision) ? revision : undefined;
 }
 
-async function pathExists(path: string): Promise<boolean> {
-	try {
-		await stat(path);
-		return true;
-	} catch (error) {
-		if (isNotFound(error)) return false;
-		throw error;
+async function readLockContenders(lockDir: string): Promise<{
+	valid: LockContender[];
+	stalePaths: string[];
+	malformed: boolean;
+}> {
+	const valid: LockContender[] = [];
+	const stalePaths: string[] = [];
+	let malformed = false;
+	for (const name of await readdir(lockDir)) {
+		if (!name.endsWith(".json")) continue;
+		const path = join(lockDir, name);
+		try {
+			const value: unknown = JSON.parse(await readFile(path, "utf8"));
+			if (!isLockContender(value, name.slice(0, -".json".length))) {
+				malformed = true;
+				continue;
+			}
+			if (value.host === hostname() && !isProcessAlive(value.pid)) stalePaths.push(path);
+			else valid.push(value);
+		} catch (error) {
+			if (!isNotFound(error)) malformed = true;
+		}
 	}
+	return { valid, stalePaths, malformed };
 }
 
-async function lockNonce(ownerPath: string): Promise<string | undefined> {
-	try {
-		const owner: unknown = JSON.parse(await readFile(ownerPath, "utf8"));
-		if (typeof owner !== "object" || owner === null) return undefined;
-		const nonce = (owner as Record<string, unknown>).nonce;
-		return typeof nonce === "string" ? nonce : undefined;
-	} catch (error) {
-		if (isNotFound(error) || error instanceof SyntaxError) return undefined;
-		throw error;
-	}
-}
-
-// Delete only an isolated directory whose owner still matches; a replacement at the canonical path is untouched.
-async function quarantineOwnedDirectory(path: string, expectedNonce: string): Promise<boolean> {
-	const quarantine = `${path}.quarantine.${randomUUID()}`;
-	try {
-		await rename(path, quarantine);
-	} catch (error) {
-		if (isNotFound(error)) return false;
-		throw error;
-	}
-	if ((await lockNonce(join(quarantine, "owner.json"))) !== expectedNonce) return false;
-	await rm(quarantine, { recursive: true, force: true });
-	return true;
-}
-
-async function quarantineStaleDirectory(
-	path: string,
-	canDelete: () => Promise<boolean> = async () => true,
-): Promise<boolean> {
-	const ownerPath = join(path, "owner.json");
-	if (!(await isStaleLock(path, ownerPath))) return false;
-	const expectedNonce = await lockNonce(ownerPath);
-	const quarantine = `${path}.quarantine.${randomUUID()}`;
-	try {
-		await rename(path, quarantine);
-	} catch (error) {
-		if (isNotFound(error)) return false;
-		throw error;
-	}
-	const quarantinedOwnerPath = join(quarantine, "owner.json");
-	const quarantinedNonce = await lockNonce(quarantinedOwnerPath);
-	if (
-		quarantinedNonce !== expectedNonce ||
-		!(await isStaleLock(quarantine, quarantinedOwnerPath)) ||
-		!(await canDelete())
-	)
-		return false;
-	await rm(quarantine, { recursive: true, force: true });
-	return true;
+function isLockContender(value: unknown, expectedNonce: string): value is LockContender {
+	if (typeof value !== "object" || value === null) return false;
+	const contender = value as Record<string, unknown>;
+	return (
+		contender.version === 1 &&
+		contender.nonce === expectedNonce &&
+		typeof contender.pid === "number" &&
+		Number.isInteger(contender.pid) &&
+		typeof contender.host === "string" &&
+		typeof contender.choosing === "boolean" &&
+		typeof contender.ticket === "number" &&
+		Number.isInteger(contender.ticket) &&
+		contender.ticket >= 0
+	);
 }
 
 function validateListId(id: string): void {
@@ -771,30 +739,6 @@ function assertSnapshot(value: unknown, path: string): void {
 	}
 	for (const task of snapshotValue.tasks) assertTask(task, snapshotValue.revision, path);
 	for (const tombstone of snapshotValue.tombstones) assertTombstone(tombstone, snapshotValue.revision, path);
-}
-
-async function isStaleLock(lockPath: string, ownerPath: string): Promise<boolean> {
-	try {
-		const raw: unknown = JSON.parse(await readFile(ownerPath, "utf8"));
-		if (typeof raw !== "object" || raw === null) return lockAgeExceeds(lockPath, FOREIGN_LOCK_STALE_MS);
-		const owner = raw as Record<string, unknown>;
-		if (owner.host === hostname() && typeof owner.pid === "number" && Number.isInteger(owner.pid)) {
-			return !isProcessAlive(owner.pid);
-		}
-		return lockAgeExceeds(lockPath, FOREIGN_LOCK_STALE_MS);
-	} catch (error) {
-		if (!isNotFound(error) && !(error instanceof SyntaxError)) throw error;
-		return lockAgeExceeds(lockPath, MISSING_LOCK_OWNER_STALE_MS);
-	}
-}
-
-async function lockAgeExceeds(lockPath: string, ageMs: number): Promise<boolean> {
-	try {
-		return Date.now() - (await stat(lockPath)).mtimeMs > ageMs;
-	} catch (error) {
-		if (isNotFound(error)) return false;
-		throw error;
-	}
 }
 
 function isProcessAlive(pid: number): boolean {

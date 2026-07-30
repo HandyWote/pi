@@ -141,6 +141,38 @@ describe("FileTodoStore", () => {
 		expect(["agent-1", "agent-2", "agent-3"]).toContain(claimed?.owner);
 	});
 
+	it("keeps a fully published choosing contender exclusive while initialization is paused", async () => {
+		await store.create("Pause lock initialization", [task("A")], "list-1");
+		let markPublished: (() => void) | undefined;
+		const published = new Promise<void>((resolve) => {
+			markPublished = resolve;
+		});
+		let resumeInitialization: (() => void) | undefined;
+		const resume = new Promise<void>((resolve) => {
+			resumeInitialization = resolve;
+		});
+		let shouldPause = true;
+		const pausedStore = new FileTodoStore(directory, {
+			async lockHook(phase) {
+				if (phase !== "published" || !shouldPause) return;
+				shouldPause = false;
+				markPublished?.();
+				await resume;
+			},
+		});
+		const first = pausedStore.claim("list-1", "A", "agent-1");
+		await published;
+		let secondSettled = false;
+		const second = store.claim("list-1", "A", "agent-2").finally(() => {
+			secondSettled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(secondSettled).toBe(false);
+		resumeInitialization?.();
+		const results = await Promise.allSettled([first, second]);
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+	});
+
 	it("reconciles orphaned owners while preserving owners with live evidence", async () => {
 		await store.create("Recover owners", [task("A"), task("B")], "list-1");
 		await store.claim("list-1", "A", "session-1");

@@ -60,7 +60,7 @@ Claims use an owner, opaque token, task revision, and a cross-process file lock.
 
 ## Persistence
 
-Lists are stored under `~/.pi/agent/todo/lists` by default. Set `PI_AGENT_DIR` to relocate all Pi agent data. Writes use temporary files, atomic rename, file and directory sync, backups, and recoverable process-owned locks. The main document keeps 20 recent revisions and up to 1000 per-revision snapshots; branch points older than that retention window expire.
+Lists are stored under `~/.pi/agent/todo/lists` by default. Set `PI_AGENT_DIR` to relocate all Pi agent data. Writes use temporary files, atomic rename, file and directory sync, and backups. Cross-process exclusion uses complete, uniquely named Lamport bakery contenders; locally crashed contenders are removed by their exact nonce path, while unverifiable cross-host contenders are never reaped. The main document keeps 20 recent revisions and up to 1000 per-revision snapshots; branch points older than that retention window expire.
 
 The active list and revision are recorded in session custom entries. Reload and resume restore the list. Forks and historical session-tree navigation clone the visible revision, so branches do not mutate one another. Live claims are not inherited by a fork. After compaction, a compact active digest is inserted into model context independently of the widget.
 

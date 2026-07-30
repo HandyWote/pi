@@ -23,7 +23,6 @@ import { TODO_STATUSES } from "./types.ts";
 const LOCK_WAIT_MS = 25;
 const LOCK_TIMEOUT_MS = 3000;
 const FOREIGN_LOCK_STALE_MS = 30_000;
-const HISTORY_LIMIT = 200;
 
 export class TodoPersistenceError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
@@ -94,6 +93,10 @@ function assertDocument(value: unknown, path: string, expectedId: string): asser
 	for (const task of record.tasks) assertTask(task, record.revision, path);
 	for (const tombstone of record.tombstones) assertTombstone(tombstone, record.revision, path);
 	for (const historical of record.history) assertSnapshot(historical, path);
+	const taskIds = new Set(record.tasks.map((task) => (task as Record<string, unknown>).id));
+	if (record.tombstones.some((entry) => taskIds.has((entry as Record<string, unknown>).id))) {
+		throw new TodoPersistenceError(`Task and tombstone ids overlap in ${path}`);
+	}
 }
 
 export class FileTodoStore {
@@ -154,11 +157,22 @@ export class FileTodoStore {
 	}
 
 	async read(id: string, revision?: number): Promise<TodoListDocument> {
-		const document = await this.readDocument(id);
-		if (revision === undefined || revision === document.revision) return cloneDocument(document);
-		const historical = document.history.find((entry) => entry.revision === revision);
-		if (!historical) throw new TodoValidationError(`Todo list "${id}" has no revision ${revision}`);
-		return { ...historical, version: 1, id, history: document.history.map((entry) => ({ ...entry })) };
+		return this.withLock(id, async () => {
+			const document = await this.readDocument(id);
+			if (revision === undefined || revision === document.revision) return cloneDocument(document);
+			const historical = document.history.find((entry) => entry.revision === revision);
+			if (!historical) throw new TodoValidationError(`Todo list "${id}" has no revision ${revision}`);
+			return {
+				...historical,
+				version: 1,
+				id,
+				history: document.history.map((entry) => ({
+					...entry,
+					tasks: entry.tasks.map(cloneTask),
+					tombstones: entry.tombstones.map((tombstone) => ({ ...tombstone })),
+				})),
+			};
+		});
 	}
 
 	async view(id: string, revision?: number): Promise<TodoListView> {
@@ -234,6 +248,9 @@ export class FileTodoStore {
 			}
 			if (patch.status === "in_progress" && task.status !== "in_progress") {
 				throw new TodoValidationError(`Todo "${taskId}" must enter in_progress through todo_claim`);
+			}
+			if (patch.status === "completed" && task.status !== "in_progress") {
+				throw new TodoValidationError(`Todo "${taskId}" must be claimed before completion`);
 			}
 			if (task.status === "in_progress" && patch.status === "pending") {
 				throw new TodoValidationError(`Todo "${taskId}" must return to pending through todo_release`);
@@ -380,8 +397,6 @@ export class FileTodoStore {
 			const now = new Date().toISOString();
 			if (operation(document, now) === false) return cloneDocument(document);
 			document.history.push(previous);
-			if (document.history.length > HISTORY_LIMIT)
-				document.history.splice(0, document.history.length - HISTORY_LIMIT);
 			document.revision++;
 			document.updated_at = now;
 			await this.writeDocument(document);
@@ -466,8 +481,7 @@ export class FileTodoStore {
 				break;
 			} catch (error) {
 				if (!isAlreadyExists(error)) throw error;
-				if (await isStaleLock(lockPath, ownerPath)) {
-					await rm(lockPath, { recursive: true, force: true });
+				if (await this.reapStaleLock(lockPath, ownerPath)) {
 					continue;
 				}
 				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
@@ -485,6 +499,23 @@ export class FileTodoStore {
 			} catch {
 				// A missing or unreadable owner is left for bounded stale-lock recovery.
 			}
+		}
+	}
+
+	private async reapStaleLock(lockPath: string, ownerPath: string): Promise<boolean> {
+		const reaperPath = `${lockPath}.reaper`;
+		try {
+			await mkdir(reaperPath);
+		} catch (error) {
+			if (isAlreadyExists(error)) return false;
+			throw error;
+		}
+		try {
+			if (!(await isStaleLock(lockPath, ownerPath))) return false;
+			await rm(lockPath, { recursive: true, force: true });
+			return true;
+		} finally {
+			await rm(reaperPath, { recursive: true, force: true });
 		}
 	}
 
@@ -553,6 +584,9 @@ function assertTask(value: unknown, listRevision: number, path: string): asserts
 	}
 	const hasOwner = typeof task.owner === "string" && task.owner.length > 0;
 	const hasToken = typeof task.claim_token === "string" && task.claim_token.length > 0;
+	if ((task.owner !== undefined && !hasOwner) || (task.claim_token !== undefined && !hasToken)) {
+		throw new TodoPersistenceError(`Malformed task ownership in ${path}`);
+	}
 	if (
 		(task.status === "in_progress" && (!hasOwner || !hasToken)) ||
 		(task.status !== "in_progress" && (hasOwner || hasToken))

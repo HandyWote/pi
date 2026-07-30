@@ -145,6 +145,7 @@ describe("FileTodoStore", () => {
 
 	it("has only three public states and completes without review or retry state", async () => {
 		await store.create("Finish directly", [task("A")], "list-1");
+		await expect(store.update("list-1", "A", { status: "completed" })).rejects.toThrow("claimed before completion");
 		const claim = await store.claim("list-1", "A", "main");
 		const completed = await store.update("list-1", "A", {
 			status: "completed",

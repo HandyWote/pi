@@ -1,10 +1,16 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getBlockedTasks, getReadyTasks, validateDefinitions } from "../src/scheduler.ts";
 import { FileTodoStore, TodoPersistenceError } from "../src/store.ts";
 import type { TodoDefinition, TodoTask } from "../src/types.ts";
+
+const execFileAsync = promisify(execFile);
+const CLAIM_WORKER = new URL("./fixtures/claim-worker.ts", import.meta.url);
+const CRASH_LOCK_WORKER = new URL("./fixtures/crash-lock-worker.ts", import.meta.url);
 
 function task(id: string, depends_on: string[] = []): TodoDefinition {
 	return {
@@ -19,7 +25,15 @@ function task(id: string, depends_on: string[] = []): TodoDefinition {
 describe("dependency graph", () => {
 	it("selects every independent ready task without a wave barrier", () => {
 		const tasks: TodoTask[] = [
-			{ ...task("A"), status: "in_progress", owner: "main", claim_token: "a", created_at: "x", updated_at: "x", revision: 1 },
+			{
+				...task("A"),
+				status: "in_progress",
+				owner: "main",
+				claim_token: "a",
+				created_at: "x",
+				updated_at: "x",
+				revision: 1,
+			},
 			{ ...task("B"), status: "pending", created_at: "x", updated_at: "x", revision: 1 },
 			{ ...task("C", ["A"]), status: "pending", created_at: "x", updated_at: "x", revision: 1 },
 		];
@@ -29,10 +43,8 @@ describe("dependency graph", () => {
 
 	it("rejects duplicates, unknown dependencies, and cycles", () => {
 		expect(() => validateDefinitions([task("A"), task("A")])).toThrow('Duplicate todo id "A"');
-		expect(() => validateDefinitions([task("A", ["missing"])]))
-			.toThrow('depends on unknown todo "missing"');
-		expect(() => validateDefinitions([task("A", ["B"]), task("B", ["A"])]))
-			.toThrow("contains a cycle");
+		expect(() => validateDefinitions([task("A", ["missing"])])).toThrow('depends on unknown todo "missing"');
+		expect(() => validateDefinitions([task("A", ["B"]), task("B", ["A"])])).toThrow("contains a cycle");
 	});
 });
 
@@ -71,12 +83,11 @@ describe("FileTodoStore", () => {
 		expect(list.history.length).toBe(3);
 	});
 
-	it("claims atomically and releases only matching ownership", async () => {
+	it("claims atomically across processes and releases only matching ownership", async () => {
 		await store.create("Parallel work", [task("A")], "list-1");
-		const competingStore = new FileTodoStore(directory);
 		const results = await Promise.allSettled([
-			store.claim("list-1", "A", "agent-1", 1),
-			competingStore.claim("list-1", "A", "agent-2", 1),
+			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-1"]),
+			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-2"]),
 		]);
 
 		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -84,13 +95,52 @@ describe("FileTodoStore", () => {
 		const claimed = await store.read("list-1");
 		const claimedTask = claimed.tasks[0];
 		expect(claimedTask?.status).toBe("in_progress");
-		await expect(store.release("list-1", "A", "wrong", claimedTask?.claim_token ?? "")).rejects.toThrow(
-			"not owned",
-		);
+		await expect(store.release("list-1", "A", "wrong", claimedTask?.claim_token ?? "")).rejects.toThrow("not owned");
 		await store.release("list-1", "A", claimedTask?.owner ?? "", claimedTask?.claim_token ?? "");
 		const released = (await store.read("list-1")).tasks[0];
 		expect(released?.status).toBe("pending");
 		expect(released?.owner).toBeUndefined();
+	});
+
+	it("requires claims for in_progress and a matching token for claimed updates", async () => {
+		await store.create("Protected work", [task("A")], "list-1");
+		await expect(store.update("list-1", "A", { owner: "attacker", status: "in_progress" })).rejects.toThrow(
+			"through todo_claim",
+		);
+		const claim = await store.claim("list-1", "A", "agent-1");
+		await expect(store.update("list-1", "A", { status: "completed" })).rejects.toThrow("current claim token");
+		await expect(store.update("list-1", "A", { owner: "agent-2", claim_token: claim.claim_token })).rejects.toThrow(
+			"ownership can change only",
+		);
+		await store.update("list-1", "A", { status: "completed", claim_token: claim.claim_token });
+		expect((await store.read("list-1")).tasks[0]?.status).toBe("completed");
+	});
+
+	it("transfers ownership idempotently and rejects stale lifecycle tokens", async () => {
+		await store.create("Delegate safely", [task("A")], "list-1");
+		const initial = await store.claim("list-1", "A", "main");
+		const transferred = await store.transfer("list-1", "A", "agent-1", initial.claim_token);
+		const transferredRevision = transferred.revision;
+		expect(transferred.tasks[0]?.owner).toBe("agent-1");
+		expect((await store.transfer("list-1", "A", "agent-1", initial.claim_token)).revision).toBe(transferredRevision);
+		await store.release("list-1", "A", "agent-1", initial.claim_token);
+		const current = await store.claim("list-1", "A", "agent-2");
+		await expect(store.transfer("list-1", "A", "stale-agent", initial.claim_token)).rejects.toThrow("does not match");
+		expect((await store.read("list-1")).tasks[0]).toMatchObject({
+			owner: "agent-2",
+			claim_token: current.claim_token,
+		});
+	});
+
+	it("reclaims a lock left by a dead process", async () => {
+		await store.create("Recover lock", [task("A")], "list-1");
+		await execFileAsync(process.execPath, [CRASH_LOCK_WORKER.pathname, directory]);
+		const claim = await store.claim("list-1", "A", "main");
+		expect(claim.task.owner).toBe("main");
+	});
+
+	it("rejects list path traversal before creating a lock", async () => {
+		await expect(store.create("Escape", [task("A")], "../escape")).rejects.toThrow("Invalid todo list id");
 	});
 
 	it("has only three public states and completes without review or retry state", async () => {
@@ -121,6 +171,27 @@ describe("FileTodoStore", () => {
 		expect((await store.read("source")).tasks.map((item) => item.id)).toEqual(["A", "B", "C"]);
 	});
 
+	it("does not inherit live claims into a fork or overwrite an existing target", async () => {
+		await store.create("Fork safely", [task("A")], "source");
+		await store.claim("source", "A", "agent-1");
+		await store.create("Existing", [task("B")], "target");
+		await expect(store.clone("source", undefined, "target")).rejects.toThrow("already exists");
+		const fork = await store.clone("source", undefined, "fork");
+		expect(fork.tasks[0]?.status).toBe("pending");
+		expect(fork.tasks[0]?.owner).toBeUndefined();
+		expect(fork.tasks[0]?.claim_token).toBeUndefined();
+	});
+
+	it("updates dependent revisions on deletion and forbids tombstone id reuse", async () => {
+		await store.create("Delete safely", [task("A"), task("B", ["A"])], "list-1");
+		const before = (await store.read("list-1")).tasks.find((item) => item.id === "B");
+		const deleted = await store.delete("list-1", "A");
+		const after = deleted.tasks.find((item) => item.id === "B");
+		expect(after?.revision).toBeGreaterThan(before?.revision ?? 0);
+		expect(after?.updated_at).not.toBe(before?.updated_at);
+		await expect(store.add("list-1", [task("A")])).rejects.toThrow("id cannot be reused");
+	});
+
 	it("recovers a corrupt primary from backup with a diagnostic", async () => {
 		await store.create("Recover", [task("A")], "list-1");
 		await store.add("list-1", [task("B")]);
@@ -129,12 +200,20 @@ describe("FileTodoStore", () => {
 		const recovered = await store.read("list-1");
 		expect(recovered.tasks.map((item) => item.id)).toEqual(["A"]);
 		expect(store.takeDiagnostic()).toContain("Recovered todo list");
-		expect(JSON.parse(await readFile(join(directory, "list-1", "tasks.json.bak"), "utf8"))).toBeDefined();
+		expect(JSON.parse(await readFile(join(directory, "list-1", "tasks.json"), "utf8"))).toBeDefined();
+		await writeFile(join(directory, "list-1", "tasks.json"), "{partial-again", "utf8");
+		expect((await store.read("list-1")).tasks.map((item) => item.id)).toEqual(["A"]);
 	});
 
-	it("reports corrupt persistence when no backup exists", async () => {
+	it("rejects malformed task state and a document id that does not match its locked directory", async () => {
 		await store.create("Corrupt", [task("A")], "list-1");
-		await writeFile(join(directory, "list-1", "tasks.json"), "{partial", "utf8");
+		await store.add("list-1", [task("B")]);
+		const malformed = await store.read("list-1");
+		malformed.id = "other";
+		malformed.tasks[0]!.status = "invalid" as TodoTask["status"];
+		const serialized = JSON.stringify(malformed);
+		await writeFile(join(directory, "list-1", "tasks.json"), serialized, "utf8");
+		await writeFile(join(directory, "list-1", "tasks.json.bak"), serialized, "utf8");
 		await expect(store.read("list-1")).rejects.toBeInstanceOf(TodoPersistenceError);
 	});
 });

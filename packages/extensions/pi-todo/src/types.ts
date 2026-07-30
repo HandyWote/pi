@@ -80,7 +80,7 @@ export interface AgentLifecycleEvent {
 	eventId: string;
 	agentId: string;
 	parentSessionId: string;
-	status: "started" | "running" | "completed" | "failed" | "stopped" | "interrupted";
+	status: "queued" | "started" | "running" | "completed" | "failed" | "stopped" | "interrupted";
 	timestamp: string;
 	metadata: Record<string, unknown>;
 }

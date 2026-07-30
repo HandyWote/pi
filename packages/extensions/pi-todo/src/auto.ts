@@ -7,7 +7,7 @@ import type {
 	SessionMessageEntry,
 } from "@handy_wote/pi-coding-agent";
 import { buildTodoPlanMessageContent } from "./plan-message.ts";
-import type { TodoStore } from "./store.ts";
+import type { TodoRuntime } from "./runtime.ts";
 
 const RECENT_CONTEXT_ENTRY_LIMIT = 12;
 const RECENT_CONTEXT_CHAR_LIMIT = 12000;
@@ -16,8 +16,9 @@ const EXECUTION_INTENT_PATTERNS = [
 	/按(这个|此|上面|上述|前面)(计划|方案)?(执行|做|实现|推进)/u,
 	/按上面的做/u,
 	/(开始|继续)(实现|执行|推进|做)/u,
+	/^\s*继续(?:吧|执行|做|推进|实现)?[。.!！]?\s*$/u,
 	/\b(go ahead|proceed|execute this plan|implement the plan|start implementation|start implementing)\b/i,
-	/\b(continue implementation|continue implementing|continue with this|do it|ship it)\b/i,
+	/\b(continue|continue implementation|continue implementing|continue with this|do it|ship it)\b/i,
 ];
 
 const NON_EXECUTION_PATTERNS = [
@@ -27,11 +28,7 @@ const NON_EXECUTION_PATTERNS = [
 	/\b(no|without)\s+(code\s+)?(changes?|modifications?|edits?)\b/i,
 	/\b(plan only|proposal only|no implementation)\b/i,
 	/^(?:\s*)(?:please\s+)?(?:review|investigate|audit|analy[sz]e|inspect|look into|check)\b/i,
-	/\b(?:first|for now|only|just)\b.{0,24}\b(?:review|investigate|audit|analy[sz]e|inspect|check)\b/i,
-	/\b(?:go ahead|proceed|continue|do it)\b.{0,40}\b(?:review|investigate|audit|analy[sz]e|inspect|check)\b/i,
-	/\b(?:review|investigate|audit|analy[sz]e|inspect|check)\b.{0,40}\b(?:go ahead|proceed|continue|do it)\b/i,
 	/^(?:\s*)(?:先)?(?:调查|确认现状|审查|检查|分析)/u,
-	/(?:继续|开始|按.{0,8})(?:调查|确认现状|审查|检查|分析)/u,
 	/(出|给|制定|写).{0,12}(执行)?(计划|方案)/u,
 	/\b(?:make|write|draft|create|give me|propose)\b.{0,30}\b(plan|proposal|approach)\b/i,
 ];
@@ -43,6 +40,38 @@ const PI_TODO_PLAN_PATTERN = /\[PI TODO PLAN\]/;
 const TODO_TASK_PATTERN = /(?:^|\n)\s*T\d+[:.)\s-]/i;
 const PLAN_LIST_LINE_PATTERN = /(?:^|\n)\s*(?:[-*]|\d+[.)]|\[[ x]\])\s+\S/g;
 
+export function registerTodoAutoTrigger(pi: ExtensionAPI, runtime: TodoRuntime): void {
+	pi.on("before_agent_start", async (event, ctx): Promise<BeforeAgentStartEventResult | undefined> => {
+		if (!isExplicitlyNonExecution(event.prompt) && hasExecutionIntent(event.prompt)) {
+			const digest = await runtime.digest();
+			if (digest) {
+				return { message: { customType: "pi-todo-continuation", content: digest, display: false } };
+			}
+		}
+
+		const content = buildAutoPlan(event, ctx);
+		if (!content || (await runtime.view())) return undefined;
+		return { message: { customType: "pi-todo-plan", content, display: true } };
+	});
+}
+
+function buildAutoPlan(event: BeforeAgentStartEvent, ctx: ExtensionContext): string | undefined {
+	if (isExplicitlyNonExecution(event.prompt) || !hasExecutionIntent(event.prompt)) return undefined;
+	const currentPromptHasPlan = hasLikelyPlan(event.prompt);
+	const contextText = currentPromptHasPlan ? "" : recentContextText(ctx);
+	if (!currentPromptHasPlan && !hasLikelyPlan(contextText)) return undefined;
+	const parts = [`Current user execution request:\n${event.prompt.trim()}`];
+	parts.push(
+		currentPromptHasPlan
+			? "The current request contains the plan to execute."
+			: `Recent context containing the existing plan:\n${contextText}`,
+	);
+	return buildTodoPlanMessageContent({
+		source: currentPromptHasPlan ? "current prompt" : "recent context",
+		plan: parts.join("\n\n"),
+	});
+}
+
 function hasExecutionIntent(prompt: string): boolean {
 	return EXECUTION_INTENT_PATTERNS.some((pattern) => pattern.test(prompt));
 }
@@ -52,25 +81,26 @@ function isExplicitlyNonExecution(prompt: string): boolean {
 }
 
 function hasLikelyPlan(text: string): boolean {
-	const listLineCount = countPlanListLines(text);
-	if (PI_TODO_PLAN_PATTERN.test(text)) return true;
-	if (PLAN_HEADING_PATTERN.test(text)) return true;
-	if (GENERIC_PLAN_HEADING_PATTERN.test(text) && listLineCount >= 2) return true;
-	if (CHINESE_PLAN_PATTERN.test(text) && listLineCount >= 2) return true;
-	if (TODO_TASK_PATTERN.test(text)) return true;
-	return listLineCount >= 3;
+	const listLineCount = [...text.matchAll(PLAN_LIST_LINE_PATTERN)].length;
+	return (
+		PI_TODO_PLAN_PATTERN.test(text) ||
+		PLAN_HEADING_PATTERN.test(text) ||
+		(GENERIC_PLAN_HEADING_PATTERN.test(text) && listLineCount >= 2) ||
+		(CHINESE_PLAN_PATTERN.test(text) && listLineCount >= 2) ||
+		TODO_TASK_PATTERN.test(text) ||
+		listLineCount >= 3
+	);
 }
 
-function countPlanListLines(text: string): number {
-	return [...text.matchAll(PLAN_LIST_LINE_PATTERN)].length;
-}
-
-function messageText(message: SessionMessageEntry["message"]): string {
-	if (!("content" in message)) return "";
-	const content = message.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+function recentContextText(ctx: ExtensionContext): string {
+	const text = ctx.sessionManager
+		.buildContextEntries()
+		.slice(-RECENT_CONTEXT_ENTRY_LIMIT)
+		.map(entryText)
+		.map((part) => part.trim())
+		.filter(Boolean)
+		.join("\n\n---\n\n");
+	return text.length > RECENT_CONTEXT_CHAR_LIMIT ? text.slice(-RECENT_CONTEXT_CHAR_LIMIT) : text;
 }
 
 function entryText(entry: SessionEntry): string {
@@ -78,8 +108,9 @@ function entryText(entry: SessionEntry): string {
 		case "message":
 			return messageText(entry.message);
 		case "custom_message":
-			if (typeof entry.content === "string") return entry.content;
-			return entry.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+			return typeof entry.content === "string"
+				? entry.content
+				: entry.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 		case "compaction":
 		case "branch_summary":
 			return entry.summary;
@@ -88,54 +119,9 @@ function entryText(entry: SessionEntry): string {
 	}
 }
 
-function recentContextText(ctx: ExtensionContext): string {
-	const entries = ctx.sessionManager.buildContextEntries().slice(-RECENT_CONTEXT_ENTRY_LIMIT);
-	const text = entries
-		.map(entryText)
-		.map((textPart) => textPart.trim())
-		.filter((textPart) => textPart.length > 0)
-		.join("\n\n---\n\n");
-	return text.length > RECENT_CONTEXT_CHAR_LIMIT ? text.slice(-RECENT_CONTEXT_CHAR_LIMIT) : text;
-}
-
-function hasActiveTodoGraph(store: TodoStore): boolean {
-	if (!store.hasPlan()) return false;
-	const summary = store.getSummary();
-	return summary.done < summary.total;
-}
-
-function buildAutoPlan(event: BeforeAgentStartEvent, ctx: ExtensionContext, store: TodoStore): string | undefined {
-	if (hasActiveTodoGraph(store)) return undefined;
-	if (isExplicitlyNonExecution(event.prompt)) return undefined;
-	if (!hasExecutionIntent(event.prompt)) return undefined;
-
-	const currentPromptHasPlan = hasLikelyPlan(event.prompt);
-	const contextText = currentPromptHasPlan ? "" : recentContextText(ctx);
-	if (!currentPromptHasPlan && !hasLikelyPlan(contextText)) return undefined;
-
-	const parts = [`Current user execution request:\n${event.prompt.trim()}`];
-	if (currentPromptHasPlan) {
-		parts.push("The current request contains the plan to execute.");
-	} else {
-		parts.push(`Recent context containing the existing plan:\n${contextText}`);
-	}
-
-	return buildTodoPlanMessageContent({
-		source: currentPromptHasPlan ? "current prompt" : "recent context",
-		plan: parts.join("\n\n"),
-	});
-}
-
-export function registerTodoAutoTrigger(pi: ExtensionAPI, store: TodoStore): void {
-	pi.on("before_agent_start", (event, ctx): BeforeAgentStartEventResult | undefined => {
-		const content = buildAutoPlan(event, ctx, store);
-		if (!content) return undefined;
-		return {
-			message: {
-				customType: "pi-todo-plan",
-				content,
-				display: true,
-			},
-		};
-	});
+function messageText(message: SessionMessageEntry["message"]): string {
+	if (!("content" in message)) return "";
+	if (typeof message.content === "string") return message.content;
+	if (!Array.isArray(message.content)) return "";
+	return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }

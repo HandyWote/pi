@@ -82,6 +82,25 @@ function loadAgentsFromDir(
 				diagnostics.push({ filePath, message: `Invalid isolation: ${frontmatter.isolation}` });
 				continue;
 			}
+			if (!body.trim()) {
+				diagnostics.push({ filePath, message: "Agent requires a non-empty system prompt" });
+				continue;
+			}
+			if (frontmatter.model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(frontmatter.model.trim())) {
+				diagnostics.push({ filePath, message: `Invalid model: ${frontmatter.model}` });
+				continue;
+			}
+			if (
+				frontmatter.displayName &&
+				(frontmatter.displayName.length > 80 || /[\r\n]/.test(frontmatter.displayName))
+			) {
+				diagnostics.push({ filePath, message: "Invalid displayName" });
+				continue;
+			}
+			if (frontmatter.color && !/^(#[0-9A-Fa-f]{6}|[A-Za-z][A-Za-z0-9_-]{0,31})$/.test(frontmatter.color)) {
+				diagnostics.push({ filePath, message: `Invalid color: ${frontmatter.color}` });
+				continue;
+			}
 			const tools = frontmatter.tools
 				?.split(",")
 				.map((tool) => tool.trim())
@@ -117,12 +136,25 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		scope === "user" || !projectAgentsDir
 			? { agents: [], diagnostics: [] }
 			: loadAgentsFromDir(projectAgentsDir, "project");
+	const diagnostics = [...user.diagnostics, ...project.diagnostics];
 	const byName = new Map<string, AgentDefinition>();
-	for (const agent of user.agents) byName.set(agent.name, agent);
-	for (const agent of project.agents) byName.set(agent.name, agent);
+	for (const agent of user.agents) {
+		if (byName.has(agent.name))
+			diagnostics.push({ filePath: agent.filePath, message: `Duplicate user agent: ${agent.name}` });
+		else byName.set(agent.name, agent);
+	}
+	const projectNames = new Set<string>();
+	for (const agent of project.agents) {
+		if (projectNames.has(agent.name)) {
+			diagnostics.push({ filePath: agent.filePath, message: `Duplicate project agent: ${agent.name}` });
+			continue;
+		}
+		projectNames.add(agent.name);
+		byName.set(agent.name, agent);
+	}
 	return {
 		agents: [...byName.values()],
-		diagnostics: [...user.diagnostics, ...project.diagnostics],
+		diagnostics,
 		projectAgentsDir,
 	};
 }

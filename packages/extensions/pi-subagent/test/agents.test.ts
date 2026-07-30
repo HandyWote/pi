@@ -44,4 +44,30 @@ describe("discoverAgents", () => {
 		});
 		expect(result.diagnostics).toHaveLength(1);
 	});
+
+	it("reports invalid prompts, display metadata, and same-source duplicates", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-agents-"));
+		tempRoots.push(root);
+		const agentDir = path.join(root, "agent");
+		fs.mkdirSync(path.join(agentDir, "agents"), { recursive: true });
+		fs.writeFileSync(path.join(agentDir, "agents", "one.md"), "---\nname: worker\ndescription: One\n---\nPrompt\n");
+		fs.writeFileSync(path.join(agentDir, "agents", "two.md"), "---\nname: worker\ndescription: Two\n---\nPrompt\n");
+		fs.writeFileSync(path.join(agentDir, "agents", "empty.md"), "---\nname: empty\ndescription: Empty\n---\n");
+		fs.writeFileSync(
+			path.join(agentDir, "agents", "color.md"),
+			"---\nname: color\ndescription: Color\ncolor: '#oops'\n---\nPrompt\n",
+		);
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+
+		const result = discoverAgents(root, "user");
+
+		expect(result.agents.map((agent) => agent.name)).toEqual(["worker"]);
+		expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(
+			expect.arrayContaining([
+				"Agent requires a non-empty system prompt",
+				"Invalid color: #oops",
+				"Duplicate user agent: worker",
+			]),
+		);
+	});
 });

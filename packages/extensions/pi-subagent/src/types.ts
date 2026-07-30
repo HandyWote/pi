@@ -67,6 +67,7 @@ export interface AgentRecord {
 	childSessionPath?: string;
 	transcriptPath: string;
 	worktreePath?: string;
+	cleanupError?: string;
 	pid?: number;
 	exitCode?: number;
 	model?: string;
@@ -76,6 +77,7 @@ export interface AgentRecord {
 	error?: string;
 	activities: AgentActivity[];
 	notified: boolean;
+	lifecycleEventId: string;
 }
 
 export interface AgentLifecycleEvent {
@@ -102,6 +104,12 @@ export interface AgentInvocation {
 export interface StartResult {
 	record: AgentRecord;
 	completion: Promise<AgentRecord>;
+}
+
+export interface AgentOutput {
+	record: AgentRecord;
+	transcript: string;
+	ready: boolean;
 }
 
 export function emptyUsage(): AgentUsage {

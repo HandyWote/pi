@@ -13,7 +13,7 @@
 		"clean": "node -e \"import('node:fs/promises').then(fs=>fs.rm('dist',{recursive:true,force:true}))\"",
 		"build": "tsgo -p tsconfig.build.json",
 		"check": "tsgo --noEmit -p tsconfig.build.json",
-		"test": "node ../../coding-agent/node_modules/vitest/dist/cli.js --run"
+		"test": "node scripts/run-vitest.mjs"
 	},
 	"publishConfig": { "access": "public" },
 	"dependencies": { "typebox": "1.1.38" },

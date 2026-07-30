@@ -30,13 +30,14 @@ function fixture(root: string): AgentRecord {
 		createdAt: now,
 		updatedAt: now,
 		childSessionId: "agent-1",
-		childSessionDir: path.join(root, "sessions"),
+		childSessionDir: path.join(root, "sessions", "agent-1"),
 		transcriptPath: path.join(root, "transcripts", "agent-1.jsonl"),
 		usage: emptyUsage(),
 		toolCount: 0,
 		lastOutput: "",
 		activities: [],
 		notified: false,
+		lifecycleEventId: "event-1",
 	};
 }
 
@@ -64,5 +65,70 @@ describe("AgentRegistry", () => {
 		fs.mkdirSync(path.join(root, "registries"), { recursive: true });
 		fs.writeFileSync(path.join(root, "registries", "parent-1.json"), "not-json");
 		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Cannot load subagent registry");
+	});
+
+	it("serializes concurrent changes and keeps memory unchanged when commit fails", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		const registry = new AgentRegistry(root, "parent-1");
+		const record = fixture(root);
+		const save = registry.save(record);
+		const update = registry.update("agent-1", (entry) => ({
+			...entry,
+			status: "running",
+			updatedAt: new Date().toISOString(),
+		}));
+		await Promise.all([save, update]);
+		expect(registry.get("agent-1")?.status).toBe("running");
+
+		const failing = new AgentRegistry(root, "parent-1", async () => {
+			throw new Error("disk full");
+		});
+		await failing.load();
+		await expect(failing.update("agent-1", (entry) => ({ ...entry, status: "completed" }))).rejects.toThrow(
+			"disk full",
+		);
+		expect(failing.get("agent-1")?.status).toBe("running");
+	});
+
+	it("rejects traversal IDs and persisted paths outside its root", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		expect(() => new AgentRegistry(root, "../escape")).toThrow("Invalid parent session ID");
+		const record = fixture(root);
+		record.transcriptPath = path.join(root, "..", "outside.jsonl");
+		fs.mkdirSync(path.join(root, "registries"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "registries", "parent-1.json"),
+			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [record] }),
+		);
+		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Invalid transcript path");
+	});
+
+	it("rejects incomplete records, duplicate IDs, identity changes, and caller mutation", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		const record = fixture(root);
+		const registry = new AgentRegistry(root, "parent-1");
+		await registry.save(record);
+		record.status = "completed";
+		expect(registry.get("agent-1")?.status).toBe("queued");
+		const returned = registry.get("agent-1");
+		if (returned) returned.status = "failed";
+		expect(registry.get("agent-1")?.status).toBe("queued");
+		await expect(registry.update("agent-1", (entry) => ({ ...entry, agentId: "agent-2" }))).rejects.toThrow();
+
+		const incomplete = { ...fixture(root), usage: undefined };
+		fs.writeFileSync(
+			registry.registryPath,
+			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [incomplete] }),
+		);
+		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Invalid usage");
+
+		fs.writeFileSync(
+			registry.registryPath,
+			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [fixture(root), fixture(root)] }),
+		);
+		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Duplicate agent ID");
 	});
 });

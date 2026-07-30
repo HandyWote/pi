@@ -1,235 +1,400 @@
-import { resolveWaves, TodoValidationError } from "./scheduler.ts";
+import { randomUUID } from "node:crypto";
+import { copyFile, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { getBlockedTasks, getReadyTasks, TodoValidationError, validateDefinitions } from "./scheduler.ts";
 import type {
-	MarkResult,
-	MarkStatus,
-	NextWaveResult,
-	TodoItem,
+	TodoClaim,
+	TodoDefinition,
+	TodoListDocument,
+	TodoListView,
+	TodoSnapshot,
 	TodoStatus,
-	TodoSummary,
-	WriteTodoParams,
+	TodoTask,
 } from "./types.ts";
 
-const ACTIVE_STATUSES = new Set<TodoStatus>(["running", "executed", "fix-needed"]);
-const FAILURE_STATUSES = new Set<TodoStatus>(["failed", "off-target"]);
+const LOCK_WAIT_MS = 25;
+const LOCK_TIMEOUT_MS = 3000;
+const HISTORY_LIMIT = 200;
 
-function cloneItem(item: TodoItem): TodoItem {
+export class TodoPersistenceError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "TodoPersistenceError";
+	}
+}
+
+function cloneTask(task: TodoTask): TodoTask {
 	return {
-		...item,
-		depends_on: [...item.depends_on],
-		acceptance_criteria: [...item.acceptance_criteria],
-		files_in_scope: item.files_in_scope ? [...item.files_in_scope] : undefined,
+		...task,
+		depends_on: [...task.depends_on],
+		acceptance_criteria: task.acceptance_criteria ? [...task.acceptance_criteria] : undefined,
 	};
 }
 
-export class TodoStore {
-	private items = new Map<string, TodoItem>();
-	private agentTasks = new Map<string, string>();
-	private direction = "";
+function snapshot(document: TodoListDocument): TodoSnapshot {
+	return {
+		revision: document.revision,
+		global_direction: document.global_direction,
+		tasks: document.tasks.map(cloneTask),
+		tombstones: document.tombstones.map((entry) => ({ ...entry })),
+		created_at: document.created_at,
+		updated_at: document.updated_at,
+	};
+}
 
-	clear(): void {
-		this.items.clear();
-		this.agentTasks.clear();
-		this.direction = "";
+function cloneDocument(document: TodoListDocument): TodoListDocument {
+	return {
+		...snapshot(document),
+		version: 1,
+		id: document.id,
+		history: document.history.map((entry) => ({
+			...entry,
+			tasks: entry.tasks.map(cloneTask),
+			tombstones: entry.tombstones.map((tombstone) => ({ ...tombstone })),
+		})),
+	};
+}
+
+function definitions(tasks: readonly TodoTask[]): TodoDefinition[] {
+	return tasks.map(({ id, subject, description, active_form, depends_on, acceptance_criteria }) => ({
+		id,
+		subject,
+		description,
+		active_form,
+		depends_on,
+		acceptance_criteria,
+	}));
+}
+
+function assertDocument(value: unknown, path: string): asserts value is TodoListDocument {
+	if (typeof value !== "object" || value === null) throw new TodoPersistenceError(`Invalid todo data in ${path}`);
+	const record = value as Record<string, unknown>;
+	if (record.version !== 1 || typeof record.id !== "string" || !Array.isArray(record.tasks)) {
+		throw new TodoPersistenceError(`Unsupported or malformed todo data in ${path}`);
+	}
+}
+
+export class FileTodoStore {
+	private readonly rootDir: string;
+	private diagnostic: string | undefined;
+
+	constructor(rootDir: string) {
+		this.rootDir = rootDir;
 	}
 
-	write(params: WriteTodoParams): TodoItem[] {
-		if (!params.global_direction.trim()) {
-			throw new TodoValidationError("Global direction must not be empty");
-		}
-
-		const waves = resolveWaves(params.items);
-		const nextItems = new Map<string, TodoItem>();
-		for (const definition of params.items) {
-			nextItems.set(definition.id, {
-				...definition,
-				depends_on: [...definition.depends_on],
-				acceptance_criteria: [...definition.acceptance_criteria],
-				files_in_scope: definition.files_in_scope ? [...definition.files_in_scope] : undefined,
-				status: "pending",
-				wave: waves.get(definition.id)!,
-				fix_attempts: 0,
-				reassign_attempts: 0,
-			});
-		}
-
-		this.items = nextItems;
-		this.agentTasks.clear();
-		this.direction = params.global_direction.trim();
-		return this.getItems();
+	takeDiagnostic(): string | undefined {
+		const diagnostic = this.diagnostic;
+		this.diagnostic = undefined;
+		return diagnostic;
 	}
 
-	hasPlan(): boolean {
-		return this.items.size > 0;
-	}
-
-	getGlobalDirection(): string {
-		return this.direction;
-	}
-
-	getItems(): TodoItem[] {
-		return [...this.items.values()].map(cloneItem);
-	}
-
-	getItem(id: string): TodoItem | undefined {
-		const item = this.items.get(id);
-		return item ? cloneItem(item) : undefined;
-	}
-
-	nextWave(): NextWaveResult {
-		if (!this.hasPlan()) {
-			throw new TodoValidationError("No todo plan is active; call write_todo first");
-		}
-
-		const active = [...this.items.values()].filter((item) => ACTIVE_STATUSES.has(item.status));
-		if (active.length > 0) {
-			return {
-				wave: Math.min(...active.map((item) => item.wave)),
-				tasks: [],
-				complete: false,
-				waiting: true,
+	async create(globalDirection: string, items: readonly TodoDefinition[], id = randomUUID()): Promise<TodoListDocument> {
+		if (!globalDirection.trim()) throw new TodoValidationError("Global direction must not be empty");
+		validateDefinitions(items);
+		await mkdir(this.rootDir, { recursive: true });
+		return this.withLock(id, async () => {
+			const path = this.documentPath(id);
+			try {
+				await readFile(path);
+				throw new TodoValidationError(`Todo list "${id}" already exists`);
+			} catch (error) {
+				if (error instanceof TodoValidationError) throw error;
+				if (!isNotFound(error)) throw error;
+			}
+			const now = new Date().toISOString();
+			const tasks = items.map((item) => ({
+				...item,
+				depends_on: [...item.depends_on],
+				acceptance_criteria: item.acceptance_criteria ? [...item.acceptance_criteria] : undefined,
+				status: "pending" as const,
+				created_at: now,
+				updated_at: now,
+				revision: 1,
+			}));
+			const document: TodoListDocument = {
+				version: 1,
+				id,
+				revision: 1,
+				global_direction: globalDirection.trim(),
+				tasks,
+				tombstones: [],
+				created_at: now,
+				updated_at: now,
+				history: [],
 			};
-		}
+			await this.writeDocument(document);
+			return cloneDocument(document);
+		});
+	}
 
-		const ready = [...this.items.values()].filter(
-			(item) =>
-				item.status === "pending" &&
-				item.depends_on.every((dependency) => this.items.get(dependency)?.status === "done"),
-		);
-		if (ready.length === 0) {
-			return { wave: 0, tasks: [], complete: true, waiting: false };
-		}
+	async read(id: string, revision?: number): Promise<TodoListDocument> {
+		const document = await this.readDocument(id);
+		if (revision === undefined || revision === document.revision) return cloneDocument(document);
+		const historical = document.history.find((entry) => entry.revision === revision);
+		if (!historical) throw new TodoValidationError(`Todo list "${id}" has no revision ${revision}`);
+		return { ...historical, version: 1, id, history: document.history.map((entry) => ({ ...entry })) };
+	}
 
-		const wave = Math.min(...ready.map((item) => item.wave));
-		const tasks = ready.filter((item) => item.wave === wave);
-		for (const task of tasks) task.status = "running";
-
+	async view(id: string, revision?: number): Promise<TodoListView> {
+		const list = await this.read(id, revision);
+		const ready = getReadyTasks(list.tasks).map(cloneTask);
+		const blocked = getBlockedTasks(list.tasks).map(cloneTask);
 		return {
-			wave,
-			tasks: tasks.map((task) => ({
-				id: task.id,
-				title: task.title,
-				acceptance_criteria: [...task.acceptance_criteria],
-				size_hint: task.size_hint,
-				files_in_scope: task.files_in_scope ? [...task.files_in_scope] : undefined,
-			})),
-			complete: false,
-			waiting: false,
+			list,
+			ready,
+			blocked,
+			summary: {
+				total: list.tasks.length,
+				pending: list.tasks.filter((task) => task.status === "pending").length,
+				in_progress: list.tasks.filter((task) => task.status === "in_progress").length,
+				completed: list.tasks.filter((task) => task.status === "completed").length,
+				ready: ready.length,
+				blocked: blocked.length,
+			},
 		};
 	}
 
-	mark(id: string, status: MarkStatus, note?: string): MarkResult {
-		const item = this.items.get(id);
-		if (!item) throw new TodoValidationError(`Todo "${id}" does not exist`);
-		if (item.status === "pending" || item.status === "blocked") {
-			throw new TodoValidationError(`Todo "${id}" cannot be marked while ${item.status}`);
-		}
-		if (item.status === "failed" || item.status === "done") {
-			throw new TodoValidationError(`Todo "${id}" is already ${item.status}`);
-		}
-		if (item.status === "running" && item.agent_id) {
-			throw new TodoValidationError(`Todo "${id}" is still running in agent "${item.agent_id}"`);
-		}
+	async add(id: string, items: readonly TodoDefinition[]): Promise<TodoListDocument> {
+		if (items.length === 0) throw new TodoValidationError("At least one task is required");
+		return this.mutate(id, (document, now) => {
+			const next = [
+				...document.tasks,
+				...items.map((item) => ({
+					...item,
+					depends_on: [...item.depends_on],
+					acceptance_criteria: item.acceptance_criteria ? [...item.acceptance_criteria] : undefined,
+					status: "pending" as const,
+					created_at: now,
+					updated_at: now,
+					revision: document.revision + 1,
+				})),
+			];
+			validateDefinitions(definitions(next));
+			document.tasks = next;
+		});
+	}
 
-		let exhausted = false;
-		if (status === "fix-needed") {
-			item.fix_attempts++;
-			if (item.fix_attempts > 2) {
-				item.status = "failed";
-				item.note = note?.trim() || "Fix/review limit exhausted";
-				exhausted = true;
-			} else {
-				item.status = "fix-needed";
-				item.note = note?.trim() || undefined;
+	async update(
+		listId: string,
+		taskId: string,
+		patch: {
+			subject?: string;
+			description?: string | null;
+			active_form?: string | null;
+			depends_on?: string[];
+			acceptance_criteria?: string[] | null;
+			status?: TodoStatus;
+			owner?: string | null;
+			claim_token?: string;
+			expected_revision?: number;
+		},
+	): Promise<TodoListDocument> {
+		return this.mutate(listId, (document, now) => {
+			const task = requireTask(document, taskId);
+			if (patch.expected_revision !== undefined && patch.expected_revision !== task.revision) {
+				throw new TodoValidationError(
+					`Todo "${taskId}" revision changed from ${patch.expected_revision} to ${task.revision}`,
+				);
 			}
-		} else if (status === "off-target") {
-			if (item.reassign_attempts >= 1) {
-				item.status = "failed";
-				item.note = note?.trim() || "Reassignment limit exhausted";
-				exhausted = true;
-			} else {
-				item.status = "off-target";
-				item.note = note?.trim() || undefined;
+			if (patch.claim_token !== undefined && patch.claim_token !== task.claim_token) {
+				throw new TodoValidationError(`Todo "${taskId}" claim token does not match`);
 			}
-		} else {
-			item.status = status;
-			item.note = note?.trim() || undefined;
-		}
-		if (item.agent_id) this.agentTasks.delete(item.agent_id);
-		item.agent_id = undefined;
-
-		this.recomputeBlocked();
-		return { item: cloneItem(item), summary: this.getSummary(), exhausted };
-	}
-
-	bindAgent(taskId: string, agentId: string): boolean {
-		const item = this.items.get(taskId);
-		if (!item || this.agentTasks.has(agentId)) return false;
-
-		if (item.status === "off-target" && item.reassign_attempts < 1) {
-			item.reassign_attempts++;
-			item.status = "running";
-			item.note = undefined;
-			this.recomputeBlocked();
-		} else if (item.status === "fix-needed") {
-			item.status = "running";
-		} else if (item.status !== "running" || item.agent_id) {
-			return false;
-		}
-
-		item.agent_id = agentId;
-		this.agentTasks.set(agentId, taskId);
-		return true;
-	}
-
-	settleAgent(agentId: string, succeeded: boolean, error?: string): boolean {
-		const taskId = this.agentTasks.get(agentId);
-		if (!taskId) return false;
-		this.agentTasks.delete(agentId);
-		const item = this.items.get(taskId);
-		if (!item || item.agent_id !== agentId || item.status !== "running") return false;
-
-		item.agent_id = undefined;
-		if (succeeded) {
-			item.status = "executed";
-		} else {
-			item.status = "failed";
-			item.note = error?.trim() || "Subagent execution failed";
-			this.recomputeBlocked();
-		}
-		return true;
-	}
-
-	getSummary(): TodoSummary {
-		const items = [...this.items.values()];
-		return {
-			total: items.length,
-			done: items.filter((item) => item.status === "done").length,
-			pending: items.filter((item) => ["pending", "running", "executed", "fix-needed"].includes(item.status)).length,
-			failed: items.filter((item) => FAILURE_STATUSES.has(item.status)).length,
-			blocked: items.filter((item) => item.status === "blocked").length,
-		};
-	}
-
-	private recomputeBlocked(): void {
-		for (const item of this.items.values()) {
-			if (item.status === "blocked") item.status = "pending";
-		}
-
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const item of this.items.values()) {
-				if (item.status !== "pending") continue;
-				if (
-					item.depends_on.some((dependency) => {
-						const status = this.items.get(dependency)?.status;
-						return status === "failed" || status === "off-target" || status === "blocked";
-					})
-				) {
-					item.status = "blocked";
-					changed = true;
+			if (patch.subject !== undefined) task.subject = patch.subject;
+			if (patch.description !== undefined) task.description = patch.description?.trim() || undefined;
+			if (patch.active_form !== undefined) task.active_form = patch.active_form?.trim() || undefined;
+			if (patch.depends_on !== undefined) task.depends_on = [...patch.depends_on];
+			if (patch.acceptance_criteria !== undefined) {
+				task.acceptance_criteria = patch.acceptance_criteria?.map((criterion) => criterion.trim()) ?? undefined;
+			}
+			if (patch.owner !== undefined) task.owner = patch.owner?.trim() || undefined;
+			if (patch.status !== undefined) {
+				if (patch.status === "in_progress" && !task.owner) {
+					throw new TodoValidationError(`Todo "${taskId}" must be claimed before becoming in_progress`);
+				}
+				task.status = patch.status;
+				if (patch.status !== "in_progress") {
+					task.owner = undefined;
+					task.claim_token = undefined;
 				}
 			}
+			validateDefinitions(definitions(document.tasks));
+			task.updated_at = now;
+			task.revision = document.revision + 1;
+		});
+	}
+
+	async claim(listId: string, taskId: string, owner: string, expectedRevision?: number): Promise<TodoClaim> {
+		if (!owner.trim()) throw new TodoValidationError("Claim owner must not be empty");
+		let claimToken = "";
+		const list = await this.mutate(listId, (document, now) => {
+			const task = requireTask(document, taskId);
+			if (expectedRevision !== undefined && task.revision !== expectedRevision) {
+				throw new TodoValidationError(`Todo "${taskId}" revision changed from ${expectedRevision} to ${task.revision}`);
+			}
+			if (task.status !== "pending") throw new TodoValidationError(`Todo "${taskId}" is ${task.status}, not pending`);
+			const readyIds = new Set(getReadyTasks(document.tasks).map((candidate) => candidate.id));
+			if (!readyIds.has(taskId)) throw new TodoValidationError(`Todo "${taskId}" is blocked by dependencies`);
+			claimToken = randomUUID();
+			task.status = "in_progress";
+			task.owner = owner.trim();
+			task.claim_token = claimToken;
+			task.updated_at = now;
+			task.revision = document.revision + 1;
+		});
+		return { task: cloneTask(requireTask(list, taskId)), claim_token: claimToken };
+	}
+
+	async release(listId: string, taskId: string, owner: string, claimToken: string): Promise<TodoListDocument> {
+		return this.mutate(listId, (document, now) => {
+			const task = requireTask(document, taskId);
+			if (task.status !== "in_progress" || task.owner !== owner || task.claim_token !== claimToken) {
+				throw new TodoValidationError(`Todo "${taskId}" is not owned by "${owner}" with the supplied claim token`);
+			}
+			task.status = "pending";
+			task.owner = undefined;
+			task.claim_token = undefined;
+			task.updated_at = now;
+			task.revision = document.revision + 1;
+		});
+	}
+
+	async delete(listId: string, taskId: string): Promise<TodoListDocument> {
+		return this.mutate(listId, (document, now) => {
+			const task = requireTask(document, taskId);
+			if (task.status === "in_progress") throw new TodoValidationError(`Todo "${taskId}" must be released before deletion`);
+			document.tasks = document.tasks
+				.filter((candidate) => candidate.id !== taskId)
+				.map((candidate) => ({ ...candidate, depends_on: candidate.depends_on.filter((id) => id !== taskId) }));
+			document.tombstones.push({ id: taskId, deleted_at: now, revision: document.revision + 1 });
+			validateDefinitions(definitions(document.tasks), true);
+		});
+	}
+
+	async clone(sourceId: string, revision?: number, targetId = randomUUID()): Promise<TodoListDocument> {
+		const source = await this.read(sourceId, revision);
+		return this.withLock(targetId, async () => {
+			const now = new Date().toISOString();
+			const document: TodoListDocument = {
+				...source,
+				id: targetId,
+				created_at: now,
+				updated_at: now,
+				tasks: source.tasks.map((task) => ({ ...cloneTask(task), created_at: now, updated_at: now })),
+				history: [],
+			};
+			await this.writeDocument(document);
+			return cloneDocument(document);
+		});
+	}
+
+	async removeList(id: string): Promise<void> {
+		await this.withLock(id, async () => rm(this.listDir(id), { recursive: true, force: true }));
+	}
+
+	private async mutate(id: string, operation: (document: TodoListDocument, now: string) => void): Promise<TodoListDocument> {
+		return this.withLock(id, async () => {
+			const document = await this.readDocument(id);
+			const previous = snapshot(document);
+			const now = new Date().toISOString();
+			operation(document, now);
+			document.history.push(previous);
+			if (document.history.length > HISTORY_LIMIT) document.history.splice(0, document.history.length - HISTORY_LIMIT);
+			document.revision++;
+			document.updated_at = now;
+			await this.writeDocument(document);
+			return cloneDocument(document);
+		});
+	}
+
+	private async readDocument(id: string): Promise<TodoListDocument> {
+		const path = this.documentPath(id);
+		try {
+			const value: unknown = JSON.parse(await readFile(path, "utf8"));
+			assertDocument(value, path);
+			validateDefinitions(definitions(value.tasks), true);
+			return value;
+		} catch (error) {
+			if (isNotFound(error)) throw new TodoPersistenceError(`Todo list "${id}" does not exist`, { cause: error });
+			const backupPath = this.backupPath(id);
+			try {
+				const value: unknown = JSON.parse(await readFile(backupPath, "utf8"));
+				assertDocument(value, backupPath);
+				validateDefinitions(definitions(value.tasks), true);
+				this.diagnostic = `Recovered todo list "${id}" from backup after ${path} became unreadable`;
+				return value;
+			} catch (backupError) {
+				throw new TodoPersistenceError(`Todo list "${id}" is corrupt and no valid backup is available`, {
+					cause: backupError,
+				});
+			}
 		}
 	}
+
+	private async writeDocument(document: TodoListDocument): Promise<void> {
+		const directory = this.listDir(document.id);
+		const path = this.documentPath(document.id);
+		await mkdir(directory, { recursive: true });
+		try {
+			await copyFile(path, this.backupPath(document.id));
+		} catch (error) {
+			if (!isNotFound(error)) throw error;
+		}
+		const temporary = join(directory, `tasks.${process.pid}.${randomUUID()}.tmp`);
+		const handle = await open(temporary, "wx", 0o600);
+		try {
+			await handle.writeFile(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await rename(temporary, path);
+	}
+
+	private async withLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
+		await mkdir(join(this.rootDir, ".locks"), { recursive: true });
+		const lockPath = join(this.rootDir, ".locks", `${id}.lock`);
+		const deadline = Date.now() + LOCK_TIMEOUT_MS;
+		while (true) {
+			try {
+				await mkdir(lockPath);
+				break;
+			} catch (error) {
+				if (!isAlreadyExists(error)) throw error;
+				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
+				await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+			}
+		}
+		try {
+			return await operation();
+		} finally {
+			await rm(lockPath, { recursive: true, force: true });
+		}
+	}
+
+	private listDir(id: string): string {
+		if (!/^[A-Za-z0-9-]{1,64}$/.test(id)) throw new TodoValidationError(`Invalid todo list id "${id}"`);
+		return join(this.rootDir, id);
+	}
+
+	private documentPath(id: string): string {
+		return join(this.listDir(id), "tasks.json");
+	}
+
+	private backupPath(id: string): string {
+		return join(this.listDir(id), "tasks.json.bak");
+	}
+}
+
+function requireTask(document: TodoListDocument, taskId: string): TodoTask {
+	const task = document.tasks.find((candidate) => candidate.id === taskId);
+	if (!task) throw new TodoValidationError(`Todo "${taskId}" does not exist`);
+	return task;
+}
+
+function isNotFound(error: unknown): boolean {
+	return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+	return error instanceof Error && "code" in error && error.code === "EEXIST";
 }

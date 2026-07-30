@@ -1,73 +1,86 @@
-export const TODO_STATUSES = [
-	"pending",
-	"running",
-	"executed",
-	"done",
-	"fix-needed",
-	"off-target",
-	"failed",
-	"blocked",
-] as const;
+export const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 export type TodoStatus = (typeof TODO_STATUSES)[number];
-export type TodoSize = "small" | "big";
-export type MarkStatus = "done" | "fix-needed" | "off-target" | "failed";
 
 export interface TodoDefinition {
 	id: string;
-	title: string;
+	subject: string;
+	description?: string;
+	active_form?: string;
 	depends_on: string[];
-	acceptance_criteria: string[];
-	size_hint: TodoSize;
-	files_in_scope?: string[];
+	acceptance_criteria?: string[];
 }
 
-export interface WriteTodoParams {
-	items: TodoDefinition[];
-	global_direction: string;
-}
-
-export interface TodoItem extends TodoDefinition {
+export interface TodoTask extends TodoDefinition {
 	status: TodoStatus;
-	wave: number;
-	note?: string;
-	agent_id?: string;
-	fix_attempts: number;
-	reassign_attempts: number;
+	owner?: string;
+	claim_token?: string;
+	created_at: string;
+	updated_at: string;
+	revision: number;
 }
 
-export interface WaveTask {
+export interface TodoTombstone {
 	id: string;
-	title: string;
-	acceptance_criteria: string[];
-	size_hint: TodoSize;
-	files_in_scope?: string[];
+	deleted_at: string;
+	revision: number;
 }
 
-export interface NextWaveResult {
-	wave: number;
-	tasks: WaveTask[];
-	complete: boolean;
-	waiting: boolean;
+export interface TodoSnapshot {
+	revision: number;
+	global_direction: string;
+	tasks: TodoTask[];
+	tombstones: TodoTombstone[];
+	created_at: string;
+	updated_at: string;
+}
+
+export interface TodoListDocument extends TodoSnapshot {
+	version: 1;
+	id: string;
+	history: TodoSnapshot[];
 }
 
 export interface TodoSummary {
 	total: number;
-	done: number;
 	pending: number;
-	failed: number;
+	in_progress: number;
+	completed: number;
+	ready: number;
 	blocked: number;
 }
 
-export interface MarkResult {
-	item: TodoItem;
+export interface TodoListView {
+	list: TodoListDocument;
+	ready: TodoTask[];
+	blocked: TodoTask[];
 	summary: TodoSummary;
-	exhausted: boolean;
 }
 
-export interface SubagentEvent {
-	id: string;
-	description: string;
-	error?: string;
-	status?: string;
+export interface TodoClaim {
+	task: TodoTask;
+	claim_token: string;
+}
+
+export interface TodoBindingEntry {
+	version: 1;
+	list_id: string | null;
+	revision: number;
+	timestamp: string;
+}
+
+export interface TodoAgentMetadata {
+	"pi.todo/list-id": string;
+	"pi.todo/task-id": string;
+	"pi.todo/claim-token": string;
+}
+
+export interface AgentLifecycleEvent {
+	version: 1;
+	eventId: string;
+	agentId: string;
+	parentSessionId: string;
+	status: "started" | "running" | "completed" | "failed" | "stopped" | "interrupted";
+	timestamp: string;
+	metadata: Record<string, unknown>;
 }

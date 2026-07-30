@@ -4,5 +4,5 @@ export interface TodoPlanMessageInput {
 }
 
 export function buildTodoPlanMessageContent(input: TodoPlanMessageInput): string {
-	return `[PI TODO PLAN]\nSource: ${input.source}\n\n${input.plan.trim()}\n\nConvert this plan into a dependency-aware todo graph by calling write_todo. Preserve the plan's intent in global_direction and give every task concrete acceptance criteria. Then call next_wave and execute the returned work.`;
+	return `[PI TODO PLAN]\nSource: ${input.source}\n\n${input.plan.trim()}\n\nConvert this confirmed work into a dependency-aware list with write_todo. Use only pending, in_progress, and completed states. Add review as a normal task only when it is useful. Then call todo_list, atomically claim ready work, and execute independent tasks in parallel when an agent capability is available.`;
 }

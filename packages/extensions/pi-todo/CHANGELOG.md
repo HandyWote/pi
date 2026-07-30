@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replaced wave and review tools with dynamic create, list, get, update, claim, release, and delete operations.
+- Reduced public task status to `pending`, `in_progress`, and `completed`.
+
+### Added
+
+- Added atomic file persistence, recoverable cross-process claims, session resume, fork and tree isolation, and compaction continuation context.
+- Added optional versioned Agent lifecycle metadata integration without a package dependency.
+
+### Changed
+
+- Rebuilt the widget around separate active, ready, and dependency-blocked sections with narrow-terminal truncation.
+- Made review an optional ordinary task and removed task retry policies.
+
 ## [0.1.1] - 2026-07-28
 
 ### Added

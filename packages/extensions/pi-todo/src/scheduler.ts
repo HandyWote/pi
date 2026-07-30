@@ -1,6 +1,6 @@
-import type { TodoDefinition } from "./types.ts";
+import type { TodoDefinition, TodoTask } from "./types.ts";
 
-const TODO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const TODO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export class TodoValidationError extends Error {
 	constructor(message: string) {
@@ -9,72 +9,54 @@ export class TodoValidationError extends Error {
 	}
 }
 
-export function resolveWaves(items: readonly TodoDefinition[]): Map<string, number> {
-	if (items.length === 0) {
-		throw new TodoValidationError("Todo list must contain at least one item");
-	}
-
+export function validateDefinitions(items: readonly TodoDefinition[], allowEmpty = false): void {
+	if (!allowEmpty && items.length === 0) throw new TodoValidationError("Todo list must contain at least one task");
 	const byId = new Map<string, TodoDefinition>();
-	const dependents = new Map<string, string[]>();
-	const indegree = new Map<string, number>();
-
 	for (const item of items) {
 		if (!TODO_ID_PATTERN.test(item.id)) {
 			throw new TodoValidationError(
 				`Invalid todo id "${item.id}"; use 1-64 letters, numbers, dots, underscores, or hyphens`,
 			);
 		}
-		if (byId.has(item.id)) {
-			throw new TodoValidationError(`Duplicate todo id "${item.id}"`);
+		if (byId.has(item.id)) throw new TodoValidationError(`Duplicate todo id "${item.id}"`);
+		if (!item.subject.trim()) throw new TodoValidationError(`Todo "${item.id}" must have a subject`);
+		if (item.depends_on.includes(item.id)) throw new TodoValidationError(`Todo "${item.id}" cannot depend on itself`);
+		if (new Set(item.depends_on).size !== item.depends_on.length) {
+			throw new TodoValidationError(`Todo "${item.id}" contains duplicate dependencies`);
 		}
-		if (item.title.trim().length === 0) {
-			throw new TodoValidationError(`Todo "${item.id}" must have a title`);
-		}
-		if (item.acceptance_criteria.length === 0 || item.acceptance_criteria.some((criterion) => !criterion.trim())) {
-			throw new TodoValidationError(`Todo "${item.id}" must have non-empty acceptance criteria`);
+		if (item.acceptance_criteria?.some((criterion) => !criterion.trim())) {
+			throw new TodoValidationError(`Todo "${item.id}" contains an empty acceptance criterion`);
 		}
 		byId.set(item.id, item);
-		dependents.set(item.id, []);
-		indegree.set(item.id, item.depends_on.length);
 	}
 
 	for (const item of items) {
-		const uniqueDependencies = new Set(item.depends_on);
-		if (uniqueDependencies.size !== item.depends_on.length) {
-			throw new TodoValidationError(`Todo "${item.id}" contains duplicate dependencies`);
-		}
 		for (const dependency of item.depends_on) {
 			if (!byId.has(dependency)) {
 				throw new TodoValidationError(`Todo "${item.id}" depends on unknown todo "${dependency}"`);
 			}
-			dependents.get(dependency)?.push(item.id);
 		}
 	}
 
-	let ready = items.filter((item) => item.depends_on.length === 0).map((item) => item.id);
-	const waves = new Map<string, number>();
-	let wave = 1;
-	let visited = 0;
+	const visiting = new Set<string>();
+	const visited = new Set<string>();
+	const visit = (id: string): void => {
+		if (visiting.has(id)) throw new TodoValidationError(`Todo dependency graph contains a cycle involving "${id}"`);
+		if (visited.has(id)) return;
+		visiting.add(id);
+		for (const dependency of byId.get(id)?.depends_on ?? []) visit(dependency);
+		visiting.delete(id);
+		visited.add(id);
+	};
+	for (const id of byId.keys()) visit(id);
+}
 
-	while (ready.length > 0) {
-		const next: string[] = [];
-		for (const id of ready) {
-			waves.set(id, wave);
-			visited++;
-			for (const dependent of dependents.get(id) ?? []) {
-				const remaining = (indegree.get(dependent) ?? 0) - 1;
-				indegree.set(dependent, remaining);
-				if (remaining === 0) next.push(dependent);
-			}
-		}
-		ready = next;
-		wave++;
-	}
+export function getReadyTasks(tasks: readonly TodoTask[]): TodoTask[] {
+	const completed = new Set(tasks.filter((task) => task.status === "completed").map((task) => task.id));
+	return tasks.filter((task) => task.status === "pending" && task.depends_on.every((id) => completed.has(id)));
+}
 
-	if (visited !== items.length) {
-		const cyclicIds = items.filter((item) => !waves.has(item.id)).map((item) => item.id);
-		throw new TodoValidationError(`Todo dependency graph contains a cycle: ${cyclicIds.join(", ")}`);
-	}
-
-	return waves;
+export function getBlockedTasks(tasks: readonly TodoTask[]): TodoTask[] {
+	const completed = new Set(tasks.filter((task) => task.status === "completed").map((task) => task.id));
+	return tasks.filter((task) => task.status === "pending" && task.depends_on.some((id) => !completed.has(id)));
 }

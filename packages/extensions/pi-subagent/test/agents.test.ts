@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverAgents } from "../src/agents.ts";
+import { discoverAgents, loadAgentPrompt } from "../src/agents.ts";
 
 const tempRoots: string[] = [];
 afterEach(() => {
@@ -41,8 +41,22 @@ describe("discoverAgents", () => {
 			source: "project",
 			isolation: "worktree",
 			displayName: "Builder",
+			systemPrompt: "",
 		});
+		expect(loadAgentPrompt(result.agents[0]!)).toMatchObject({ systemPrompt: "Project prompt" });
 		expect(result.diagnostics).toHaveLength(1);
+	});
+
+	it("rejects a project agent whose approved metadata changes before prompt loading", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-agents-"));
+		tempRoots.push(root);
+		const agentPath = path.join(root, ".pi", "agents", "worker.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(agentPath, "---\nname: worker\ndescription: Before\n---\nOriginal prompt\n");
+		const discovered = discoverAgents(root, "project").agents[0]!;
+		fs.writeFileSync(agentPath, "---\nname: worker\ndescription: After\n---\nReplaced prompt\n");
+
+		expect(() => loadAgentPrompt(discovered)).toThrow("changed after approval");
 	});
 
 	it("reports invalid prompts, display metadata, and same-source duplicates", () => {

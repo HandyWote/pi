@@ -243,6 +243,9 @@ export class AgentRegistry {
 		) {
 			throw new Error(`Invalid worktree path for agent ${value.agentId}`);
 		}
+		if (value.worktreeBranch !== undefined && value.worktreeBranch !== `pi-subagent/${value.agentId}`) {
+			throw new Error(`Invalid worktree branch for agent ${value.agentId}`);
+		}
 		if (!isUsage(value.usage)) throw new Error(`Invalid usage for agent ${value.agentId}`);
 		if (!Number.isInteger(value.toolCount) || !isNonNegativeNumber(value.toolCount))
 			throw new Error(`Invalid tool count for agent ${value.agentId}`);
@@ -259,6 +262,12 @@ export class AgentRegistry {
 			(typeof value.pid !== "number" || !Number.isInteger(value.pid) || value.pid <= 0)
 		) {
 			throw new Error(`Invalid pid for agent ${value.agentId}`);
+		}
+		if (
+			!isOptionalString(value.processStartToken) ||
+			(value.pid === undefined) !== (value.processStartToken === undefined)
+		) {
+			throw new Error(`Invalid process identity for agent ${value.agentId}`);
 		}
 		if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isInteger(value.exitCode))) {
 			throw new Error(`Invalid exit code for agent ${value.agentId}`);

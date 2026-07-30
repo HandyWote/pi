@@ -10,6 +10,7 @@ import { type AgentDefinition, type AgentLifecycleEvent, type AgentRecord, empty
 import { WorktreeService } from "../src/worktree.ts";
 
 const fixturePath = fileURLToPath(new URL("fixtures/fake-pi.mjs", import.meta.url));
+const crashParentPath = fileURLToPath(new URL("fixtures/crash-parent.ts", import.meta.url));
 const tempRoots: string[] = [];
 const definition: AgentDefinition = {
 	name: "worker",
@@ -58,6 +59,15 @@ async function waitForOutput(manager: AgentManager, agentId: string): Promise<vo
 	throw new Error(`Agent ${agentId} did not produce output`);
 }
 
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error: unknown) {
+		return error instanceof Error && "code" in error && error.code !== "ESRCH";
+	}
+}
+
 afterEach(() => {
 	for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -85,6 +95,55 @@ describe("AgentManager", () => {
 		expect(events.map((event) => event.status)).toEqual(["queued", "running", "completed"]);
 		expect(new Set(events.map((event) => event.eventId)).size).toBe(3);
 		expect(events.every((event) => event.metadata["external/correlation"] === "value")).toBe(true);
+	});
+
+	it("publishes live activity updates before terminal completion", async () => {
+		const root = temporaryDirectory();
+		const manager = createManager(root);
+		await manager.initialize();
+		const updates: AgentRecord[] = [];
+		manager.subscribe((event) => {
+			const record = manager.get(event.agentId);
+			if (record) updates.push(record);
+		});
+
+		const started = await manager.start(definition, { task: "delay:80", mode: "foreground" });
+		await started.completion;
+
+		expect(updates.some((record) => record.status === "running" && record.toolCount > 0)).toBe(true);
+		expect(updates.some((record) => record.status === "running" && record.lastOutput.includes("started"))).toBe(true);
+	});
+
+	it("does not persist or launch an already-aborted start", async () => {
+		const root = temporaryDirectory();
+		const manager = createManager(root);
+		await manager.initialize();
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			manager.start(definition, { task: "must not run", mode: "foreground", signal: controller.signal }),
+		).rejects.toMatchObject({ name: "AbortError" });
+		expect(manager.list()).toEqual([]);
+	});
+
+	it("stops a running agent when its start signal aborts", async () => {
+		const root = temporaryDirectory();
+		const manager = createManager(root);
+		await manager.initialize();
+		const controller = new AbortController();
+		const started = await manager.start(definition, {
+			task: "ignore-term delay:10000",
+			mode: "foreground",
+			signal: controller.signal,
+		});
+		await waitForOutput(manager, started.record.agentId);
+
+		controller.abort();
+		const stopped = await started.completion;
+
+		expect(stopped.status).toBe("stopped");
+		expect(stopped.lastOutput).toContain("started");
 	});
 
 	it("limits parallel work, provides blocking output, and notifies background completion once", async () => {
@@ -213,6 +272,22 @@ describe("AgentManager", () => {
 		expect(manager.getActiveCount()).toBe(0);
 	});
 
+	it("terminates a surviving child before recovering a crashed parent registry", async () => {
+		const root = temporaryDirectory();
+		const resultPath = path.join(root, "crash-result.json");
+		execFileSync(process.execPath, ["--experimental-strip-types", crashParentPath, root, resultPath, fixturePath], {
+			timeout: 5000,
+		});
+		const result = JSON.parse(fs.readFileSync(resultPath, "utf8")) as { agentId: string; pid: number };
+		expect(processIsAlive(result.pid)).toBe(true);
+
+		const manager = createManager(root);
+		await manager.initialize();
+
+		expect(manager.get(result.agentId)?.status).toBe("interrupted");
+		expect(processIsAlive(result.pid)).toBe(false);
+	});
+
 	it("propagates parent shutdown to active children", async () => {
 		const root = temporaryDirectory();
 		const manager = createManager(root);
@@ -268,7 +343,7 @@ describe("AgentManager", () => {
 });
 
 describe("WorktreeService", () => {
-	it("creates and cleanly removes a detached worktree", async () => {
+	it("keeps a stable branch and its commits across worktree cleanup and resume", async () => {
 		const root = temporaryDirectory();
 		const repository = path.join(root, "repository");
 		fs.mkdirSync(repository);
@@ -281,8 +356,21 @@ describe("WorktreeService", () => {
 		const service = new WorktreeService(path.join(root, "state"));
 
 		const worktree = await service.create("agent-worktree", repository);
-		expect(fs.existsSync(path.join(worktree, "README.md"))).toBe(true);
-		expect(await service.cleanup(worktree, repository)).toBeUndefined();
-		expect(fs.existsSync(worktree)).toBe(false);
+		expect(worktree.branch).toBe("pi-subagent/agent-worktree");
+		expect(fs.existsSync(path.join(worktree.path, "README.md"))).toBe(true);
+		fs.writeFileSync(path.join(worktree.path, "result.txt"), "preserved\n");
+		execFileSync("git", ["add", "result.txt"], { cwd: worktree.path });
+		execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "result"], {
+			cwd: worktree.path,
+		});
+		expect(await service.cleanup(worktree.path, repository)).toBeUndefined();
+		expect(fs.existsSync(worktree.path)).toBe(false);
+
+		const resumed = await service.create("agent-worktree", repository);
+		expect(resumed).toEqual(worktree);
+		expect(fs.readFileSync(path.join(resumed.path, "result.txt"), "utf8")).toBe("preserved\n");
+		expect(execFileSync("git", ["branch", "--show-current"], { cwd: resumed.path, encoding: "utf8" }).trim()).toBe(
+			worktree.branch,
+		);
 	});
 });

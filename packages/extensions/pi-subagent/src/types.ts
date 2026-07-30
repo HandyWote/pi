@@ -67,8 +67,10 @@ export interface AgentRecord {
 	childSessionPath?: string;
 	transcriptPath: string;
 	worktreePath?: string;
+	worktreeBranch?: string;
 	cleanupError?: string;
 	pid?: number;
+	processStartToken?: string;
 	exitCode?: number;
 	model?: string;
 	usage: AgentUsage;
@@ -95,7 +97,6 @@ export interface AgentInvocation {
 	task: string;
 	mode: AgentMode;
 	scope: AgentScope;
-	confirmProjectAgents: boolean;
 	cwd?: string;
 	isolation?: AgentIsolation;
 	metadata: Record<string, string>;
@@ -104,6 +105,7 @@ export interface AgentInvocation {
 export interface StartResult {
 	record: AgentRecord;
 	completion: Promise<AgentRecord>;
+	detachAbort(): void;
 }
 
 export interface AgentOutput {

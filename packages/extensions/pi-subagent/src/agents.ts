@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@handy_wote/pi-coding-agent";
 import type {
 	AgentDefinition,
@@ -45,6 +46,88 @@ function parseIsolation(value: string | undefined): AgentIsolation | undefined {
 	return undefined;
 }
 
+function readProjectFrontmatter(filePath: string): string {
+	const handle = fs.openSync(filePath, "r");
+	try {
+		const byte = Buffer.alloc(1);
+		const decoder = new StringDecoder("utf8");
+		let content = "";
+		let line = "";
+		let delimiters = 0;
+		let bytesRead = 0;
+		while (bytesRead < 65_536 && fs.readSync(handle, byte, 0, 1, null) === 1) {
+			bytesRead++;
+			const character = decoder.write(byte);
+			if (!character) continue;
+			content += character;
+			line += character;
+			if (character !== "\n") continue;
+			if (line.trim() === "---") {
+				delimiters++;
+				if (delimiters === 2) return content;
+			}
+			line = "";
+		}
+		if (line.trim() === "---" && delimiters === 1) return content;
+		throw new Error("Project agent requires a bounded frontmatter header");
+	} finally {
+		fs.closeSync(handle);
+	}
+}
+
+function parseAgentDefinition(
+	filePath: string,
+	source: AgentSource,
+	content: string,
+	requirePrompt: boolean,
+): AgentDefinition {
+	const { frontmatter, body } = parseFrontmatter<Partial<AgentFrontmatter>>(content);
+	const name = frontmatter.name?.trim();
+	const description = frontmatter.description?.trim();
+	const isolation = parseIsolation(frontmatter.isolation?.trim());
+	if (!name || !description) throw new Error("Agent requires non-empty name and description");
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error(`Invalid agent name: ${name}`);
+	if (isolation === undefined) throw new Error(`Invalid isolation: ${frontmatter.isolation}`);
+	if (requirePrompt && !body.trim()) throw new Error("Agent requires a non-empty system prompt");
+	if (frontmatter.model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(frontmatter.model.trim()))
+		throw new Error(`Invalid model: ${frontmatter.model}`);
+	if (frontmatter.displayName && (frontmatter.displayName.length > 80 || /[\r\n]/.test(frontmatter.displayName)))
+		throw new Error("Invalid displayName");
+	if (frontmatter.color && !/^(#[0-9A-Fa-f]{6}|[A-Za-z][A-Za-z0-9_-]{0,31})$/.test(frontmatter.color))
+		throw new Error(`Invalid color: ${frontmatter.color}`);
+	const tools = frontmatter.tools
+		?.split(",")
+		.map((tool) => tool.trim())
+		.filter(Boolean);
+	if (tools?.some((tool) => !/^[A-Za-z0-9_.:-]+$/.test(tool))) throw new Error("Invalid tool name");
+	return {
+		name,
+		description,
+		tools: tools && tools.length > 0 ? tools : undefined,
+		model: frontmatter.model?.trim() || undefined,
+		systemPrompt: body.trim(),
+		source,
+		filePath,
+		isolation,
+		displayName: frontmatter.displayName?.trim() || undefined,
+		color: frontmatter.color?.trim() || undefined,
+	};
+}
+
+function definitionIdentity(definition: AgentDefinition): string {
+	return JSON.stringify({
+		name: definition.name,
+		description: definition.description,
+		tools: definition.tools,
+		model: definition.model,
+		source: definition.source,
+		filePath: definition.filePath,
+		isolation: definition.isolation,
+		displayName: definition.displayName,
+		color: definition.color,
+	});
+}
+
 function loadAgentsFromDir(
 	dir: string,
 	source: AgentSource,
@@ -65,67 +148,27 @@ function loadAgentsFromDir(
 		if (!entry.name.endsWith(".md") || (!entry.isFile() && !entry.isSymbolicLink())) continue;
 		const filePath = path.join(dir, entry.name);
 		try {
-			const content = fs.readFileSync(filePath, "utf8");
-			const { frontmatter, body } = parseFrontmatter<Partial<AgentFrontmatter>>(content);
-			const name = frontmatter.name?.trim();
-			const description = frontmatter.description?.trim();
-			const isolation = parseIsolation(frontmatter.isolation?.trim());
-			if (!name || !description) {
-				diagnostics.push({ filePath, message: "Agent requires non-empty name and description" });
-				continue;
-			}
-			if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-				diagnostics.push({ filePath, message: `Invalid agent name: ${name}` });
-				continue;
-			}
-			if (isolation === undefined) {
-				diagnostics.push({ filePath, message: `Invalid isolation: ${frontmatter.isolation}` });
-				continue;
-			}
-			if (!body.trim()) {
-				diagnostics.push({ filePath, message: "Agent requires a non-empty system prompt" });
-				continue;
-			}
-			if (frontmatter.model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(frontmatter.model.trim())) {
-				diagnostics.push({ filePath, message: `Invalid model: ${frontmatter.model}` });
-				continue;
-			}
-			if (
-				frontmatter.displayName &&
-				(frontmatter.displayName.length > 80 || /[\r\n]/.test(frontmatter.displayName))
-			) {
-				diagnostics.push({ filePath, message: "Invalid displayName" });
-				continue;
-			}
-			if (frontmatter.color && !/^(#[0-9A-Fa-f]{6}|[A-Za-z][A-Za-z0-9_-]{0,31})$/.test(frontmatter.color)) {
-				diagnostics.push({ filePath, message: `Invalid color: ${frontmatter.color}` });
-				continue;
-			}
-			const tools = frontmatter.tools
-				?.split(",")
-				.map((tool) => tool.trim())
-				.filter(Boolean);
-			if (tools?.some((tool) => !/^[A-Za-z0-9_.:-]+$/.test(tool))) {
-				diagnostics.push({ filePath, message: "Invalid tool name" });
-				continue;
-			}
-			agents.push({
-				name,
-				description,
-				tools: tools && tools.length > 0 ? tools : undefined,
-				model: frontmatter.model?.trim() || undefined,
-				systemPrompt: body.trim(),
-				source,
-				filePath,
-				isolation,
-				displayName: frontmatter.displayName?.trim() || undefined,
-				color: frontmatter.color?.trim() || undefined,
-			});
+			const content = source === "project" ? readProjectFrontmatter(filePath) : fs.readFileSync(filePath, "utf8");
+			agents.push(parseAgentDefinition(filePath, source, content, source === "user"));
 		} catch (error: unknown) {
 			diagnostics.push({ filePath, message: error instanceof Error ? error.message : String(error) });
 		}
 	}
 	return { agents, diagnostics };
+}
+
+export function loadAgentPrompt(definition: AgentDefinition): AgentDefinition {
+	if (definition.source === "user")
+		return { ...definition, tools: definition.tools ? [...definition.tools] : undefined };
+	const loaded = parseAgentDefinition(
+		definition.filePath,
+		definition.source,
+		fs.readFileSync(definition.filePath, "utf8"),
+		true,
+	);
+	if (definitionIdentity(loaded) !== definitionIdentity(definition))
+		throw new Error(`Project agent changed after approval: ${definition.name}`);
+	return loaded;
 }
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {

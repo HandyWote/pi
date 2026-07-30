@@ -1,11 +1,10 @@
 import type { AgentToolResult } from "@handy_wote/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@handy_wote/pi-coding-agent";
-import { Text } from "@handy_wote/pi-tui";
 import { Type } from "typebox";
-import { discoverAgents } from "./agents.ts";
+import { discoverAgents, loadAgentPrompt } from "./agents.ts";
 import type { AgentManager } from "./manager.ts";
-import { type AgentToolDetails, renderAgentResult } from "./render.ts";
-import type { AgentDefinition, AgentIsolation, AgentMode, AgentRecord, AgentScope } from "./types.ts";
+import { BoundedText, type AgentToolDetails, renderAgentResult } from "./render.ts";
+import type { AgentDefinition, AgentIsolation, AgentMode, AgentRecord, AgentScope, StartResult } from "./types.ts";
 
 const AgentScopeSchema = Type.Union([Type.Literal("user"), Type.Literal("project"), Type.Literal("both")]);
 const AgentModeSchema = Type.Union([Type.Literal("foreground"), Type.Literal("background")]);
@@ -24,7 +23,6 @@ const StartParams = Type.Object({
 	tasks: Type.Optional(Type.Array(BatchItem, { maxItems: 8 })),
 	mode: Type.Optional(AgentModeSchema),
 	scope: Type.Optional(AgentScopeSchema),
-	confirmProjectAgents: Type.Optional(Type.Boolean()),
 	cwd: Type.Optional(Type.String()),
 	isolation: Type.Optional(IsolationSchema),
 	metadata: Type.Optional(MetadataSchema),
@@ -53,6 +51,13 @@ function requireManager(getManager: () => AgentManager | undefined): AgentManage
 	return manager;
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (!signal?.aborted) return;
+	const error = new Error("Subagent operation was aborted");
+	error.name = "AbortError";
+	throw error;
+}
+
 function validateDefinition(pi: ExtensionAPI, ctx: ExtensionContext, definition: AgentDefinition): void {
 	const availableTools = new Set(pi.getAllTools().map((tool) => tool.name));
 	const unknownTools = definition.tools?.filter((tool) => !availableTools.has(tool)) ?? [];
@@ -65,16 +70,11 @@ function validateDefinition(pi: ExtensionAPI, ctx: ExtensionContext, definition:
 	if (!modelExists) throw new Error(`Agent ${definition.name} configures unknown model: ${definition.model}`);
 }
 
-async function approveProjectAgents(
-	definitions: AgentDefinition[],
-	confirmProjectAgents: boolean,
-	ctx: ExtensionContext,
-): Promise<void> {
+async function approveProjectAgents(definitions: AgentDefinition[], ctx: ExtensionContext): Promise<void> {
 	const projectAgents = definitions.filter((definition) => definition.source === "project");
 	if (projectAgents.length === 0) return;
 	if (!ctx.isProjectTrusted())
 		throw new Error("Project-local agents are disabled because this project is not trusted");
-	if (!confirmProjectAgents) return;
 	if (!ctx.hasUI) throw new Error("Project-local agents require interactive confirmation");
 	const approved = await ctx.ui.confirm(
 		"Run project-local agents?",
@@ -105,6 +105,7 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 		parameters: StartParams,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			try {
+				throwIfAborted(signal);
 				const manager = requireManager(getManager);
 				const hasSingle = Boolean(params.agent && params.task);
 				const hasBatch = (params.tasks?.length ?? 0) > 0;
@@ -112,6 +113,7 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 					throw new Error("Provide exactly one agent/task or a non-empty tasks array");
 				const scope: AgentScope = params.scope ?? "user";
 				const discovery = discoverAgents(ctx.cwd, scope);
+				throwIfAborted(signal);
 				if (discovery.diagnostics.length > 0) {
 					ctx.ui.notify(
 						`Skipped invalid agent definitions:\n${discovery.diagnostics.map((item) => `${item.filePath}: ${item.message}`).join("\n")}`,
@@ -132,14 +134,17 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 				const resolved = requests.map((request) => {
 					const definition = discovery.agents.find((agent) => agent.name === request.agent);
 					if (!definition) throw new Error(`Unknown agent: ${request.agent}`);
-					validateDefinition(pi, ctx, definition);
 					return { request, definition };
 				});
 				await approveProjectAgents(
 					resolved.map((item) => item.definition),
-					params.confirmProjectAgents ?? true,
 					ctx,
 				);
+				throwIfAborted(signal);
+				for (const item of resolved) {
+					item.definition = loadAgentPrompt(item.definition);
+					validateDefinition(pi, ctx, item.definition);
+				}
 				const mode: AgentMode = params.mode ?? "foreground";
 				const tracked = new Set<string>();
 				const unsubscribe = manager.subscribe((event) => {
@@ -157,45 +162,45 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 						details: { operation: "start", records },
 					});
 				});
-				if (signal)
-					signal.addEventListener(
-						"abort",
-						() => void Promise.all([...tracked].map((agentId) => manager.stop(agentId).catch(() => undefined))),
-						{ once: true },
-					);
-				const starts = [];
-				for (const { request, definition } of resolved) {
-					const started = await manager.start(definition, {
-						task: request.task,
-						mode,
-						cwd: request.cwd,
-						isolation: request.isolation as AgentIsolation | undefined,
-						metadata: request.metadata,
-					});
-					tracked.add(started.record.agentId);
-					starts.push(started);
-				}
-				if (mode === "background") {
-					unsubscribe();
-					const records = starts.map((start) => start.record);
+				const starts: StartResult[] = [];
+				try {
+					for (const { request, definition } of resolved) {
+						throwIfAborted(signal);
+						const started = await manager.start(definition, {
+							task: request.task,
+							mode,
+							cwd: request.cwd,
+							isolation: request.isolation as AgentIsolation | undefined,
+							metadata: request.metadata,
+							signal,
+						});
+						tracked.add(started.record.agentId);
+						starts.push(started);
+						throwIfAborted(signal);
+					}
+					if (mode === "background") {
+						for (const start of starts) start.detachAbort();
+						const records = starts.map((start) => start.record);
+						return textResult(
+							records
+								.map(
+									(record) =>
+										`Launched ${record.definition.name} as ${record.agentId}; output: ${record.transcriptPath}`,
+								)
+								.join("\n"),
+							{ operation: "start", records },
+						);
+					}
+					const records = await Promise.all(starts.map((start) => start.completion));
+					const failed = records.some((record) => record.status !== "completed");
 					return textResult(
-						records
-							.map(
-								(record) =>
-									`Launched ${record.definition.name} as ${record.agentId}; output: ${record.transcriptPath}`,
-							)
-							.join("\n"),
+						records.map((record) => outputText(record, "", true)).join("\n\n"),
 						{ operation: "start", records },
+						failed,
 					);
+				} finally {
+					unsubscribe();
 				}
-				const records = await Promise.all(starts.map((start) => start.completion));
-				unsubscribe();
-				const failed = records.some((record) => record.status !== "completed");
-				return textResult(
-					records.map((record) => outputText(record, "", true)).join("\n\n"),
-					{ operation: "start", records },
-					failed,
-				);
 			} catch (error: unknown) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textResult(message, { operation: "start", records: [], error: message }, true);
@@ -204,10 +209,8 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 		renderCall(args, theme) {
 			const count = args.tasks?.length ?? 1;
 			const label = count > 1 ? `${count} agents` : (args.agent ?? "agent");
-			return new Text(
+			return new BoundedText(
 				`${theme.fg("toolTitle", theme.bold("Agent"))} ${theme.fg("accent", label)} ${theme.fg("muted", args.mode ?? "foreground")}`,
-				0,
-				0,
 			);
 		},
 		renderResult(result, options, theme) {
@@ -293,16 +296,20 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 		label: "Agent Resume",
 		description: "Explicitly resume a terminal agent with new instructions, keeping its stable ID and child session.",
 		parameters: ResumeParams,
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, signal) {
 			try {
+				throwIfAborted(signal);
 				if (!params.prompt.trim()) throw new Error("Resume prompt cannot be empty");
 				const manager = requireManager(getManager);
-				const started = await manager.resume(params.agentId, params.prompt, params.mode);
-				if ((params.mode ?? started.record.mode) === "background")
+				const started = await manager.resume(params.agentId, params.prompt, params.mode, signal);
+				throwIfAborted(signal);
+				if ((params.mode ?? started.record.mode) === "background") {
+					started.detachAbort();
 					return textResult(`Resumed ${started.record.agentId} in background`, {
 						operation: "resume",
 						records: [started.record],
 					});
+				}
 				const record = await started.completion;
 				return textResult(
 					outputText(record, "", true),

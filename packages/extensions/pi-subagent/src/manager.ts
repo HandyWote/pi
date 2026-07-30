@@ -1,7 +1,8 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import type { Message } from "@handy_wote/pi-ai";
 import { AgentRegistry } from "./registry.ts";
 import {
@@ -20,11 +21,13 @@ import { WorktreeService } from "./worktree.ts";
 
 const MAX_CONCURRENCY = 8;
 const MAX_ACTIVITIES = 20;
+const execFileAsync = promisify(execFile);
 
 interface PendingRun {
 	agentId: string;
 	prompt: string;
 	resolve: (record: AgentRecord) => void;
+	removeAbortListener: () => void;
 }
 
 interface ActiveRun {
@@ -69,6 +72,31 @@ function getPiInvocation(): PiInvocation {
 	const executable = path.basename(process.execPath).toLowerCase();
 	if (!/^(node|bun)(\.exe)?$/.test(executable)) return { command: process.execPath, prefixArgs: [] };
 	return { command: "pi", prefixArgs: [] };
+}
+
+function abortError(): Error {
+	const error = new Error("Subagent start was aborted");
+	error.name = "AbortError";
+	return error;
+}
+
+async function processStartToken(pid: number): Promise<string | undefined> {
+	try {
+		const stat = await fs.promises.readFile(`/proc/${pid}/stat`, "utf8");
+		const fields = stat
+			.slice(stat.lastIndexOf(")") + 2)
+			.trim()
+			.split(/\s+/);
+		const startTime = fields[19];
+		if (startTime) return `proc:${startTime}`;
+	} catch {}
+	try {
+		const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+		const started = stdout.trim();
+		return started ? `ps:${started}` : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function findChildSessionPath(sessionDir: string, sessionId: string): Promise<string | undefined> {
@@ -123,6 +151,7 @@ export class AgentManager {
 		await this.registry.load();
 		for (const record of this.registry.list()) {
 			if (record.status !== "queued" && record.status !== "running") continue;
+			if (record.status === "running") await this.terminateRecoveredProcess(record);
 			await this.finishWithoutProcess(
 				record.agentId,
 				"interrupted",
@@ -162,9 +191,11 @@ export class AgentManager {
 			cwd?: string;
 			isolation?: AgentRecord["isolation"];
 			metadata?: Record<string, string>;
+			signal?: AbortSignal;
 		},
 	): Promise<StartResult> {
 		if (this.shuttingDown) throw new Error("Subagent manager is shutting down");
+		if (input.signal?.aborted) throw abortError();
 		const agentId = `agent-${randomUUID()}`;
 		const now = new Date().toISOString();
 		const record: AgentRecord = {
@@ -193,15 +224,16 @@ export class AgentManager {
 		};
 		await this.registry.save(record);
 		this.publish(record);
-		const completion = new Promise<AgentRecord>((resolve) => {
-			this.queue.push({ agentId, prompt: input.task, resolve });
-		});
-		this.completions.set(agentId, completion);
-		this.drain();
-		return { record, completion };
+		const result = this.schedule(record, input.task, input.signal);
+		if (input.signal?.aborted) {
+			await result.completion;
+			throw abortError();
+		}
+		return result;
 	}
 
-	async resume(agentId: string, prompt: string, mode?: AgentMode): Promise<StartResult> {
+	async resume(agentId: string, prompt: string, mode?: AgentMode, signal?: AbortSignal): Promise<StartResult> {
+		if (signal?.aborted) throw abortError();
 		const current = this.registry.get(agentId);
 		if (!current) throw new Error(`Unknown agent: ${agentId}`);
 		if (!isTerminalStatus(current.status)) throw new Error(`Agent ${agentId} is ${current.status}, not resumable`);
@@ -219,12 +251,12 @@ export class AgentManager {
 			lifecycleEventId: randomUUID(),
 		}));
 		this.publish(record);
-		const completion = new Promise<AgentRecord>((resolve) => {
-			this.queue.push({ agentId, prompt, resolve });
-		});
-		this.completions.set(agentId, completion);
-		this.drain();
-		return { record, completion };
+		const result = this.schedule(record, prompt, signal);
+		if (signal?.aborted) {
+			await result.completion;
+			throw abortError();
+		}
+		return result;
 	}
 
 	async stop(agentId: string): Promise<AgentRecord> {
@@ -241,6 +273,7 @@ export class AgentManager {
 			if (index < 0) return this.finishWithoutProcess(agentId, "interrupted", "Queued agent is unavailable");
 			const [pending] = this.queue.splice(index, 1);
 			const stopped = await this.finishWithoutProcess(agentId, "stopped", "Stopped before launch");
+			pending?.removeAbortListener();
 			pending?.resolve(stopped);
 			return stopped;
 		}
@@ -280,6 +313,7 @@ export class AgentManager {
 		const queued = this.queue.splice(0);
 		for (const pending of queued) {
 			const interrupted = await this.finishWithoutProcess(pending.agentId, "interrupted", "Parent session stopped");
+			pending.removeAbortListener();
 			pending.resolve(interrupted);
 		}
 		const active = [...this.active.values()];
@@ -299,7 +333,10 @@ export class AgentManager {
 				return this.finishWithoutProcess(pending.agentId, "failed", message);
 			});
 			this.active.set(pending.agentId, { completion });
-			completion.then((record) => pending.resolve(record));
+			completion.then((record) => {
+				pending.removeAbortListener();
+				pending.resolve(record);
+			});
 		}
 	}
 
@@ -308,18 +345,31 @@ export class AgentManager {
 		if (!record) throw new Error(`Unknown agent: ${pending.agentId}`);
 		let runCwd = record.cwd;
 		if (record.isolation === "worktree") {
-			runCwd = await this.worktrees.create(record.agentId, record.cwd);
-			record = await this.registry.update(record.agentId, (entry) => ({ ...entry, worktreePath: runCwd }));
+			const worktree = await this.worktrees.create(record.agentId, record.cwd);
+			runCwd = worktree.path;
+			record = await this.registry.update(record.agentId, (entry) => ({
+				...entry,
+				worktreePath: worktree.path,
+				worktreeBranch: worktree.branch,
+			}));
 		}
 		const preparingRun = this.active.get(record.agentId);
 		if (preparingRun?.desiredStatus) {
 			return this.finishWithoutProcess(record.agentId, preparingRun.desiredStatus, "Stopped before launch");
 		}
 		await fs.promises.mkdir(record.childSessionDir, { recursive: true });
+		const afterSessionDirectory = this.active.get(record.agentId)?.desiredStatus;
+		if (afterSessionDirectory)
+			return this.finishWithoutProcess(record.agentId, afterSessionDirectory, "Stopped before launch");
 		const promptDir = path.join(this.options.rootDir, "prompts");
 		await fs.promises.mkdir(promptDir, { recursive: true });
+		const afterPromptDirectory = this.active.get(record.agentId)?.desiredStatus;
+		if (afterPromptDirectory)
+			return this.finishWithoutProcess(record.agentId, afterPromptDirectory, "Stopped before launch");
 		const promptPath = path.join(promptDir, `${record.agentId}.md`);
 		await fs.promises.writeFile(promptPath, record.definition.systemPrompt, { encoding: "utf8", mode: 0o600 });
+		const afterPromptWrite = this.active.get(record.agentId)?.desiredStatus;
+		if (afterPromptWrite) return this.finishWithoutProcess(record.agentId, afterPromptWrite, "Stopped before launch");
 
 		const args = [
 			...this.invocation.prefixArgs,
@@ -360,6 +410,7 @@ export class AgentManager {
 			stdoutBuffer = lines.pop() ?? "";
 			for (const line of lines) processing = processing.then(() => this.processLine(agentId, line));
 		});
+		const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", resolve));
 		child.stderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			processing = processing.then(async () => {
@@ -367,6 +418,7 @@ export class AgentManager {
 				await this.registry.update(agentId, (entry) => ({ ...entry, error: `${entry.error ?? ""}${text}` }));
 			});
 		});
+		const stderrEnded = new Promise<void>((resolve) => child.stderr.once("end", resolve));
 		const exitPromise = new Promise<
 			{ ok: true; code: number | null; signal: NodeJS.Signals | null } | { ok: false; error: Error }
 		>((resolve) => {
@@ -374,18 +426,22 @@ export class AgentManager {
 			child.once("error", (error) => resolve({ ok: false, error }));
 		});
 		const started = new Date().toISOString();
+		const pid = child.pid;
+		const startToken = pid === undefined ? undefined : await processStartToken(pid);
 		record = await this.registry.update(record.agentId, (entry) => ({
 			...entry,
 			status: "running",
 			startedAt: started,
 			updatedAt: started,
-			pid: child.pid,
+			pid: startToken === undefined ? undefined : pid,
+			processStartToken: startToken,
 			lifecycleEventId: randomUUID(),
 		}));
 		this.publish(record);
 
 		const exit = await exitPromise;
 		if (!exit.ok) throw exit.error;
+		await Promise.all([stdoutEnded, stderrEnded]);
 		if (stdoutBuffer.trim()) processing = processing.then(() => this.processLine(record.agentId, stdoutBuffer));
 		await processing;
 		const currentRun = this.active.get(record.agentId);
@@ -419,7 +475,7 @@ export class AgentManager {
 			return;
 		const message = event.message as unknown as Message;
 		const text = getTextContent(message);
-		await this.registry.update(agentId, (entry) => {
+		const updated = await this.registry.update(agentId, (entry) => {
 			const activities = [...entry.activities];
 			let toolCount = entry.toolCount;
 			let usage = entry.usage;
@@ -453,6 +509,7 @@ export class AgentManager {
 				updatedAt: new Date().toISOString(),
 			};
 		});
+		this.notifySubscribers(updated);
 	}
 
 	private async finishWithoutProcess(agentId: string, status: AgentStatus, error?: string): Promise<AgentRecord> {
@@ -467,6 +524,7 @@ export class AgentManager {
 			endedAt,
 			updatedAt: endedAt,
 			pid: undefined,
+			processStartToken: undefined,
 			exitCode,
 			error: error ?? entry.error,
 			lifecycleEventId: randomUUID(),
@@ -514,12 +572,77 @@ export class AgentManager {
 		} catch {
 			// Live events are advisory; durable registry state remains authoritative.
 		}
+		this.notifySubscribers(record, event);
+		return event;
+	}
+
+	private notifySubscribers(record: AgentRecord, event?: AgentLifecycleEvent): void {
+		const notification = event ?? {
+			version: AGENT_PROTOCOL_VERSION,
+			eventId: record.lifecycleEventId,
+			agentId: record.agentId,
+			parentSessionId: record.parentSessionId,
+			status: record.status,
+			timestamp: new Date().toISOString(),
+			metadata: { ...record.metadata },
+		};
 		for (const listener of this.listeners) {
 			try {
-				listener(event);
+				listener(notification);
 			} catch {}
 		}
-		return event;
+	}
+
+	private schedule(record: AgentRecord, prompt: string, signal?: AbortSignal): StartResult {
+		let removeAbortListener = () => {};
+		let completionResolve: (record: AgentRecord) => void = () => {};
+		const completion = new Promise<AgentRecord>((resolve) => {
+			completionResolve = resolve;
+		});
+		const abort = () => {
+			void this.stop(record.agentId).catch(() => {});
+		};
+		if (signal) {
+			signal.addEventListener("abort", abort, { once: true });
+			removeAbortListener = () => signal.removeEventListener("abort", abort);
+		}
+		this.queue.push({ agentId: record.agentId, prompt, resolve: completionResolve, removeAbortListener });
+		this.completions.set(record.agentId, completion);
+		if (signal?.aborted) abort();
+		this.drain();
+		return { record, completion, detachAbort: removeAbortListener };
+	}
+
+	private async terminateRecoveredProcess(record: AgentRecord): Promise<void> {
+		if (record.pid === undefined || record.processStartToken === undefined) return;
+		const identity = await processStartToken(record.pid);
+		if (identity === undefined || identity !== record.processStartToken) return;
+		try {
+			process.kill(record.pid, "SIGTERM");
+		} catch (error: unknown) {
+			if (isRecord(error) && error.code === "ESRCH") return;
+			throw error;
+		}
+		if (await this.waitForRecoveredExit(record.pid, record.processStartToken, this.killGraceMs)) return;
+		try {
+			process.kill(record.pid, "SIGKILL");
+		} catch (error: unknown) {
+			if (isRecord(error) && error.code === "ESRCH") return;
+			throw error;
+		}
+		if (!(await this.waitForRecoveredExit(record.pid, record.processStartToken, this.killGraceMs))) {
+			throw new Error(`Unable to terminate recovered agent process ${record.pid}`);
+		}
+	}
+
+	private async waitForRecoveredExit(pid: number, token: string, timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		do {
+			const current = await processStartToken(pid);
+			if (current === undefined || current !== token) return true;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		} while (Date.now() < deadline);
+		return false;
 	}
 
 	private terminate(child: ChildProcess): void {

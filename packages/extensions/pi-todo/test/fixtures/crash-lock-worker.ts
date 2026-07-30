@@ -1,20 +1,13 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
-import { join } from "node:path";
+import { FileTodoStore } from "../../src/store.ts";
 
-const [directory] = process.argv.slice(2);
-if (!directory) throw new Error("Usage: crash-lock-worker <directory>");
-const lockPath = join(directory, ".locks", "list-1");
-await mkdir(lockPath, { recursive: true });
-await writeFile(
-	join(lockPath, "crashed.json"),
-	JSON.stringify({
-		version: 1,
-		nonce: "crashed",
-		pid: process.pid,
-		host: hostname(),
-		choosing: false,
-		ticket: 1,
-	}),
-	"utf8",
-);
+const [directory, state = "ticketed"] = process.argv.slice(2);
+if (!directory) throw new Error("Usage: crash-lock-worker <directory> [choosing|ticketed]");
+
+const store = new FileTodoStore(directory, {
+	async lockHook(phase) {
+		if ((state === "choosing" && phase === "published") || (state === "ticketed" && phase === "acquired")) {
+			process.exit(0);
+		}
+	},
+});
+await store.read("list-1");

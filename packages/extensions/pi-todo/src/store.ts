@@ -1,5 +1,6 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, readlink, rename, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -21,22 +22,57 @@ import type {
 import { TODO_STATUSES } from "./types.ts";
 
 const LOCK_WAIT_MS = 25;
-const LOCK_TIMEOUT_MS = 3000;
+const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DOCUMENT_HISTORY_LIMIT = 20;
 const REVISION_SNAPSHOT_LIMIT = 1000;
 
-interface FileTodoStoreOptions {
+export interface FileTodoStoreOptions {
 	revisionSnapshotLimit?: number;
+	lockTimeoutMs?: number;
+	lockHeartbeatMs?: number;
 	lockHook?: (phase: "published" | "acquired", listId: string) => Promise<void>;
+	lockNonce?: () => string;
+	lockEnvironment?: LockEnvironment;
 }
 
 interface LockContender {
 	version: 1;
 	nonce: string;
+	ownerId: string;
 	pid: number;
 	host: string;
+	hostId: string;
+	bootId: string;
+	pidNamespace: string;
+	processStartToken: string;
+	createdAt: number;
 	choosing: boolean;
 	ticket: number;
+}
+
+export interface LockIdentity {
+	host: string;
+	hostId: string;
+	bootId: string;
+	pidNamespace: string;
+	processStartToken: string;
+}
+
+export interface ProcessProbe {
+	status: "alive" | "missing" | "unknown";
+	startToken?: string;
+}
+
+export interface LockEnvironment {
+	current(): Promise<LockIdentity>;
+	probe(pid: number): Promise<ProcessProbe>;
+	now(): number;
+}
+
+interface LockHeartbeat {
+	version: 1;
+	ownerId: string;
+	timestamp: number;
 }
 
 export class TodoPersistenceError extends Error {
@@ -117,15 +153,29 @@ function assertDocument(value: unknown, path: string, expectedId: string): asser
 export class FileTodoStore {
 	private readonly rootDir: string;
 	private readonly revisionSnapshotLimit: number;
+	private readonly lockTimeoutMs: number;
+	private readonly lockHeartbeatMs: number;
 	private readonly lockHook: FileTodoStoreOptions["lockHook"];
+	private readonly lockNonce: () => string;
+	private readonly lockEnvironment: LockEnvironment;
 	private diagnostic: string | undefined;
 
 	constructor(rootDir: string, options: FileTodoStoreOptions = {}) {
 		this.rootDir = rootDir;
 		this.revisionSnapshotLimit = options.revisionSnapshotLimit ?? REVISION_SNAPSHOT_LIMIT;
+		this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+		this.lockHeartbeatMs = options.lockHeartbeatMs ?? 5000;
 		this.lockHook = options.lockHook;
+		this.lockNonce = options.lockNonce ?? randomUUID;
+		this.lockEnvironment = options.lockEnvironment ?? SYSTEM_LOCK_ENVIRONMENT;
 		if (!Number.isInteger(this.revisionSnapshotLimit) || this.revisionSnapshotLimit < 1) {
 			throw new TodoValidationError("Revision snapshot limit must be a positive integer");
+		}
+		if (!Number.isInteger(this.lockTimeoutMs) || this.lockTimeoutMs < 1) {
+			throw new TodoValidationError("Lock timeout must be a positive integer");
+		}
+		if (!Number.isInteger(this.lockHeartbeatMs) || this.lockHeartbeatMs < 10) {
+			throw new TodoValidationError("Lock heartbeat must be at least 10 milliseconds");
 		}
 	}
 
@@ -543,50 +593,128 @@ export class FileTodoStore {
 		}
 	}
 
+	private async atomicLockWrite(path: string, content: string): Promise<void> {
+		const directory = dirname(path);
+		await mkdir(directory, { recursive: true });
+		const temporary = join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+		const handle = await open(temporary, "wx", 0o600);
+		try {
+			await handle.writeFile(content, "utf8");
+		} finally {
+			await handle.close();
+		}
+		await rename(temporary, path);
+	}
+
+	private async atomicLockPublish(path: string, content: string): Promise<void> {
+		const directory = dirname(path);
+		await mkdir(directory, { recursive: true });
+		const temporary = join(directory, `.${process.pid}.${randomUUID()}.tmp`);
+		const handle = await open(temporary, "wx", 0o600);
+		try {
+			await handle.writeFile(content, "utf8");
+		} finally {
+			await handle.close();
+		}
+		try {
+			await link(temporary, path);
+		} finally {
+			await rm(temporary, { force: true });
+		}
+	}
+
 	private async withLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
 		validateListId(id);
 		const lockDir = join(this.rootDir, ".locks", id);
 		await mkdir(lockDir, { recursive: true });
-		const nonce = randomUUID();
-		const contenderPath = join(lockDir, `${nonce}.json`);
+		const identity = await this.lockEnvironment.current();
+		const nonce = this.lockNonce();
+		if (!/^[A-Za-z0-9-]{1,64}$/.test(nonce)) throw new TodoPersistenceError("Lock nonce is invalid");
+		const ownerId = randomUUID();
+		const contenderPath = join(lockDir, `${nonce}.${ownerId}.json`);
+		const heartbeatPath = join(lockDir, `${nonce}.${ownerId}.heartbeat`);
 		const contender: LockContender = {
 			version: 1,
 			nonce,
+			ownerId,
 			pid: process.pid,
-			host: hostname(),
+			...identity,
+			createdAt: this.lockEnvironment.now(),
 			choosing: true,
 			ticket: 0,
 		};
-		const deadline = Date.now() + LOCK_TIMEOUT_MS;
-		await this.atomicWrite(contenderPath, JSON.stringify(contender));
+		let published = false;
+		let stopHeartbeat: (() => Promise<void>) | undefined;
 		try {
+			await this.atomicLockPublish(
+				heartbeatPath,
+				JSON.stringify({ version: 1, ownerId, timestamp: contender.createdAt } satisfies LockHeartbeat),
+			);
+			await this.atomicLockPublish(contenderPath, JSON.stringify(contender));
+			published = true;
+			stopHeartbeat = this.startLockHeartbeat(heartbeatPath, ownerId);
 			await this.lockHook?.("published", id);
-			const published = await readLockContenders(lockDir);
+			const initial = await readLockContenders(lockDir, identity, this.lockEnvironment);
 			contender.choosing = false;
-			contender.ticket = Math.max(0, ...published.valid.map((candidate) => candidate.ticket)) + 1;
-			await this.atomicWrite(contenderPath, JSON.stringify(contender));
+			contender.ticket = Math.max(0, ...initial.valid.map((candidate) => candidate.ticket)) + 1;
+			await this.atomicLockWrite(contenderPath, JSON.stringify(contender));
+			const deadline = Date.now() + this.lockTimeoutMs;
 			while (true) {
-				const contenders = await readLockContenders(lockDir);
-				for (const stalePath of contenders.stalePaths) await rm(stalePath, { force: true });
-				if (contenders.malformed || !contenders.valid.some((candidate) => candidate.nonce === nonce)) {
+				const contenders = await readLockContenders(lockDir, identity, this.lockEnvironment);
+				for (const stale of contenders.stale) {
+					await removeOwnedContender(stale.contenderPath, stale.ownerId);
+					await rm(stale.heartbeatPath, { force: true });
+				}
+				if (contenders.malformed || !contenders.valid.some((candidate) => candidate.ownerId === ownerId)) {
 					throw new TodoPersistenceError(`Todo list "${id}" lock state is malformed`);
 				}
-				const blocked = contenders.valid.some(
+				const blockers = contenders.valid.filter(
 					(candidate) =>
-						candidate.nonce !== nonce &&
+						candidate.ownerId !== ownerId &&
 						(candidate.choosing ||
 							candidate.ticket < contender.ticket ||
-							(candidate.ticket === contender.ticket && candidate.nonce < nonce)),
+							(candidate.ticket === contender.ticket && compareContenders(candidate, contender) < 0)),
 				);
-				if (!blocked) break;
-				if (Date.now() >= deadline) throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock`);
+				if (blockers.length === 0) break;
+				if (Date.now() >= deadline) {
+					const retainedUnverifiable = blockers.some((candidate) =>
+						contenders.unverifiableOwnerIds.has(candidate.ownerId),
+					);
+					const detail = retainedUnverifiable
+						? "owner identity could not be verified, so its contender was retained conservatively"
+						: "another live owner still holds the lock";
+					throw new TodoPersistenceError(`Timed out waiting for todo list "${id}" lock; ${detail}`);
+				}
 				await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
 			}
 			await this.lockHook?.("acquired", id);
 			return await operation();
 		} finally {
-			await rm(contenderPath, { force: true });
+			await stopHeartbeat?.();
+			if (published) await removeOwnedContender(contenderPath, ownerId);
+			await rm(heartbeatPath, { force: true });
 		}
+	}
+
+	private startLockHeartbeat(path: string, ownerId: string): () => Promise<void> {
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let pending = Promise.resolve();
+		const schedule = () => {
+			if (stopped) return;
+			timer = setTimeout(() => {
+				pending = this.atomicLockWrite(
+					path,
+					JSON.stringify({ version: 1, ownerId, timestamp: this.lockEnvironment.now() } satisfies LockHeartbeat),
+				).then(schedule, schedule);
+			}, this.lockHeartbeatMs);
+		};
+		schedule();
+		return async () => {
+			stopped = true;
+			if (timer !== undefined) clearTimeout(timer);
+			await pending;
+		};
 	}
 
 	private listDir(id: string): string {
@@ -620,13 +748,19 @@ function parseRevisionSnapshotName(name: string): number | undefined {
 	return isPositiveInteger(revision) ? revision : undefined;
 }
 
-async function readLockContenders(lockDir: string): Promise<{
+async function readLockContenders(
+	lockDir: string,
+	identity: LockIdentity,
+	environment: LockEnvironment,
+): Promise<{
 	valid: LockContender[];
-	stalePaths: string[];
+	stale: Array<{ contenderPath: string; heartbeatPath: string; ownerId: string }>;
+	unverifiableOwnerIds: Set<string>;
 	malformed: boolean;
 }> {
 	const valid: LockContender[] = [];
-	const stalePaths: string[] = [];
+	const stale: Array<{ contenderPath: string; heartbeatPath: string; ownerId: string }> = [];
+	const unverifiableOwnerIds = new Set<string>();
 	let malformed = false;
 	for (const name of await readdir(lockDir)) {
 		if (!name.endsWith(".json")) continue;
@@ -637,29 +771,205 @@ async function readLockContenders(lockDir: string): Promise<{
 				malformed = true;
 				continue;
 			}
-			if (value.host === hostname() && !isProcessAlive(value.pid)) stalePaths.push(path);
-			else valid.push(value);
+			const heartbeatPath = join(lockDir, `${value.nonce}.${value.ownerId}.heartbeat`);
+			const state = await classifyContender(value, identity, environment);
+			if (state === "stale") {
+				stale.push({ contenderPath: path, heartbeatPath, ownerId: value.ownerId });
+			} else {
+				valid.push(value);
+				if (state === "unverifiable" || state === "foreign") unverifiableOwnerIds.add(value.ownerId);
+			}
 		} catch (error) {
 			if (!isNotFound(error)) malformed = true;
 		}
 	}
-	return { valid, stalePaths, malformed };
+	return { valid, stale, unverifiableOwnerIds, malformed };
 }
 
-function isLockContender(value: unknown, expectedNonce: string): value is LockContender {
+function isLockContender(value: unknown, expectedKey: string): value is LockContender {
 	if (typeof value !== "object" || value === null) return false;
 	const contender = value as Record<string, unknown>;
 	return (
 		contender.version === 1 &&
-		contender.nonce === expectedNonce &&
+		typeof contender.nonce === "string" &&
+		typeof contender.ownerId === "string" &&
+		`${contender.nonce}.${contender.ownerId}` === expectedKey &&
 		typeof contender.pid === "number" &&
 		Number.isInteger(contender.pid) &&
 		typeof contender.host === "string" &&
+		typeof contender.hostId === "string" &&
+		typeof contender.bootId === "string" &&
+		typeof contender.pidNamespace === "string" &&
+		typeof contender.processStartToken === "string" &&
+		typeof contender.createdAt === "number" &&
+		Number.isFinite(contender.createdAt) &&
 		typeof contender.choosing === "boolean" &&
 		typeof contender.ticket === "number" &&
 		Number.isInteger(contender.ticket) &&
 		contender.ticket >= 0
 	);
+}
+
+const SYSTEM_LOCK_ENVIRONMENT: LockEnvironment = {
+	current: currentSystemLockIdentity,
+	probe: probeSystemProcess,
+	now: Date.now,
+};
+
+async function currentSystemLockIdentity(): Promise<LockIdentity> {
+	const linux = process.platform === "linux";
+	const [hostId, bootId, pidNamespace, processProbe] = await Promise.all([
+		linux ? readOptionalText("/etc/machine-id") : undefined,
+		currentSystemBootId(),
+		linux ? readOptionalLink("/proc/self/ns/pid") : "system",
+		probeSystemProcess(process.pid),
+	]);
+	const host = hostname();
+	return {
+		host,
+		hostId: hostId ?? host,
+		bootId: bootId ?? "unverified",
+		pidNamespace: pidNamespace ?? "unverified",
+		processStartToken: processProbe.startToken ?? "unverified",
+	};
+}
+
+async function classifyContender(
+	contender: LockContender,
+	identity: LockIdentity,
+	environment: LockEnvironment,
+): Promise<"stale" | "live" | "unverifiable" | "foreign"> {
+	if (contender.hostId !== identity.hostId) return "foreign";
+	if (contender.bootId !== "unverified" && identity.bootId !== "unverified" && contender.bootId !== identity.bootId) {
+		return "stale";
+	}
+	if (
+		contender.pidNamespace === "unverified" ||
+		identity.pidNamespace === "unverified" ||
+		contender.pidNamespace !== identity.pidNamespace
+	) {
+		return "unverifiable";
+	}
+	const processProbe = await environment.probe(contender.pid);
+	if (processProbe.status === "missing") return "stale";
+	if (
+		processProbe.status === "alive" &&
+		processProbe.startToken !== undefined &&
+		contender.processStartToken !== "unverified"
+	) {
+		return processProbe.startToken === contender.processStartToken ? "live" : "stale";
+	}
+	return "unverifiable";
+}
+
+function compareContenders(left: LockContender, right: LockContender): number {
+	if (left.nonce !== right.nonce) return left.nonce < right.nonce ? -1 : 1;
+	if (left.ownerId === right.ownerId) return 0;
+	return left.ownerId < right.ownerId ? -1 : 1;
+}
+
+async function removeOwnedContender(path: string, ownerId: string): Promise<void> {
+	try {
+		const value: unknown = JSON.parse(await readFile(path, "utf8"));
+		if (typeof value === "object" && value !== null && (value as Record<string, unknown>).ownerId === ownerId) {
+			await rm(path, { force: true });
+		}
+	} catch (error) {
+		if (!isNotFound(error)) throw error;
+	}
+}
+
+async function readOptionalText(path: string): Promise<string | undefined> {
+	try {
+		return (await readFile(path, "utf8")).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function readOptionalLink(path: string): Promise<string | undefined> {
+	try {
+		return await readlink(path);
+	} catch {
+		return undefined;
+	}
+}
+
+async function currentSystemBootId(): Promise<string | undefined> {
+	if (process.platform === "linux") return readOptionalText("/proc/sys/kernel/random/boot_id");
+	try {
+		if (process.platform === "darwin")
+			return (await runSystemCommand("sysctl", ["-n", "kern.boottime"])) || undefined;
+		if (process.platform === "win32") {
+			return (
+				(await runSystemCommand("powershell.exe", [
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					"(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks",
+				])) || undefined
+			);
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
+async function probeSystemProcess(pid: number): Promise<ProcessProbe> {
+	if (process.platform === "linux") {
+		try {
+			const statValue = await readFile(`/proc/${pid}/stat`, "utf8");
+			const commandEnd = statValue.lastIndexOf(")");
+			if (commandEnd < 0) return { status: "unknown" };
+			const fields = statValue
+				.slice(commandEnd + 1)
+				.trim()
+				.split(/\s+/);
+			const startToken = fields[19];
+			return startToken ? { status: "alive", startToken } : { status: "unknown" };
+		} catch (error) {
+			if (!isNotFound(error)) return { status: "unknown" };
+		}
+	} else {
+		try {
+			const startToken =
+				process.platform === "darwin"
+					? await runSystemCommand("ps", ["-o", "lstart=", "-p", String(pid)])
+					: process.platform === "win32"
+						? await runSystemCommand("powershell.exe", [
+								"-NoProfile",
+								"-NonInteractive",
+								"-Command",
+								`(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CreationDate.ToUniversalTime().Ticks`,
+							])
+						: "";
+			if (startToken) return { status: "alive", startToken };
+		} catch {
+			// Fall back to existence probing when the platform command is unavailable or races with process exit.
+		}
+	}
+	return probeProcessExistence(pid);
+}
+
+function probeProcessExistence(pid: number): ProcessProbe {
+	try {
+		process.kill(pid, 0);
+		return { status: "alive" };
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "ESRCH"
+			? { status: "missing" }
+			: { status: "unknown" };
+	}
+}
+
+function runSystemCommand(file: string, args: readonly string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile(file, [...args], { encoding: "utf8", windowsHide: true }, (error, stdout) => {
+			if (error) reject(error);
+			else resolve(stdout.trim());
+		});
+	});
 }
 
 function validateListId(id: string): void {
@@ -739,13 +1049,4 @@ function assertSnapshot(value: unknown, path: string): void {
 	}
 	for (const task of snapshotValue.tasks) assertTask(task, snapshotValue.revision, path);
 	for (const tombstone of snapshotValue.tombstones) assertTombstone(tombstone, snapshotValue.revision, path);
-}
-
-function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return !(error instanceof Error && "code" in error && error.code === "ESRCH");
-	}
 }

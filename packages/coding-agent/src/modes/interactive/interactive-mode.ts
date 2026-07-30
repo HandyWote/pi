@@ -75,6 +75,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	MarkdownTransformer,
 	ProjectTrustContext,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
@@ -1912,6 +1913,10 @@ export class InteractiveMode {
 		return this.session.getToolDefinition(toolName);
 	}
 
+	private getMarkdownTransformers(): MarkdownTransformer[] {
+		return this.session.extensionRunner.getMarkdownTransformers();
+	}
+
 	/**
 	 * Set up keyboard shortcuts registered by extensions.
 	 */
@@ -3126,10 +3131,11 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.getMarkdownTransformers(),
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
 				}
 				break;
@@ -3141,7 +3147,45 @@ export class InteractiveMode {
 
 			case "message_end": {
 				if (event.message.role === "user") break;
+<<<<<<< HEAD
 				this.completeStreamingAssistantMessage(event.message);
+=======
+				if (this.streamingComponent && event.message.role === "assistant") {
+					this.streamingMessage = event.message;
+					let errorMessage: string | undefined;
+					if (this.streamingMessage.stopReason === "aborted") {
+						const retryAttempt = this.session.retryAttempt;
+						errorMessage =
+							retryAttempt > 0
+								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
+								: "Operation aborted";
+						this.streamingMessage.errorMessage = errorMessage;
+					}
+					this.streamingComponent.updateContent(this.streamingMessage, false);
+
+					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
+						if (!errorMessage) {
+							errorMessage = this.streamingMessage.errorMessage || "Error";
+						}
+						for (const [, component] of this.pendingTools.entries()) {
+							component.updateResult({
+								content: [{ type: "text", text: errorMessage }],
+								isError: true,
+							});
+						}
+						this.pendingTools.clear();
+					} else {
+						// Args are now complete - trigger diff computation for edit tools
+						for (const [, component] of this.pendingTools.entries()) {
+							component.setArgsComplete();
+						}
+						this.maybeShowCacheMissNotice(this.streamingMessage);
+					}
+					this.streamingComponent = undefined;
+					this.streamingMessage = undefined;
+					this.footer.invalidate();
+				}
+>>>>>>> 714978bf5 (Markdown api (#7231))
 				this.ui.requestRender();
 				break;
 			}
@@ -3321,7 +3365,7 @@ export class InteractiveMode {
 		if (!this.streamingComponent || message.role !== "assistant") return;
 
 		this.streamingMessage = message;
-		this.streamingComponent.updateContent(message);
+		this.streamingComponent.updateContent(message, true);
 
 		for (const content of message.content) {
 			if (content.type === "toolCall") {
@@ -3509,10 +3553,36 @@ export class InteractiveMode {
 					// Render user message separately if present
 					if (skillBlock.userMessage) {
 						this.chatContainer.addChild(new Spacer(1));
+<<<<<<< HEAD
+=======
+					}
+					const skillBlock = parseSkillBlock(textContent);
+					if (skillBlock) {
+						// Render skill block (collapsible)
+						const component = new SkillInvocationMessageComponent(
+							skillBlock,
+							this.getMarkdownThemeWithSettings(),
+						);
+						component.setExpanded(this.toolOutputExpanded);
+						this.chatContainer.addChild(component);
+						// Render user message separately if present
+						if (skillBlock.userMessage) {
+							this.chatContainer.addChild(new Spacer(1));
+							const userComponent = new UserMessageComponent(
+								skillBlock.userMessage,
+								this.getMarkdownThemeWithSettings(),
+								this.outputPad,
+								this.getMarkdownTransformers(),
+							);
+							this.chatContainer.addChild(userComponent);
+						}
+					} else {
+>>>>>>> 714978bf5 (Markdown api (#7231))
 						const userComponent = new UserMessageComponent(
 							skillBlock.userMessage,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
+							this.getMarkdownTransformers(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3527,6 +3597,29 @@ export class InteractiveMode {
 				if (options?.populateHistory) {
 					this.editor.addToHistory?.(textContent);
 				}
+<<<<<<< HEAD
+=======
+				break;
+			}
+			case "assistant": {
+				const assistantComponent = new AssistantMessageComponent(
+					message,
+					this.hideThinkingBlock,
+					this.getMarkdownThemeWithSettings(),
+					this.hiddenThinkingLabel,
+					this.outputPad,
+					this.getMarkdownTransformers(),
+				);
+				this.chatContainer.addChild(assistantComponent);
+				break;
+			}
+			case "toolResult": {
+				// Tool results are rendered inline with tool calls, handled separately
+				break;
+			}
+			default: {
+				const _exhaustive: never = message;
+>>>>>>> 714978bf5 (Markdown api (#7231))
 			}
 			return;
 		}

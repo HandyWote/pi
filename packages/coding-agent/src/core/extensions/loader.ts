@@ -37,6 +37,7 @@ import type {
 	ExtensionFactory,
 	ExtensionRuntime,
 	LoadExtensionsResult,
+	MarkdownTransformer,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
@@ -313,6 +314,11 @@ function createExtensionAPI(
 		registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
 			runtime.assertActive();
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
+		},
+
+		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
+			runtime.assertActive();
+			extension.markdownTransformer = transformer;
 		},
 
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {

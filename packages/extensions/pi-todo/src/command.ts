@@ -11,12 +11,7 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): voi
 			const input = args.trim();
 			if (!input || input === "list") {
 				const view = await runtime.view();
-				ctx.ui.notify(
-					view
-						? `${view.summary.completed}/${view.summary.total} completed, ${view.summary.in_progress} active, ${view.summary.ready} ready, ${view.summary.blocked} blocked`
-						: "No todo list is active",
-					"info",
-				);
+				ctx.ui.notify(view ? formatTodoList(view) : "No todo list is active", "info");
 				return;
 			}
 
@@ -60,6 +55,22 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): voi
 			);
 		},
 	});
+}
+
+function formatTodoList(view: NonNullable<Awaited<ReturnType<TodoRuntime["view"]>>>): string {
+	const summary = `${view.summary.completed}/${view.summary.total} completed, ${view.summary.in_progress} active, ${view.summary.ready} ready, ${view.summary.blocked} blocked`;
+	const visible = view.list.tasks.slice(0, 20).map((task) => {
+		const owner = task.owner ? ` @${task.owner}` : "";
+		const dependencies = task.depends_on.length ? ` <- ${task.depends_on.join(",")}` : "";
+		return `[${task.status}] ${task.id}: ${truncate(task.subject, 300)}${owner}${dependencies}`;
+	});
+	if (view.list.tasks.length > visible.length)
+		visible.push(`... ${view.list.tasks.length - visible.length} more tasks`);
+	return `${summary}\n${visible.join("\n")}`;
+}
+
+function truncate(value: string, limit: number): string {
+	return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 async function resolvePlan(input: string, cwd: string): Promise<{ plan: string; source: string }> {

@@ -7,6 +7,12 @@ import { updateTodoWidget } from "./widget.ts";
 
 export const TODO_BINDING_ENTRY = "pi-todo-binding";
 export const TODO_DIGEST_MESSAGE = "pi-todo-digest";
+export const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
+
+const OWNER_EVIDENCE_WAIT_MS = 50;
+const DIGEST_TASKS_PER_SECTION = 5;
+const DIGEST_DIRECTION_LIMIT = 500;
+const DIGEST_CHAR_LIMIT = 4000;
 
 export interface TodoRuntimeOptions {
 	dataDir?: string;
@@ -23,6 +29,8 @@ export class TodoRuntime {
 	private binding: TodoBindingEntry | undefined;
 	private context: ExtensionContext | undefined;
 	private agentContext: AgentContext | undefined;
+	private readonly liveOwners = new Set<string>();
+	private readonly pendingOwnerEvidence = new Set<Promise<void>>();
 
 	constructor(pi: ExtensionAPI, options: TodoRuntimeOptions = {}) {
 		this.pi = pi;
@@ -46,8 +54,10 @@ export class TodoRuntime {
 
 	async initialize(event: SessionStartEvent, ctx: ExtensionContext): Promise<void> {
 		this.context = ctx;
+		this.liveOwners.clear();
 		const agentTask = this.getTaskContext();
 		if (agentTask) {
+			if (agentTask.agentId) this.liveOwners.add(agentTask.agentId);
 			const list = await this.store.read(agentTask.listId);
 			this.setBinding(list, true);
 			await this.refresh();
@@ -71,8 +81,18 @@ export class TodoRuntime {
 			const cloned = await this.store.clone(restored.list_id, restored.revision);
 			this.setBinding(cloned, true);
 		} else {
-			const list = await this.store.read(restored.list_id);
-			this.setBinding(list, false);
+			this.setBinding(await this.store.read(restored.list_id), false);
+			const sessionId = ctx.sessionManager.getSessionId();
+			this.liveOwners.add(sessionId);
+			this.pi.events.emit(AGENT_STATUS_REQUEST_CHANNEL, {
+				version: 1,
+				parentSessionId: sessionId,
+				timestamp: new Date().toISOString(),
+			});
+			await new Promise((resolve) => setTimeout(resolve, OWNER_EVIDENCE_WAIT_MS));
+			await this.waitForOwnerEvidence();
+			const list = await this.store.reconcileOwners(restored.list_id, this.liveOwners);
+			this.setBinding(list, true);
 		}
 		await this.refresh();
 	}
@@ -143,6 +163,24 @@ export class TodoRuntime {
 		return this.record(await this.store.transfer(this.requireListId(), taskId, owner, claimToken));
 	}
 
+	async confirmOwnerLive(taskId: string, owner: string, claimToken: string): Promise<void> {
+		const evidence = (async () => {
+			const document = await this.store.transfer(this.requireListId(), taskId, owner, claimToken);
+			this.liveOwners.add(owner);
+			await this.record(document);
+		})();
+		this.pendingOwnerEvidence.add(evidence);
+		try {
+			await evidence;
+		} finally {
+			this.pendingOwnerEvidence.delete(evidence);
+		}
+	}
+
+	async syncCurrent(): Promise<TodoListDocument> {
+		return this.record(await this.store.read(this.requireListId()));
+	}
+
 	async delete(taskId: string): Promise<TodoListDocument> {
 		return this.record(await this.store.delete(this.requireListId(), taskId));
 	}
@@ -176,21 +214,17 @@ export class TodoRuntime {
 		const active = view.list.tasks.filter((task) => task.status === "in_progress");
 		const lines = [
 			`[PI TODO ACTIVE] ${view.summary.completed}/${view.summary.total} completed.`,
-			`Direction: ${view.list.global_direction}`,
+			`Direction: ${truncate(view.list.global_direction, DIGEST_DIRECTION_LIMIT)}`,
 		];
-		if (active.length) {
-			lines.push(`In progress: ${active.map((task) => `${task.id} (${task.owner ?? "owned"})`).join(", ")}`);
-		}
-		if (view.ready.length) lines.push(`Ready: ${view.ready.map((task) => `${task.id}: ${task.subject}`).join("; ")}`);
-		if (view.blocked.length) {
-			lines.push(`Blocked: ${view.blocked.map((task) => `${task.id} <- ${task.depends_on.join(",")}`).join("; ")}`);
-		}
+		appendDigestSection(lines, "In progress", active, (task) => `${task.id} (${task.owner ?? "owned"})`);
+		appendDigestSection(lines, "Ready", view.ready, (task) => `${task.id}: ${task.subject}`);
+		appendDigestSection(lines, "Blocked", view.blocked, (task) => `${task.id} <- ${task.depends_on.join(",")}`);
 		if (view.ready.length > 1 && hasAgentCapability(this.pi.getActiveTools())) {
 			lines.push("Several independent tasks are ready. Prefer parallel delegation when appropriate.");
 		} else if (view.ready.length) {
 			lines.push("Claim a ready task and continue it in the current session.");
 		}
-		return lines.join("\n");
+		return truncate(lines.join("\n"), DIGEST_CHAR_LIMIT);
 	}
 
 	async injectDigest(deliverAs: "followUp" | "nextTurn" = "nextTurn"): Promise<void> {
@@ -229,6 +263,12 @@ export class TodoRuntime {
 	private requireListId(): string {
 		if (!this.binding?.list_id) throw new Error("No todo list is active");
 		return this.binding.list_id;
+	}
+
+	private async waitForOwnerEvidence(): Promise<void> {
+		while (this.pendingOwnerEvidence.size > 0) {
+			await Promise.allSettled([...this.pendingOwnerEvidence]);
+		}
 	}
 }
 
@@ -271,4 +311,20 @@ function parseAgentContext(raw: string | undefined): AgentContext | undefined {
 
 function hasAgentCapability(activeTools: readonly string[]): boolean {
 	return activeTools.some((name) => name.toLowerCase().includes("agent"));
+}
+
+function appendDigestSection(
+	lines: string[],
+	label: string,
+	tasks: readonly TodoListDocument["tasks"][number][],
+	format: (task: TodoListDocument["tasks"][number]) => string,
+): void {
+	if (tasks.length === 0) return;
+	const visible = tasks.slice(0, DIGEST_TASKS_PER_SECTION).map(format);
+	if (tasks.length > visible.length) visible.push(`... ${tasks.length - visible.length} more`);
+	lines.push(`${label}: ${visible.join("; ")}`);
+}
+
+function truncate(value: string, limit: number): string {
+	return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
 }

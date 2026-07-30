@@ -15,7 +15,9 @@ export function registerAgentLifecycleProtocol(events: EventBus, runtime: TodoRu
 		if (!metadata || metadata["pi.todo/list-id"] !== runtime.getListId()) return;
 		try {
 			if (event.status === "queued" || event.status === "started" || event.status === "running") {
-				await runtime.transfer(metadata["pi.todo/task-id"], event.agentId, metadata["pi.todo/claim-token"]);
+				await runtime.confirmOwnerLive(metadata["pi.todo/task-id"], event.agentId, metadata["pi.todo/claim-token"]);
+			} else if (event.status === "completed") {
+				await runtime.syncCurrent();
 			} else if (event.status === "failed" || event.status === "stopped" || event.status === "interrupted") {
 				await runtime.release(metadata["pi.todo/task-id"], event.agentId, metadata["pi.todo/claim-token"]);
 			}

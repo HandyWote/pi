@@ -104,14 +104,9 @@ describe("FileTodoStore", () => {
 
 	it("requires claims for in_progress and a matching token for claimed updates", async () => {
 		await store.create("Protected work", [task("A")], "list-1");
-		await expect(store.update("list-1", "A", { owner: "attacker", status: "in_progress" })).rejects.toThrow(
-			"through todo_claim",
-		);
+		await expect(store.update("list-1", "A", { status: "in_progress" })).rejects.toThrow("through todo_claim");
 		const claim = await store.claim("list-1", "A", "agent-1");
 		await expect(store.update("list-1", "A", { status: "completed" })).rejects.toThrow("current claim token");
-		await expect(store.update("list-1", "A", { owner: "agent-2", claim_token: claim.claim_token })).rejects.toThrow(
-			"ownership can change only",
-		);
 		await store.update("list-1", "A", { status: "completed", claim_token: claim.claim_token });
 		expect((await store.read("list-1")).tasks[0]?.status).toBe("completed");
 	});
@@ -137,6 +132,22 @@ describe("FileTodoStore", () => {
 		await execFileAsync(process.execPath, [CRASH_LOCK_WORKER.pathname, directory]);
 		const claim = await store.claim("list-1", "A", "main");
 		expect(claim.task.owner).toBe("main");
+	});
+
+	it("reconciles orphaned owners while preserving owners with live evidence", async () => {
+		await store.create("Recover owners", [task("A"), task("B")], "list-1");
+		await store.claim("list-1", "A", "session-1");
+		await store.claim("list-1", "B", "agent-orphan");
+		const reconciled = await store.reconcileOwners("list-1", new Set(["session-1"]));
+		expect(reconciled.tasks.find((item) => item.id === "A")).toMatchObject({
+			status: "in_progress",
+			owner: "session-1",
+		});
+		expect(reconciled.tasks.find((item) => item.id === "B")).toMatchObject({
+			status: "pending",
+			owner: undefined,
+			claim_token: undefined,
+		});
 	});
 
 	it("rejects list path traversal before creating a lock", async () => {
@@ -170,6 +181,16 @@ describe("FileTodoStore", () => {
 		const clone = await store.clone("source", 2, "forked");
 		expect(clone.tasks.map((item) => item.id)).toEqual(["A", "B"]);
 		expect((await store.read("source")).tasks.map((item) => item.id)).toEqual(["A", "B", "C"]);
+	});
+
+	it("keeps document history bounded while retaining old revision snapshots", async () => {
+		await store.create("Long history", [task("A")], "list-1");
+		for (let revision = 2; revision <= 23; revision++) {
+			await store.update("list-1", "A", { subject: `Task A revision ${revision}` });
+		}
+		const current = await store.read("list-1");
+		expect(current.history).toHaveLength(20);
+		expect((await store.read("list-1", 1)).tasks[0]?.subject).toBe("Task A");
 	});
 
 	it("does not inherit live claims into a fork or overwrite an existing target", async () => {

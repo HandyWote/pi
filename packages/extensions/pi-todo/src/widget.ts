@@ -57,8 +57,9 @@ function appendSection(lines: string[], label: string, tasks: readonly TodoTask[
 		const owner = task.owner ? ` @${task.owner}` : "";
 		const dependencies = label === "Blocked" ? ` <- ${task.depends_on.join(",")}` : "";
 		const symbol = label === "Active" ? "◐" : label === "Blocked" ? "⊘" : "○";
+		const subject = label === "Active" ? (task.active_form ?? task.subject) : task.subject;
 		lines.push(
-			truncateToWidth(`  ${symbol} ${theme.fg("accent", task.id)} ${task.subject}${owner}${dependencies}`, width),
+			truncateToWidth(`  ${symbol} ${theme.fg("accent", task.id)} ${subject}${owner}${dependencies}`, width),
 		);
 	}
 }

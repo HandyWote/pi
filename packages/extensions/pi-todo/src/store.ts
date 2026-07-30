@@ -23,6 +23,8 @@ import { TODO_STATUSES } from "./types.ts";
 const LOCK_WAIT_MS = 25;
 const LOCK_TIMEOUT_MS = 3000;
 const FOREIGN_LOCK_STALE_MS = 30_000;
+const MISSING_LOCK_OWNER_STALE_MS = 1000;
+const DOCUMENT_HISTORY_LIMIT = 20;
 
 export class TodoPersistenceError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
@@ -160,7 +162,8 @@ export class FileTodoStore {
 		return this.withLock(id, async () => {
 			const document = await this.readDocument(id);
 			if (revision === undefined || revision === document.revision) return cloneDocument(document);
-			const historical = document.history.find((entry) => entry.revision === revision);
+			const historical =
+				document.history.find((entry) => entry.revision === revision) ?? (await this.readSnapshot(id, revision));
 			if (!historical) throw new TodoValidationError(`Todo list "${id}" has no revision ${revision}`);
 			return {
 				...historical,
@@ -231,7 +234,6 @@ export class FileTodoStore {
 			depends_on?: string[];
 			acceptance_criteria?: string[] | null;
 			status?: TodoStatus;
-			owner?: string | null;
 			claim_token?: string;
 			expected_revision?: number;
 		},
@@ -254,9 +256,6 @@ export class FileTodoStore {
 			}
 			if (task.status === "in_progress" && patch.status === "pending") {
 				throw new TodoValidationError(`Todo "${taskId}" must return to pending through todo_release`);
-			}
-			if (patch.owner !== undefined && patch.owner !== task.owner) {
-				throw new TodoValidationError(`Todo "${taskId}" ownership can change only through claim or release`);
 			}
 			if (patch.subject !== undefined) task.subject = patch.subject;
 			if (patch.description !== undefined) task.description = patch.description?.trim() || undefined;
@@ -334,6 +333,23 @@ export class FileTodoStore {
 		});
 	}
 
+	async reconcileOwners(listId: string, liveOwners: ReadonlySet<string>): Promise<TodoListDocument> {
+		return this.mutate(listId, (document, now) => {
+			const orphans = document.tasks.filter(
+				(task) => task.status === "in_progress" && task.owner !== undefined && !liveOwners.has(task.owner),
+			);
+			if (orphans.length === 0) return false;
+			for (const task of orphans) {
+				task.status = "pending";
+				task.owner = undefined;
+				task.claim_token = undefined;
+				task.updated_at = now;
+				task.revision = document.revision + 1;
+			}
+			return true;
+		});
+	}
+
 	async delete(listId: string, taskId: string): Promise<TodoListDocument> {
 		return this.mutate(listId, (document, now) => {
 			const task = requireTask(document, taskId);
@@ -396,7 +412,11 @@ export class FileTodoStore {
 			const previous = snapshot(document);
 			const now = new Date().toISOString();
 			if (operation(document, now) === false) return cloneDocument(document);
+			await this.writeSnapshot(id, previous);
 			document.history.push(previous);
+			if (document.history.length > DOCUMENT_HISTORY_LIMIT) {
+				document.history.splice(0, document.history.length - DOCUMENT_HISTORY_LIMIT);
+			}
 			document.revision++;
 			document.updated_at = now;
 			await this.writeDocument(document);
@@ -442,6 +462,25 @@ export class FileTodoStore {
 			if (!isNotFound(error)) throw error;
 		}
 		await this.atomicWrite(path, `${JSON.stringify(document, null, 2)}\n`);
+	}
+
+	private async writeSnapshot(id: string, value: TodoSnapshot): Promise<void> {
+		await this.atomicWrite(
+			join(this.listDir(id), "revisions", `${value.revision}.json`),
+			`${JSON.stringify(value, null, 2)}\n`,
+		);
+	}
+
+	private async readSnapshot(id: string, revision: number): Promise<TodoSnapshot | undefined> {
+		const path = join(this.listDir(id), "revisions", `${revision}.json`);
+		try {
+			const value: unknown = JSON.parse(await readFile(path, "utf8"));
+			assertSnapshot(value, path);
+			return value as TodoSnapshot;
+		} catch (error) {
+			if (isNotFound(error)) return undefined;
+			throw error;
+		}
 	}
 
 	private async atomicWrite(path: string, content: string): Promise<void> {
@@ -504,18 +543,35 @@ export class FileTodoStore {
 
 	private async reapStaleLock(lockPath: string, ownerPath: string): Promise<boolean> {
 		const reaperPath = `${lockPath}.reaper`;
+		const reaperOwnerPath = join(reaperPath, "owner.json");
+		const nonce = randomUUID();
 		try {
 			await mkdir(reaperPath);
+			await this.atomicWrite(
+				reaperOwnerPath,
+				JSON.stringify({ pid: process.pid, host: hostname(), nonce, createdAt: new Date().toISOString() }),
+			);
 		} catch (error) {
-			if (isAlreadyExists(error)) return false;
-			throw error;
+			if (!isAlreadyExists(error)) throw error;
+			if (await isStaleLock(reaperPath, reaperOwnerPath)) {
+				await rm(reaperPath, { recursive: true, force: true });
+				return this.reapStaleLock(lockPath, ownerPath);
+			}
+			return false;
 		}
 		try {
 			if (!(await isStaleLock(lockPath, ownerPath))) return false;
 			await rm(lockPath, { recursive: true, force: true });
 			return true;
 		} finally {
-			await rm(reaperPath, { recursive: true, force: true });
+			try {
+				const owner: unknown = JSON.parse(await readFile(reaperOwnerPath, "utf8"));
+				if (typeof owner === "object" && owner !== null && (owner as Record<string, unknown>).nonce === nonce) {
+					await rm(reaperPath, { recursive: true, force: true });
+				}
+			} catch {
+				// A crashed reaper is recovered through the same owner evidence path.
+			}
 		}
 	}
 
@@ -637,7 +693,7 @@ async function isStaleLock(lockPath: string, ownerPath: string): Promise<boolean
 		return lockAgeExceeds(lockPath, FOREIGN_LOCK_STALE_MS);
 	} catch (error) {
 		if (!isNotFound(error) && !(error instanceof SyntaxError)) throw error;
-		return lockAgeExceeds(lockPath, FOREIGN_LOCK_STALE_MS);
+		return lockAgeExceeds(lockPath, MISSING_LOCK_OWNER_STALE_MS);
 	}
 }
 

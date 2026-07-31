@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Skip directory `fsync` after atomic writes on Windows, where directory handle sync raises `EPERM`.
+
 ## [0.2.0] - 2026-07-31
 
 ### Breaking Changes

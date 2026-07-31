@@ -585,11 +585,16 @@ export class FileTodoStore {
 			await handle.close();
 		}
 		await rename(temporary, path);
-		const directoryHandle = await open(directory, "r");
-		try {
-			await directoryHandle.sync();
-		} finally {
-			await directoryHandle.close();
+		// Syncing the parent directory persists the rename for crash consistency on
+		// POSIX. Windows does not support fsync on directory handles and rejects it
+		// with EPERM, so skip it there; NTFS journals the rename metadata instead.
+		if (process.platform !== "win32") {
+			const directoryHandle = await open(directory, "r");
+			try {
+				await directoryHandle.sync();
+			} finally {
+				await directoryHandle.close();
+			}
 		}
 	}
 

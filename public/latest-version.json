@@ -1,5 +1,5 @@
 {
-	"version": "0.83.1",
+	"version": "0.84.0",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Removed the built-in `/llama` command and llama.cpp extension. Add local OpenAI-compatible servers (llama.cpp, Ollama, vLLM, LM Studio) as a Profile via `/profile` instead."
+	"note": "Persistent widgets above status; Automatic threshold-compaction continuation"
 }

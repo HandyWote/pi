@@ -16,6 +16,7 @@
 
 - Rebuilt the widget around separate active, ready, and dependency-blocked sections with narrow-terminal truncation.
 - Made review an optional ordinary task and removed task retry policies.
+- Added list and revision identifiers to active digests so queued historical snapshots are distinguishable from current Todo state.
 
 ## [0.1.1] - 2026-07-28
 

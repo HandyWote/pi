@@ -156,6 +156,7 @@ describe("TodoRuntime recovery", () => {
 			customType: "pi-todo-digest",
 			content: expect.stringContaining("Ready: T0"),
 		});
+		expect(environment.messages[0]?.content).toContain("Snapshot: list ");
 		expect(environment.messages[0]?.content).toContain("... 3 more");
 		expect(environment.messages[0]?.content.length).toBeLessThanOrEqual(4000);
 	});

@@ -169,6 +169,7 @@ describe("pi-todo standalone end-to-end", () => {
 			await harness.session.waitForIdle();
 			const continuation = getCustomMessages(harness.session.messages, "pi-todo-continuation").at(-1);
 			expect(getMessageText(continuation)).toContain("[PI TODO ACTIVE]");
+			expect(getMessageText(continuation)).toContain("Snapshot: list ");
 			expect(getMessageText(continuation)).toContain("Ready: C: Integrate");
 			expect(harness.session.messages.some((message) => getMessageText(message).includes("active todo state"))).toBe(
 				true,

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage } from "@handy_wote/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHarness, type Harness } from "../../../coding-agent/test/suite/harness.ts";
+import { createHarness, getMessageText, type Harness } from "../../../coding-agent/test/suite/harness.ts";
 import { createPiSubagent } from "../src/index.ts";
 import { AgentManager } from "../src/manager.ts";
 import type { AgentToolDetails } from "../src/render.ts";
@@ -112,6 +112,16 @@ describe("pi-subagent extension", () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		expect(confirm).toHaveBeenCalledOnce();
 		expect(notify).toHaveBeenCalledOnce();
+		await vi.waitFor(
+			() => {
+				const notification = harness.session.messages.find(
+					(message) => message.role === "custom" && message.customType === "pi-subagent-notification",
+				);
+				expect(getMessageText(notification)).toContain("historical and may have been superseded");
+				expect(getMessageText(notification)).toContain("call agent_list");
+			},
+			{ timeout: 5000, interval: 10 },
+		);
 		expect(managers[0]!.get(agentId)).toMatchObject({ status: "completed" });
 		const listTool = harness.session.state.tools.find((tool) => tool.name === "agent_list");
 		const resumeTool = harness.session.state.tools.find((tool) => tool.name === "agent_resume");

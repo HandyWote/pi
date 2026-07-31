@@ -231,6 +231,7 @@ export class TodoRuntime {
 		const active = view.list.tasks.filter((task) => task.status === "in_progress");
 		const lines = [
 			`[PI TODO ACTIVE] ${view.summary.completed}/${view.summary.total} completed.`,
+			`Snapshot: list ${view.list.id}, revision ${view.list.revision}. After an interruption or agent event, call todo_list before acting.`,
 			`Direction: ${truncate(view.list.global_direction, DIGEST_DIRECTION_LIMIT)}`,
 		];
 		appendDigestSection(lines, "In progress", active, (task) => `${task.id} (${task.owner ?? "owned"})`);

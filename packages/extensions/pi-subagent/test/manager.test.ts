@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/manager.ts";
 import { AgentRegistry } from "../src/registry.ts";
 import { type AgentDefinition, type AgentLifecycleEvent, type AgentRecord, emptyUsage } from "../src/types.ts";
@@ -69,6 +69,7 @@ function processIsAlive(pid: number): boolean {
 }
 
 afterEach(() => {
+	vi.unstubAllEnvs();
 	for (const root of tempRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -143,6 +144,25 @@ describe("AgentManager", () => {
 
 		expect(completed.cwd).toBe(nested);
 		expect(await manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${nested}`);
+	});
+
+	it("uses an environment launcher override for local source execution", async () => {
+		const root = temporaryDirectory();
+		vi.stubEnv("PI_SUBAGENT_COMMAND", process.execPath);
+		vi.stubEnv("PI_SUBAGENT_PREFIX_ARGS", JSON.stringify([fixturePath]));
+		const manager = new AgentManager({
+			rootDir: path.join(root, "state"),
+			parentSessionId: "parent-1",
+			defaultCwd: root,
+			killGraceMs: 40,
+		});
+		await manager.initialize();
+
+		const started = await manager.start(definition, { task: "source-launcher", mode: "foreground" });
+		const completed = await started.completion;
+
+		expect(completed.status).toBe("completed");
+		expect(completed.lastOutput).toContain("finished Task: source-launcher");
 	});
 
 	it("stops a running agent when its start signal aborts", async () => {

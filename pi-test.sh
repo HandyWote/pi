@@ -5,13 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check for --no-env flag
 NO_ENV=false
+LOCAL_ORCHESTRATION=false
 ARGS=()
 for arg in "$@"; do
-  if [[ "$arg" == "--no-env" ]]; then
-    NO_ENV=true
-  else
-    ARGS+=("$arg")
-  fi
+  case "$arg" in
+    --no-env)
+      NO_ENV=true
+      ;;
+    --local-orchestration)
+      LOCAL_ORCHESTRATION=true
+      ;;
+    *)
+      ARGS+=("$arg")
+      ;;
+  esac
 done
 
 if [[ "$NO_ENV" == "true" ]]; then
@@ -52,6 +59,17 @@ if [[ "$NO_ENV" == "true" ]]; then
   unset AZURE_OPENAI_BASE_URL
   unset AZURE_OPENAI_RESOURCE_NAME
   echo "Running without API keys..."
+fi
+
+if [[ "$LOCAL_ORCHESTRATION" == "true" ]]; then
+  LOCAL_AGENT_DIR="$SCRIPT_DIR/.artifacts/pi-local-orchestration-agent"
+  if [[ "${PI_LOCAL_ORCHESTRATION_CHILD:-}" != "1" ]]; then
+    node "$SCRIPT_DIR/scripts/setup-local-orchestration.mjs"
+  fi
+  export PI_CODING_AGENT_DIR="$LOCAL_AGENT_DIR"
+  export PI_LOCAL_ORCHESTRATION_CHILD=1
+  export PI_SUBAGENT_COMMAND="$SCRIPT_DIR/pi-test.sh"
+  export PI_SUBAGENT_PREFIX_ARGS='["--local-orchestration"]'
 fi
 
 "$SCRIPT_DIR/node_modules/.bin/tsx" --tsconfig "$SCRIPT_DIR/tsconfig.json" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}

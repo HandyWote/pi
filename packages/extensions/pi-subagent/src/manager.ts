@@ -21,6 +21,8 @@ import { WorktreeService } from "./worktree.ts";
 
 const MAX_CONCURRENCY = 8;
 const MAX_ACTIVITIES = 20;
+const SUBAGENT_COMMAND_ENV = "PI_SUBAGENT_COMMAND";
+const SUBAGENT_PREFIX_ARGS_ENV = "PI_SUBAGENT_PREFIX_ARGS";
 const execFileAsync = promisify(execFile);
 
 interface PendingRun {
@@ -67,6 +69,8 @@ function getTextContent(message: Message): string {
 }
 
 function getPiInvocation(): PiInvocation {
+	const environmentInvocation = getEnvironmentInvocation();
+	if (environmentInvocation) return environmentInvocation;
 	const currentScript = process.argv[1];
 	if (currentScript && !currentScript.startsWith("/$bunfs/root/") && fs.existsSync(currentScript)) {
 		return { command: process.execPath, prefixArgs: [currentScript] };
@@ -74,6 +78,24 @@ function getPiInvocation(): PiInvocation {
 	const executable = path.basename(process.execPath).toLowerCase();
 	if (!/^(node|bun)(\.exe)?$/.test(executable)) return { command: process.execPath, prefixArgs: [] };
 	return { command: "pi", prefixArgs: [] };
+}
+
+function getEnvironmentInvocation(): PiInvocation | undefined {
+	const command = process.env[SUBAGENT_COMMAND_ENV]?.trim();
+	const rawPrefixArgs = process.env[SUBAGENT_PREFIX_ARGS_ENV];
+	if (!command && rawPrefixArgs === undefined) return undefined;
+	if (!command) throw new Error(`${SUBAGENT_COMMAND_ENV} is required when ${SUBAGENT_PREFIX_ARGS_ENV} is set`);
+	if (rawPrefixArgs === undefined) return { command, prefixArgs: [] };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(rawPrefixArgs);
+	} catch {
+		throw new Error(`${SUBAGENT_PREFIX_ARGS_ENV} must be a JSON array of strings`);
+	}
+	if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
+		throw new Error(`${SUBAGENT_PREFIX_ARGS_ENV} must be a JSON array of strings`);
+	}
+	return { command, prefixArgs: parsed };
 }
 
 function abortError(): Error {

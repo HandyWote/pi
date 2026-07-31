@@ -34,7 +34,7 @@ Project definitions require a trusted project and explicit interactive confirmat
 
 ## Operation
 
-Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. A batch may contain up to eight items and runs under the same concurrency limit.
+Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit.
 
 `agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks.
 

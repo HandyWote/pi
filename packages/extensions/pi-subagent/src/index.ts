@@ -11,6 +11,7 @@ import { registerAgentTools } from "./tools.ts";
 import { AGENT_PROTOCOL_CHANNEL, type AgentLifecycleEvent, type AgentRecord } from "./types.ts";
 
 const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
+const TERMINAL_SUMMARY_LIMIT = 1200;
 
 function isStatusRequest(data: unknown): data is { version: 1; parentSessionId: string } {
 	return (
@@ -21,6 +22,23 @@ function isStatusRequest(data: unknown): data is { version: 1; parentSessionId: 
 		"parentSessionId" in data &&
 		typeof data.parentSessionId === "string"
 	);
+}
+
+function terminalNotificationContent(record: AgentRecord): string {
+	const summary = truncate(record.lastOutput || record.error || "No output", TERMINAL_SUMMARY_LIMIT);
+	return [
+		"Subagent lifecycle event recorded. It is historical and may have been superseded by later events.",
+		`Subagent ${record.agentId} (${record.definition.name}) ${record.status}.`,
+		`Task: ${record.task}`,
+		`Recorded result: ${summary}`,
+		`Usage: ${record.toolCount} tools, ${record.usage.input + record.usage.output} tokens`,
+		`Output: ${record.transcriptPath}`,
+		"Before acting, call agent_list. If Todo tools are available, call todo_list. Use agent_output for durable output; do not recreate work from this notification alone.",
+	].join("\n");
+}
+
+function truncate(value: string, limit: number): string {
+	return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 export interface PiSubagentExtensionOptions {
@@ -45,7 +63,6 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		const notifyTerminal = (record: AgentRecord, event: AgentLifecycleEvent) => {
 			const context = currentContext;
 			if (!context) return;
-			const summary = record.lastOutput || record.error || "No output";
 			context.ui.notify(
 				`${record.definition.name} ${record.status}: ${record.task}`,
 				record.status === "completed" ? "info" : "warning",
@@ -53,13 +70,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			pi.sendMessage(
 				{
 					customType: "pi-subagent-notification",
-					content: [
-						`Subagent ${record.agentId} (${record.definition.name}) ${record.status}.`,
-						`Task: ${record.task}`,
-						`Summary: ${summary}`,
-						`Usage: ${record.toolCount} tools, ${record.usage.input + record.usage.output} tokens`,
-						`Output: ${record.transcriptPath}`,
-					].join("\n"),
+					content: terminalNotificationContent(record),
 					display: true,
 					details: event,
 				},

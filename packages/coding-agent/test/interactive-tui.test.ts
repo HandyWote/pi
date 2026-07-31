@@ -17,7 +17,7 @@ describe("createInteractiveTui", () => {
 	it("selects the alternate-screen renderer only when requested", async () => {
 		const mainTerminal = new RecordingTerminal();
 		const mainTui = createInteractiveTui({
-			alt: false,
+			uiMode: "regular",
 			showHardwareCursor: false,
 			logDirectory: "/tmp",
 			terminal: mainTerminal,
@@ -29,7 +29,7 @@ describe("createInteractiveTui", () => {
 
 		const altTerminal = new RecordingTerminal();
 		const altTui = createInteractiveTui({
-			alt: true,
+			uiMode: "fullscreen",
 			showHardwareCursor: false,
 			logDirectory: "/tmp",
 			terminal: altTerminal,
@@ -44,7 +44,7 @@ describe("createInteractiveTui", () => {
 type ClearStatusContext = {
 	activeStatusIndicator: { kind: "working"; dispose: () => void } | undefined;
 	statusContainer: Container;
-	options: { alt?: boolean };
+	options: { uiMode?: "regular" | "fullscreen" };
 	ui: { getClearOnShrink: () => boolean };
 	idleStatus: Component;
 };
@@ -57,15 +57,15 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 
 describe("clear-on-shrink status spacing", () => {
 	it("reserves status height only on the main-screen renderer", () => {
-		for (const [alt, expectedChildren] of [
-			[false, 1],
-			[true, 0],
+		for (const [uiMode, expectedChildren] of [
+			["regular", 1],
+			["fullscreen", 0],
 		] as const) {
 			const dispose = vi.fn();
 			const context: ClearStatusContext = {
 				activeStatusIndicator: { kind: "working", dispose },
 				statusContainer: new Container(),
-				options: { alt },
+				options: { uiMode },
 				ui: { getClearOnShrink: () => true },
 				idleStatus: new Text("", 0, 0),
 			};

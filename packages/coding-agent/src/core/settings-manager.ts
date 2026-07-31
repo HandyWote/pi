@@ -33,6 +33,8 @@ export interface RetrySettings {
 	provider?: ProviderRetrySettings;
 }
 
+export type UiMode = "regular" | "fullscreen";
+
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
 	imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
@@ -129,6 +131,7 @@ export interface Settings {
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	/** External compat registry sources (file only for now; git/npm planned). Merged on top of the builtin. */
 	compatRegistries?: CompatRegistrySource[];
+	uiMode?: UiMode; // default: "regular"
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -1125,6 +1128,16 @@ export class SettingsManager {
 		}
 		this.globalSettings.terminal.showTerminalProgress = enabled;
 		this.markModified("terminal", "showTerminalProgress");
+		this.save();
+	}
+
+	getUiMode(): UiMode {
+		return this.settings.uiMode === "fullscreen" ? "fullscreen" : "regular";
+	}
+
+	setUiMode(mode: UiMode): void {
+		this.globalSettings.uiMode = mode;
+		this.markModified("uiMode");
 		this.save();
 	}
 

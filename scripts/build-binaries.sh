@@ -93,16 +93,27 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
     # npm ci only installs optional deps for the current platform
     # We need the base clipboard package and all platform bindings for bun cross-compilation
-    # Use --force to bypass platform checks (os/cpu restrictions in package.json)
-    # Install all in one command to avoid npm removing packages from previous installs
-    npm install --include=optional --no-save --package-lock=false --force --ignore-scripts \
-        @mariozechner/clipboard@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-darwin-arm64@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-darwin-x64@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-linux-x64-gnu@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-linux-arm64-gnu@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-win32-x64-msvc@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-win32-arm64-msvc@"$CLIPBOARD_VERSION"
+    # Installing incompatible optional packages at the monorepo root makes npm
+    # reify the entire workspace graph. npm 10 can crash in that path, so fetch
+    # the exact package tarballs and extract them without changing the lockfile.
+    (
+        native_bindings_dir=$(mktemp -d)
+        trap 'rm -rf "$native_bindings_dir"' EXIT
+
+        for clipboard_package in \
+            clipboard-darwin-arm64 \
+            clipboard-darwin-x64 \
+            clipboard-linux-x64-gnu \
+            clipboard-linux-arm64-gnu \
+            clipboard-win32-x64-msvc \
+            clipboard-win32-arm64-msvc; do
+            tarball=$(npm pack --ignore-scripts --silent --pack-destination "$native_bindings_dir" "@mariozechner/$clipboard_package@$CLIPBOARD_VERSION")
+            target_dir="node_modules/@mariozechner/$clipboard_package"
+            rm -rf "$target_dir"
+            mkdir -p "$target_dir"
+            tar -xzf "$native_bindings_dir/$tarball" --strip-components=1 -C "$target_dir"
+        done
+    )
 else
     echo "==> Skipping cross-platform native bindings (--skip-deps)"
 fi

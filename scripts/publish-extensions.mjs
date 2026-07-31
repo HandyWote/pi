@@ -102,28 +102,22 @@ function resolveReleaseCommit(packages, head) {
 	return resolvedHead;
 }
 
-function ensureTags(packages, releaseCommit, dryRun) {
-	const newTags = [];
-	for (const pkg of packages) {
-		const tag = extensionTag(pkg);
-		const existing = tryRun("git", ["rev-parse", "--verify", `refs/tags/${tag}`]);
-		if (existing.status === 0) {
-			if (existing.stdout.trim() !== releaseCommit) {
-				throw new Error(`Tag ${tag} already points to ${existing.stdout.trim()}, expected ${releaseCommit}`);
-			}
-			console.log(`Tag ${tag} already points to the release commit.`);
-			continue;
+function ensureTag(pkg, releaseCommit, dryRun) {
+	const tag = extensionTag(pkg);
+	const existing = tryRun("git", ["rev-parse", "--verify", `refs/tags/${tag}`]);
+	if (existing.status === 0) {
+		if (existing.stdout.trim() !== releaseCommit) {
+			throw new Error(`Tag ${tag} already points to ${existing.stdout.trim()}, expected ${releaseCommit}`);
 		}
-		if (dryRun) {
-			console.log(`Would create tag ${tag} at ${releaseCommit}.`);
-			continue;
-		}
-		run("git", ["tag", tag, releaseCommit]);
-		newTags.push(tag);
+		console.log(`Tag ${tag} already points to the release commit.`);
+		return;
 	}
-	if (newTags.length > 0) {
-		run("git", ["push", "origin", ...newTags.map((tag) => `refs/tags/${tag}`)]);
+	if (dryRun) {
+		console.log(`Would create tag ${tag} at ${releaseCommit}.`);
+		return;
 	}
+	run("git", ["tag", tag, releaseCommit]);
+	run("git", ["push", "origin", `refs/tags/${tag}`]);
 }
 
 const options = parseArguments();
@@ -153,9 +147,8 @@ for (const pkg of packages) {
 	states.push({ ...pkg, published });
 }
 
-ensureTags(packages, releaseCommit, options.dryRun);
-
 if (options.dryRun) {
+	for (const pkg of packages) ensureTag(pkg, releaseCommit, true);
 	console.log("\nDry run complete; no tags were pushed and no packages were published.");
 	process.exit(0);
 }
@@ -163,7 +156,8 @@ if (options.dryRun) {
 for (const pkg of states) {
 	if (pkg.published) {
 		console.log(`Skipping ${pkg.manifest.name}@${pkg.manifest.version}: already published.`);
-		continue;
+	} else {
+		run("npm", ["publish", "--access", "public", "--provenance", "--ignore-scripts"], { cwd: pkg.directory });
 	}
-	run("npm", ["publish", "--access", "public", "--provenance", "--ignore-scripts"], { cwd: pkg.directory });
+	ensureTag(pkg, releaseCommit, false);
 }

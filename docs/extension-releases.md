@@ -32,13 +32,13 @@ The command updates each selected manifest and CHANGELOG, then refreshes `packag
 
 On a push to `main`, `.github/workflows/publish-extensions.yml` compares changed extension manifests with the previous commit. A package is selected only when its `version` changed.
 
-The workflow builds the core dependencies once, then builds, checks, tests, and dry-run packs every selected extension. After all packages pass preflight, it creates one lightweight tag per package:
+The workflow builds the core dependencies once, then builds, checks, tests, and dry-run packs every selected extension. It publishes each unpublished version with npm provenance, then creates one lightweight tag for that successfully published package:
 
 ```text
 pi-todo@0.1.1
 pi-foo@0.3.0
 ```
 
-It then publishes unpublished versions with npm provenance. A rerun accepts tags already pointing at the release commit and skips versions already present on npm.
+A rerun accepts tags already pointing at the release commit and skips versions already present on npm. A failed publish cannot leave a new release tag ahead of its npm package.
 
 Each new npm package must be bootstrapped once and configured to trust `.github/workflows/publish-extensions.yml` in the `npm-publish` GitHub environment.

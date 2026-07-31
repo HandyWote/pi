@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-todo",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Persistent dynamic task orchestration for pi",
 	"type": "module",
 	"keywords": [

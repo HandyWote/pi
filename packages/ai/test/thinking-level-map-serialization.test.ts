@@ -19,6 +19,8 @@ const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
 
+class PayloadCaptured extends Error {}
+
 function buildModel<TApi extends Api>(
 	api: TApi,
 	thinkingLevelMap?: ThinkingLevelMap,
@@ -45,9 +47,10 @@ async function capturePayload(
 	let captured: unknown;
 	const onPayload: NonNullable<StreamOptions["onPayload"]> = (payload) => {
 		captured = payload;
+		throw new PayloadCaptured();
 	};
 	for await (const _event of start(onPayload)) {
-		// Drain the terminal error produced by the intentionally aborted request.
+		// Drain the terminal error produced after capturing the request payload.
 	}
 	if (!captured || typeof captured !== "object") {
 		throw new Error("Provider payload was not captured");
@@ -104,7 +107,6 @@ async function captureCompletionsPayload(
 	return capturePayload((onPayload) =>
 		streamOpenAICompletions(model, context, {
 			apiKey: "test-key",
-			signal: AbortSignal.abort(),
 			reasoningEffort: "high",
 			onPayload,
 		}),
@@ -134,7 +136,6 @@ const responseSerializers: Array<{
 			capturePayload((onPayload) =>
 				streamOpenAIResponses(buildModel("openai-responses", thinkingLevelMap), context, {
 					apiKey: "test-key",
-					signal: AbortSignal.abort(),
 					reasoningEffort: "high",
 					onPayload,
 				}),
@@ -147,7 +148,6 @@ const responseSerializers: Array<{
 			capturePayload((onPayload) =>
 				streamAzureOpenAIResponses(buildModel("azure-openai-responses", thinkingLevelMap), context, {
 					apiKey: "test-key",
-					signal: AbortSignal.abort(),
 					reasoningEffort: "high",
 					onPayload,
 				}),
@@ -161,7 +161,6 @@ const responseSerializers: Array<{
 				streamOpenAICodexResponses(buildModel("openai-codex-responses", thinkingLevelMap), context, {
 					apiKey: buildCodexToken(),
 					transport: "sse",
-					signal: AbortSignal.abort(),
 					reasoningEffort: "high",
 					onPayload,
 				}),
@@ -174,7 +173,6 @@ const responseSerializers: Array<{
 			capturePayload((onPayload) =>
 				streamMistralSimple(buildModel("mistral-conversations", thinkingLevelMap, "mistral-small-2603"), context, {
 					apiKey: "test-key",
-					signal: AbortSignal.abort(),
 					reasoning: "high",
 					onPayload,
 				}),

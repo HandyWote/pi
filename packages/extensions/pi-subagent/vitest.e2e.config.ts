@@ -1,10 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
 
 const ai = fileURLToPath(new URL("../../ai/src", import.meta.url));
 
-export default defineConfig({
-	test: { environment: "node", testTimeout: 30_000, include: ["test/e2e.test.ts"] },
+export default {
+	test: { environment: "node", testTimeout: 30_000, include: ["test/e2e.test.ts", "test/integration.e2e.test.ts"] },
 	resolve: {
 		alias: [
 			{ find: /^@handy_wote\/pi-coding-agent$/, replacement: fileURLToPath(new URL("../../coding-agent/src/index.ts", import.meta.url)) },
@@ -16,4 +15,4 @@ export default defineConfig({
 			{ find: /^@handy_wote\/pi-tui$/, replacement: fileURLToPath(new URL("../../tui/src/index.ts", import.meta.url)) },
 		],
 	},
-});
+};

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AgentOptions.shouldStopAfterTurn` so hosts can stop an agent run after a completed turn before polling queued messages or starting another model call.
+
 ## [0.83.1] - 2026-07-25
 
 ## [0.83.0] - 2026-07-24

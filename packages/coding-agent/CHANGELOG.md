@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Persistent widgets above status** — Extensions can render task and progress UI above pending messages and status rows with `setWidget(..., { placement: "aboveStatus" })`. See [Extension UI](docs/extensions.md).
+- **Automatic threshold-compaction continuation** — Pi resumes the active task after threshold auto-compaction without requiring a manual continuation. See [Compaction](docs/compaction.md).
+
 ### Changed
 
 - Changed threshold auto-compaction to resume the active agent run by default after compacting.
+
+### Fixed
+
+- Fixed threshold compaction to preserve queued follow-up handling when an assistant response and compaction share the same millisecond.
 
 ## [0.83.1] - 2026-07-25
 

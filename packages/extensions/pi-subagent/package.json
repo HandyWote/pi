@@ -1,22 +1,45 @@
 {
 	"name": "@handy_wote/pi-subagent",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Persistent foreground and background subagents for pi",
 	"type": "module",
-	"keywords": ["pi-package", "pi", "pi-extension", "subagent", "agent"],
-	"pi": { "extensions": ["./dist/index.js"] },
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-extension",
+		"subagent",
+		"agent"
+	],
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
-	"exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-	"files": ["dist", "README.md", "CHANGELOG.md"],
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
 	"scripts": {
 		"clean": "node -e \"import('node:fs/promises').then(fs=>fs.rm('dist',{recursive:true,force:true}))\"",
 		"build": "tsgo -p tsconfig.build.json",
 		"check": "tsgo --noEmit -p tsconfig.build.json",
 		"test": "node scripts/run-vitest.mjs"
 	},
-	"publishConfig": { "access": "public" },
-	"dependencies": { "typebox": "1.1.38" },
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"typebox": "1.1.38"
+	},
 	"devDependencies": {
 		"@handy_wote/pi-ai": "^0.83.1",
 		"vitest": "4.1.9"
@@ -26,7 +49,9 @@
 		"@handy_wote/pi-coding-agent": "*",
 		"@handy_wote/pi-tui": "*"
 	},
-	"engines": { "node": ">=22.19.0" },
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"author": "HandyWote",
 	"license": "MIT",
 	"repository": {

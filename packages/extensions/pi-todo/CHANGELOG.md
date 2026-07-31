@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-31
+
 ### Breaking Changes
 
 - Replaced wave and review tools with dynamic create, list, get, update, claim, release, and delete operations.

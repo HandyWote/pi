@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-31
+
 ### Added
 
 - Added independent persistent foreground and background subagent orchestration.

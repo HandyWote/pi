@@ -36,7 +36,7 @@ export class PermissionRuleStore {
 	private readonly userRulesPath: string;
 	private readonly projectRulesPath: string;
 	private readonly getCwd: () => string;
-	private readonly isProjectTrusted: () => boolean;
+	private isProjectTrusted: () => boolean;
 
 	private userRules: PermissionsFile = {};
 	private projectRules: PermissionsFile = {};
@@ -47,6 +47,14 @@ export class PermissionRuleStore {
 		this.projectRulesPath = options.projectRulesPath ?? path.join(".pi", "permissions.json");
 		this.getCwd = options.getCwd ?? (() => process.cwd());
 		this.isProjectTrusted = options.isProjectTrusted ?? (() => true);
+	}
+
+	/**
+	 * Update the project-trust answer (the session knows it; the store is
+	 * created before the session starts). Call before reload().
+	 */
+	setProjectTrusted(trusted: boolean): void {
+		this.isProjectTrusted = () => trusted;
 	}
 
 	/** Reload user + project rules from disk. Session rules are untouched. */
@@ -62,9 +70,12 @@ export class PermissionRuleStore {
 	/** Snapshot of the current rules for matching. */
 	collection(): RuleCollection {
 		return {
+			// CLI flag rules sit in the user group, ahead of file rules. Both
+			// are user-level, so ordering is irrelevant for matching, and CLI
+			// rules are never persisted.
 			user: {
-				allow: parseRuleList(this.userRules.allow ?? []),
-				deny: parseRuleList(this.userRules.deny ?? []),
+				allow: parseRuleList([...this.cliAllow, ...(this.userRules.allow ?? [])]),
+				deny: parseRuleList([...this.cliDeny, ...(this.userRules.deny ?? [])]),
 				ask: parseRuleList(this.userRules.ask ?? []),
 			},
 			session: { allow: parseRuleList(this.sessionAllow) },
@@ -105,7 +116,7 @@ export class PermissionRuleStore {
 		this.sessionAllow = [];
 	}
 
-	/** CLI flag rules (memory only, e.g. --permissions-allow). */
+	/** CLI flag rules (memory only, e.g. --permissions-allow). Merged into the user group by collection(). */
 	cliAllow: string[] = [];
 	cliDeny: string[] = [];
 

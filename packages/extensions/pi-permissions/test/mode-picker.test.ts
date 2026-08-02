@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
 import type { EntityListItem } from "@handy_wote/pi-tui";
-import { type Container, EntityList } from "@handy_wote/pi-tui";
+import { EntityList } from "@handy_wote/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildModePickerItems, MODE_DESCRIPTIONS, permissionsSummary, showModePicker } from "../src/mode-picker.ts";
 import { PermissionRuleStore } from "../src/rules/index.ts";
@@ -35,14 +35,14 @@ class MockState implements SessionState {
 
 const mockTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
 
-type CustomFactory = (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => Container;
+type CustomFactory = (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => EntityList;
 
 function setup(): {
 	state: MockState;
 	store: PermissionRuleStore;
 	notify: ReturnType<typeof vi.fn>;
 	done: ReturnType<typeof vi.fn>;
-	mount: () => { root: Container; list: EntityList };
+	mount: () => { root: EntityList; list: EntityList };
 } {
 	let capturedFactory: CustomFactory | undefined;
 	const state = new MockState();
@@ -68,8 +68,7 @@ function setup(): {
 		mount: () => {
 			const root = capturedFactory?.({} as never, mockTheme, {} as never, done);
 			if (!root) throw new Error("factory returned no component");
-			const list = root.children[0] as EntityList;
-			return { root, list };
+			return { root, list: root };
 		},
 	};
 }

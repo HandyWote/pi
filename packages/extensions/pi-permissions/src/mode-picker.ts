@@ -7,7 +7,7 @@
 
 import type { ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
 import type { EntityListItem, EntityListTheme } from "@handy_wote/pi-tui";
-import { Container, EntityList } from "@handy_wote/pi-tui";
+import { EntityList } from "@handy_wote/pi-tui";
 import { ruleValueToString } from "./rules/index.ts";
 import type { PermissionRuleStore } from "./rules/store.ts";
 import type { PermissionMode, SessionState } from "./state.ts";
@@ -108,8 +108,9 @@ export function showModePicker(
 			done();
 		};
 
-		const root = new Container();
-		root.addChild(list);
-		return root;
+		// Return the EntityList directly (not wrapped in a Container): the
+		// runtime calls setFocus() on the returned component and forwards
+		// keyboard input to its handleInput(), which Container lacks.
+		return list;
 	});
 }

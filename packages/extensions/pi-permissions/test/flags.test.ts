@@ -48,14 +48,15 @@ describe("registerPermissionFlags", () => {
 		for (const flag of flags) expect(flag.options.type).toBe("string");
 	});
 
-	it("pushes allow/deny flag values into the CLI rule lists", () => {
-		const { api } = setup({
+	it("pushes allow/deny flag values into the CLI rule lists on session_start", async () => {
+		const { api, handlers } = setup({
 			"permissions-mode": "auto",
 			"permissions-allow": "Bash(git:*)",
 			"permissions-deny": "Bash(rm *)",
 		});
 		const store = new PermissionRuleStore();
 		registerPermissionFlags(api, store);
+		await handlers.get("session_start")?.({}, { ui: { notify: vi.fn() } });
 		expect(store.cliAllow).toEqual(["Bash(git:*)"]);
 		expect(store.cliDeny).toEqual(["Bash(rm *)"]);
 		const c = store.collection();
@@ -63,14 +64,25 @@ describe("registerPermissionFlags", () => {
 		expect(c.user.deny).toEqual([{ toolName: "Bash", ruleContent: "rm *" }]);
 	});
 
+	it("does not duplicate CLI rules on repeated session_start", async () => {
+		const { api, handlers } = setup({ "permissions-allow": "Bash(git:*)" });
+		const store = new PermissionRuleStore();
+		registerPermissionFlags(api, store);
+		const ctx = { ui: { notify: vi.fn() } };
+		await handlers.get("session_start")?.({}, ctx);
+		await handlers.get("session_start")?.({}, ctx);
+		expect(store.cliAllow).toEqual(["Bash(git:*)"]);
+	});
+
 	it("merges CLI rules into the user group ahead of file rules", async () => {
-		const { api } = setup({ "permissions-allow": "Bash(git:*)", "permissions-deny": "Bash(rm *)" });
+		const { api, handlers } = setup({ "permissions-allow": "Bash(git:*)", "permissions-deny": "Bash(rm *)" });
 		const root = tempDir();
 		const file = path.join(root, "permissions.json");
 		fs.writeFileSync(file, JSON.stringify({ allow: ["Edit(.git/*)"], deny: ["Bash(rm -rf *)"] }));
 		const store = new PermissionRuleStore({ userRulesPath: file });
 		await store.reload();
 		registerPermissionFlags(api, store);
+		await handlers.get("session_start")?.({}, { ui: { notify: vi.fn() } });
 		const c = store.collection();
 		expect(c.user.allow).toEqual([
 			{ toolName: "Bash", ruleContent: "git:*" },
@@ -82,10 +94,11 @@ describe("registerPermissionFlags", () => {
 		]);
 	});
 
-	it("ignores empty allow/deny flag values", () => {
-		const { api } = setup({ "permissions-allow": "", "permissions-deny": "  " });
+	it("ignores empty allow/deny flag values", async () => {
+		const { api, handlers } = setup({ "permissions-allow": "", "permissions-deny": "  " });
 		const store = new PermissionRuleStore();
 		registerPermissionFlags(api, store);
+		await handlers.get("session_start")?.({}, { ui: { notify: vi.fn() } });
 		expect(store.cliAllow).toEqual([]);
 		expect(store.cliDeny).toEqual([]);
 	});

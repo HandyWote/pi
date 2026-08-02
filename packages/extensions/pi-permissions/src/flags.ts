@@ -38,16 +38,20 @@ export function registerPermissionFlags(
 		type: "string",
 	});
 
-	// One-time rules: read once at startup and push into the store's CLI
-	// lists. collection() merges them into the user rule group; they are
-	// never written to disk.
-	const allow = pi.getFlag("permissions-allow");
-	if (typeof allow === "string" && allow.trim() !== "") store.cliAllow.push(allow);
-	const deny = pi.getFlag("permissions-deny");
-	if (typeof deny === "string" && deny.trim() !== "") store.cliDeny.push(deny);
-
-	const modeFlag = pi.getFlag("permissions-mode");
+	// One-time rules and mode override are read on session_start: flagValues
+	// are injected into the extension runtime only when the AgentSession is
+	// built, which happens after the factory runs.
 	pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
+		const allow = pi.getFlag("permissions-allow");
+		if (typeof allow === "string" && allow.trim() !== "" && !store.cliAllow.includes(allow)) {
+			store.cliAllow.push(allow);
+		}
+		const deny = pi.getFlag("permissions-deny");
+		if (typeof deny === "string" && deny.trim() !== "" && !store.cliDeny.includes(deny)) {
+			store.cliDeny.push(deny);
+		}
+
+		const modeFlag = pi.getFlag("permissions-mode");
 		if (typeof modeFlag !== "string" || modeFlag.trim() === "") return;
 		const state = getState();
 		if (!state) return;

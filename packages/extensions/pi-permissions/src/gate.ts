@@ -50,10 +50,11 @@ export interface GateInput {
 export interface GateDependencies {
 	/** bash parser; when unavailable the gate asks on unparseable commands. */
 	parseBashCommand?: (command: string) => Promise<BashParseResult>;
-	/** Optional auto-mode classifier (T12). When absent, ask decisions pass through. */
+	/**
+	 * Optional auto-mode classifier (T12). Returns a decision; undefined
+	 * means the classifier is unavailable and the gate falls back to ask.
+	 */
 	classify?: (info: ToolCallInfo, ctx: ExtensionContext) => Promise<{ block: boolean; reason: string } | undefined>;
-	/** Denial tracker hook: called when the classifier blocks (returns true to force fallback to ask). */
-	shouldFallbackToPrompt?: () => boolean;
 }
 
 export class Gate {
@@ -62,7 +63,7 @@ export class Gate {
 	constructor(deps: GateDependencies = {}) {
 		this.deps = deps;
 	}
-	async decide(input: GateInput): Promise<Decision> {
+	async decide(input: GateInput, ctx: ExtensionContext): Promise<Decision> {
 		const { info, rules, mode, cwd } = input;
 
 		// 1. Redline: sensitive paths can never be auto-allowed.
@@ -98,7 +99,7 @@ export class Gate {
 		}
 
 		// 4. Mode behavior.
-		return this.decideByMode(info, mode);
+		return this.decideByMode(info, mode, ctx);
 	}
 
 	private async decideBash(info: ToolCallInfo, rules: RuleCollection): Promise<Decision | null> {
@@ -178,7 +179,7 @@ export class Gate {
 		};
 	}
 
-	private decideByMode(info: ToolCallInfo, mode: PermissionMode): Decision {
+	private async decideByMode(info: ToolCallInfo, mode: PermissionMode, ctx: ExtensionContext): Promise<Decision> {
 		if (mode === "acceptEdits" && EDIT_TOOLS.has(info.toolName)) {
 			return allowDecision({ type: "mode", detail: "acceptEdits mode allows edits" });
 		}
@@ -188,8 +189,15 @@ export class Gate {
 			return allowDecision({ type: "allowlist", detail: "read-only tool" });
 		}
 
-		if (mode === "auto" && this.deps.classify) {
-			// Auto mode: let the classifier decide (wired in T12).
+		if (mode === "auto") {
+			// acceptEdits fast path: calls that acceptEdits mode would allow
+			// (project edits, redline already checked above) skip the
+			// classifier — saves a model call per edit.
+			if (EDIT_TOOLS.has(info.toolName)) {
+				return allowDecision({ type: "mode", detail: "acceptEdits fast path in auto mode" });
+			}
+			const verdict = await this.decideAuto(info, ctx);
+			if (verdict) return verdict;
 		}
 
 		return {
@@ -197,6 +205,24 @@ export class Gate {
 			reason: { type: "mode", detail: `${mode} mode requires approval` },
 			ask: this.buildAsk(info, `Current permission mode (${mode}) requires approval`),
 		};
+	}
+
+	private async decideAuto(info: ToolCallInfo, ctx: ExtensionContext): Promise<Decision | undefined> {
+		const classify = this.deps.classify;
+		if (!classify) return undefined;
+
+		const result = await classify(info, ctx);
+		if (result === undefined) return undefined;
+
+		if (result.block) {
+			return {
+				behavior: "deny",
+				reason: { type: "classifier", detail: result.reason },
+				message: `Permission denied by auto-mode classifier: ${result.reason}`,
+			};
+		}
+
+		return allowDecision({ type: "classifier", detail: result.reason });
 	}
 
 	private buildAsk(info: ToolCallInfo, reason: string, details?: string[]): PermissionAsk {

@@ -24,6 +24,18 @@ import { extractToolCallInfo, type ToolCallInfo } from "./tool-input.ts";
 const DESCRIPTION_LIMIT = 500;
 const RULE_SUGGESTION_LIMIT = 200;
 
+/** Auto-mode denial limits (aligned with Claude Code's DENIAL_LIMITS). */
+export const DENIAL_LIMITS = {
+	maxConsecutive: 3,
+	maxTotal: 20,
+} as const;
+
+export function shouldFallbackToPrompt(tracking: { consecutiveDenials: number; totalDenials: number }): boolean {
+	return (
+		tracking.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive || tracking.totalDenials >= DENIAL_LIMITS.maxTotal
+	);
+}
+
 export interface GateHandlerDeps {
 	store: PermissionRuleStore;
 	state: SessionState;
@@ -53,12 +65,34 @@ export class GateHandler {
 	async process(event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> {
 		const info = extractToolCallInfo(event);
 		const mode = this.state.getMode();
-		const decision = await this.gate.decide({
-			info,
-			rules: this.store.collection(),
-			mode,
-			cwd: ctx.cwd,
-		});
+		const decision = await this.gate.decide(
+			{
+				info,
+				rules: this.store.collection(),
+				mode,
+				cwd: ctx.cwd,
+			},
+			ctx,
+		);
+
+		// Auto-mode denial tracking: classifier denials count toward the
+		// fallback limits; any allowed call resets the consecutive counter.
+		if (mode === "auto") {
+			if (decision.behavior === "allow") {
+				this.state.recordSuccess();
+			} else if (decision.behavior === "deny") {
+				this.state.recordDenial();
+				// Over the limit in interactive mode: fall back to asking the
+				// user instead of auto-denying (they may review and approve).
+				if (
+					ctx.hasUI &&
+					decision.reason.type === "classifier" &&
+					shouldFallbackToPrompt(this.state.getDenialTracking())
+				) {
+					return this.askWithFallback(info, decision, mode, ctx);
+				}
+			}
+		}
 
 		switch (decision.behavior) {
 			case "allow":
@@ -103,6 +137,41 @@ export class GateHandler {
 			default:
 				// Unknown decision behavior: fail closed.
 				return { block: true, reason: `Permission check failed for ${info.toolName}` };
+		}
+	}
+
+	private async askWithFallback(
+		info: ToolCallInfo,
+		decision: Extract<Decision, { behavior: "deny" }>,
+		mode: string,
+		ctx: ExtensionContext,
+	): Promise<ToolCallEventResult | undefined> {
+		const tracking = this.state.getDenialTracking();
+		const warning = `Auto mode blocked ${tracking.totalDenials} actions; review before continuing.`;
+		const outcome = await this.tuiAsker.ask(
+			{
+				toolName: info.toolName,
+				description: info.description,
+				reason: `${decision.message} (${warning})`,
+			},
+			ctx,
+		);
+		switch (outcome.choice) {
+			case "allowOnce":
+				return undefined;
+			case "allowSession":
+				this.store.addSessionAllow(suggestedRule(info));
+				return undefined;
+			case "alwaysAllow":
+				await this.store.addUserRule("allow", suggestedRule(info));
+				return undefined;
+			case "alwaysDeny":
+				await this.store.addUserRule("deny", suggestedRule(info));
+				await this.recordDenial(info, decision, mode, ctx);
+				return { block: true, reason: decision.message };
+			default:
+				await this.recordDenial(info, decision, mode, ctx);
+				return { block: true, reason: decision.message };
 		}
 	}
 

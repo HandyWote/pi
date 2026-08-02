@@ -8,9 +8,10 @@ import type {
 import type { Asker } from "./asker.ts";
 import { DenialAudit } from "./audit.ts";
 import { parseBashCommand } from "./bash-analysis/index.ts";
+import { createClassifier } from "./classifier.ts";
 import { registerPermissionsCommand } from "./command.ts";
 import { registerPermissionFlags } from "./flags.ts";
-import { Gate, type GateDependencies } from "./gate.ts";
+import { Gate } from "./gate.ts";
 import { GateHandler } from "./handler.ts";
 import { PermissionRuleStore } from "./rules/index.ts";
 import { SessionStateImpl } from "./state.ts";
@@ -18,8 +19,8 @@ import { SessionStateImpl } from "./state.ts";
 export interface PiPermissionsOptions {
 	/** Override the tool-call gate (tests / other UI authors). */
 	processToolCall?: (event: ToolCallEvent, ctx: ExtensionContext) => Promise<ToolCallEventResult | undefined>;
-	/** Inject the auto-mode classifier (wired by the auto-mode milestone). */
-	classify?: GateDependencies["classify"];
+	/** Inject the auto-mode classifier (defaults to the Anthropic-messages classifier). */
+	classify?: (info: ToolCallInfo, ctx: ExtensionContext) => Promise<{ block: boolean; reason: string } | undefined>;
 	/** Custom askers (defaults: TUI select / headless auto-deny). */
 	tuiAsker?: Asker;
 	headlessAsker?: Asker;
@@ -27,6 +28,8 @@ export interface PiPermissionsOptions {
 	userRulesPath?: string;
 	projectRulesPath?: string;
 }
+
+import type { ToolCallInfo } from "./tool-input.ts";
 
 export function createPiPermissions(options: PiPermissionsOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
@@ -36,7 +39,7 @@ export function createPiPermissions(options: PiPermissionsOptions = {}): Extensi
 		});
 		const gate = new Gate({
 			parseBashCommand,
-			...(options.classify ? { classify: options.classify } : {}),
+			classify: options.classify ?? createClassifier(),
 		});
 
 		let state: SessionStateImpl | undefined;

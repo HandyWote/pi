@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { ToolCallEvent } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@handy_wote/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { BashParseResult } from "../src/bash-analysis/index.ts";
 import { parseBashCommand } from "../src/bash-analysis/index.ts";
@@ -46,12 +46,16 @@ async function decide(
 	} = {},
 ) {
 	const gate = new Gate({ parseBashCommand: options.parse ?? parseBashCommand });
-	return gate.decide({
-		info,
-		rules: options.rules ?? emptyRuleCollection(),
-		mode: options.mode ?? "chat",
-		cwd: CWD,
-	});
+	const ctx = {} as ExtensionContext;
+	return gate.decide(
+		{
+			info,
+			rules: options.rules ?? emptyRuleCollection(),
+			mode: options.mode ?? "chat",
+			cwd: CWD,
+		},
+		ctx,
+	);
 }
 
 describe("Gate: redline", () => {

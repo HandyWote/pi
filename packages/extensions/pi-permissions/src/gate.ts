@@ -48,7 +48,7 @@ export interface GateInput {
 }
 
 export interface GateDependencies {
-	/** bash parser; when unavailable the gate asks on unparseable commands. */
+	/** bash parser; when unavailable the gate asks on unparsable commands. */
 	parseBashCommand?: (command: string) => Promise<BashParseResult>;
 	/**
 	 * Optional auto-mode classifier (T12). Returns a decision; undefined
@@ -103,7 +103,7 @@ export class Gate {
 	}
 
 	private async decideBash(info: ToolCallInfo, rules: RuleCollection): Promise<Decision | null> {
-		const command = info.command!;
+		const command = info.command ?? "";
 		if (command.trim() === "") return null;
 
 		const parse = this.deps.parseBashCommand;
@@ -115,7 +115,7 @@ export class Gate {
 
 		const parsed = await parse(command);
 		if (parsed.kind !== "simple") {
-			// Unparseable or too complex: rules still apply to the whole
+			// Unparsable or too complex: rules still apply to the whole
 			// command; only fall through to ask if no rule matched.
 			return this.ruleOrAsk(info, rules, command, parsed.reason);
 		}
@@ -133,20 +133,22 @@ export class Gate {
 		}
 
 		if (denied.length > 0) {
-			const rule = denied[0]!;
-			return denyDecision(rule, `Subcommand denied by rule: ${ruleString(rule)}`);
+			const rule = denied[0] ?? null;
+			if (rule) return denyDecision(rule, `Subcommand denied by rule: ${ruleString(rule)}`);
 		}
 		if (asked.length > 0) {
-			const rule = asked[0]!.rule;
-			return {
-				behavior: "ask",
-				reason: { type: "rule", rule },
-				ask: this.buildAsk(
-					info,
-					`Subcommand requires approval: ${asked[0]!.subcommand}`,
-					asked.map((a) => a.subcommand),
-				),
-			};
+			const first = asked[0] ?? null;
+			if (first) {
+				return {
+					behavior: "ask",
+					reason: { type: "rule", rule: first.rule },
+					ask: this.buildAsk(
+						info,
+						`Subcommand requires approval: ${first.subcommand}`,
+						asked.map((a) => a.subcommand),
+					),
+				};
+			}
 		}
 		// All subcommands allowed by rules.
 		if (allowed.size === parsed.commands.length && parsed.commands.length > 0) {

@@ -72,7 +72,7 @@ export function createPiPermissions(options: PiPermissionsOptions = {}): Extensi
 
 		pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | undefined> => {
 			if (options.processToolCall) {
-				return options.processToolCall(event, ctx);
+				return await options.processToolCall(event, ctx);
 			}
 			if (!handler) {
 				// No active session yet: fail closed rather than allow.

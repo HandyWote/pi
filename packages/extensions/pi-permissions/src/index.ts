@@ -27,6 +27,8 @@ export interface PiPermissionsOptions {
 	/** Custom rule store paths (tests). */
 	userRulesPath?: string;
 	projectRulesPath?: string;
+	/** Custom denial audit log path (tests). */
+	denialsLogPath?: string;
 }
 
 import type { ToolCallInfo } from "./tool-input.ts";
@@ -48,7 +50,7 @@ export function createPiPermissions(options: PiPermissionsOptions = {}): Extensi
 
 		pi.on("session_start", async (_event, ctx) => {
 			state = new SessionStateImpl();
-			audit = new DenialAudit();
+			audit = new DenialAudit(options.denialsLogPath ? { logPath: options.denialsLogPath } : {});
 			store.setProjectTrusted(ctx.isProjectTrusted());
 			await store.reload();
 			handler = new GateHandler({

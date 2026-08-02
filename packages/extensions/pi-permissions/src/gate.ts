@@ -10,9 +10,11 @@
  * then mode behavior (chat auto-allow / acceptEdits / auto classifier).
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
 import type { PermissionAsk } from "./asker.ts";
-import type { BashParseResult } from "./bash-analysis/index.ts";
+import { type BashParseResult, checkSemantics } from "./bash-analysis/index.ts";
 import { checkRedline, type RedlineCheckInput } from "./redline.ts";
 import { matchContentRules, matchToolRules, type PermissionRule, type RuleCollection } from "./rules/index.ts";
 import type { PermissionMode } from "./state.ts";
@@ -68,7 +70,7 @@ export class Gate {
 
 		// 1. Redline: sensitive paths can never be auto-allowed.
 		if (info.paths.length > 0) {
-			const operation = isWriteTool(info.toolName) ? "write" : "read";
+			const operation = isWriteTool(info.toolName) || info.toolName === "bash" ? "write" : "read";
 			const redlineInput: RedlineCheckInput = { toolName: info.toolName, paths: info.paths, cwd, operation };
 			const redline = checkRedline(redlineInput);
 			if (redline.hit) {
@@ -80,7 +82,20 @@ export class Gate {
 			}
 		}
 
-		// 2. Whole-tool rules.
+		// 2. Path-scoped rules. A matching deny/ask must take precedence over
+		// a whole-tool allow and mode-level automatic approval.
+		if (info.toolName !== "bash") {
+			const contentDecision = this.decidePathRules(info, rules);
+			if (contentDecision) return contentDecision;
+		}
+
+		// 3. Bash: semantic safety must be established before an allow rule.
+		if (info.toolName === "bash" && info.command !== undefined) {
+			const bashDecision = await this.decideBash(info, rules);
+			if (bashDecision) return bashDecision;
+		}
+
+		// 4. Whole-tool rules.
 		const toolVerdict = matchToolRules(rules, info.toolName);
 		if (toolVerdict.deny) {
 			return denyDecision(toolVerdict.deny, `${info.toolName} is denied by a permission rule`);
@@ -92,14 +107,30 @@ export class Gate {
 			return allowDecision({ type: "rule", rule: toolVerdict.allow });
 		}
 
-		// 3. Bash: parse and match per subcommand.
-		if (info.toolName === "bash" && info.command !== undefined) {
-			const bashDecision = await this.decideBash(info, rules);
-			if (bashDecision) return bashDecision;
-		}
+		// 5. Mode behavior.
+		return this.decideByMode(info, mode, cwd, ctx);
+	}
 
-		// 4. Mode behavior.
-		return this.decideByMode(info, mode, ctx);
+	private decidePathRules(info: ToolCallInfo, rules: RuleCollection): Decision | null {
+		if (info.paths.length === 0) return null;
+
+		const verdicts = info.paths.map((filePath) => ({
+			filePath,
+			verdict: matchContentRules(rules, info.toolName, filePath),
+		}));
+		const denied = verdicts.find(({ verdict }) => verdict.deny);
+		if (denied?.verdict.deny) {
+			return denyDecision(denied.verdict.deny, `Path denied by rule: ${denied.filePath}`);
+		}
+		const asked = verdicts.find(({ verdict }) => verdict.ask);
+		if (asked?.verdict.ask) {
+			return askDecision(asked.verdict.ask, info, `Path requires approval: ${asked.filePath}`);
+		}
+		if (verdicts.every(({ verdict }) => verdict.allow)) {
+			const allowed = verdicts[0]?.verdict.allow;
+			if (allowed) return allowDecision({ type: "rule", rule: allowed });
+		}
+		return null;
 	}
 
 	private async decideBash(info: ToolCallInfo, rules: RuleCollection): Promise<Decision | null> {
@@ -115,9 +146,17 @@ export class Gate {
 
 		const parsed = await parse(command);
 		if (parsed.kind !== "simple") {
-			// Unparsable or too complex: rules still apply to the whole
-			// command; only fall through to ask if no rule matched.
+			// A parse that is unavailable or too complex cannot safely be
+			// auto-approved, even by an allow rule.
 			return this.ruleOrAsk(info, rules, command, parsed.reason);
+		}
+		const semantics = checkSemantics(parsed.commands);
+		if (!semantics.ok) {
+			return {
+				behavior: "ask",
+				reason: { type: "parser", detail: semantics.reason },
+				ask: this.buildAsk(info, `Cannot safely analyze this command (${semantics.reason})`),
+			};
 		}
 
 		// Clean parse: match rules against each subcommand.
@@ -171,9 +210,6 @@ export class Gate {
 		if (verdict.ask) {
 			return askDecision(verdict.ask, info, `Subcommand requires approval: ${ruleString(verdict.ask)}`);
 		}
-		if (verdict.allow) {
-			return allowDecision({ type: "rule", rule: verdict.allow });
-		}
 		return {
 			behavior: "ask",
 			reason: { type: "parser", detail: parserNote },
@@ -181,7 +217,20 @@ export class Gate {
 		};
 	}
 
-	private async decideByMode(info: ToolCallInfo, mode: PermissionMode, ctx: ExtensionContext): Promise<Decision> {
+	private async decideByMode(
+		info: ToolCallInfo,
+		mode: PermissionMode,
+		cwd: string,
+		ctx: ExtensionContext,
+	): Promise<Decision> {
+		if (EDIT_TOOLS.has(info.toolName) && !arePathsWithinCwd(info.paths, cwd)) {
+			return {
+				behavior: "ask",
+				reason: { type: "mode", detail: "edit targets a path outside the working directory" },
+				ask: this.buildAsk(info, "Edits outside the working directory require approval"),
+			};
+		}
+
 		if (mode === "acceptEdits" && EDIT_TOOLS.has(info.toolName)) {
 			return allowDecision({ type: "mode", detail: "acceptEdits mode allows edits" });
 		}
@@ -234,6 +283,23 @@ export class Gate {
 			reason,
 			details,
 		};
+	}
+}
+
+function arePathsWithinCwd(paths: string[], cwd: string): boolean {
+	if (paths.length === 0) return false;
+	const root = realpathOrResolved(path.resolve(cwd));
+	return paths.every((filePath) => {
+		const target = realpathOrResolved(path.resolve(cwd, filePath));
+		return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+	});
+}
+
+function realpathOrResolved(filePath: string): string {
+	try {
+		return fs.realpathSync(filePath);
+	} catch {
+		return filePath;
 	}
 }
 

@@ -26,7 +26,7 @@ export function extractToolCallInfo(event: ToolCallEvent): ToolCallInfo {
 	switch (toolName) {
 		case "bash": {
 			const command = str(input.command) ?? "";
-			return { toolName, command, paths: [], description: command };
+			return { toolName, command, paths: extractBashWritePaths(command), description: command };
 		}
 		case "edit":
 		case "write": {
@@ -48,4 +48,55 @@ export function extractToolCallInfo(event: ToolCallEvent): ToolCallInfo {
 			return { toolName, paths: [], description: toolName };
 		}
 	}
+}
+
+/**
+ * Extract literal targets of common shell write operations. This is only
+ * used for redlines; dynamic shell expressions remain subject to the bash
+ * parser's fail-closed path.
+ */
+function extractBashWritePaths(command: string): string[] {
+	const paths = new Set<string>();
+	const redirect = /(?:^|\s)(?:[0-9]+)?(?:>>|>|>\||&>>|&>)\s*("[^"]*"|'[^']*'|[^\s;|&]+)/g;
+	for (const match of command.matchAll(redirect)) {
+		const target = unquote(match[1] ?? "");
+		if (target !== "") paths.add(target);
+	}
+
+	const writeCommands = new Set([
+		"chmod",
+		"chown",
+		"cp",
+		"install",
+		"ln",
+		"mkdir",
+		"mv",
+		"rm",
+		"rmdir",
+		"sed",
+		"tee",
+		"touch",
+		"truncate",
+	]);
+	for (const segment of command.split(/(?:&&|\|\||[;|])/)) {
+		const words = segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+		const commandIndex = words.findIndex((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+		if (commandIndex === -1 || !writeCommands.has(unquote(words[commandIndex] ?? ""))) continue;
+		for (const word of words.slice(commandIndex + 1)) {
+			const target = unquote(word);
+			if (target !== "" && !target.startsWith("-")) paths.add(target);
+		}
+	}
+
+	return [...paths];
+}
+
+function unquote(value: string): string {
+	if (
+		value.length >= 2 &&
+		((value[0] === '"' && value.at(-1) === '"') || (value[0] === "'" && value.at(-1) === "'"))
+	) {
+		return value.slice(1, -1);
+	}
+	return value;
 }

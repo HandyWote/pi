@@ -78,6 +78,14 @@ describe("Gate: redline", () => {
 		// No redline, no rules: chat mode asks for writes.
 		expect(d.behavior).toBe("ask");
 	});
+
+	it("asks for bash writes to redlined paths even with a broad allow rule", async () => {
+		const rules = emptyRuleCollection();
+		rules.user.allow.push({ toolName: "bash", ruleContent: "*" });
+		const d = await decide(bashInfo("echo x > .git/config"), { rules });
+		expect(d.behavior).toBe("ask");
+		expect(d.reason.type).toBe("redline");
+	});
 });
 
 describe("Gate: rules", () => {
@@ -123,6 +131,30 @@ describe("Gate: rules", () => {
 		rules.user.allow.push({ toolName: "bash", ruleContent: "npm run build" });
 		const d = await decide(bashInfo("git status && npm run build"), { rules });
 		expect(d.behavior).toBe("allow");
+	});
+
+	it("applies path-scoped deny rules before acceptEdits", async () => {
+		const rules = emptyRuleCollection();
+		rules.user.deny.push({ toolName: "write", ruleContent: "/tmp/*" });
+		const d = await decide(writeInfo("/tmp/other-project/file"), { mode: "acceptEdits", rules });
+		expect(d.behavior).toBe("deny");
+		expect(d.reason.type).toBe("rule");
+	});
+
+	it("applies path-scoped read rules before the read allowlist", async () => {
+		const rules = emptyRuleCollection();
+		rules.user.deny.push({ toolName: "read", ruleContent: "secrets/*" });
+		const d = await decide(readInfo("secrets/api-key"), { rules });
+		expect(d.behavior).toBe("deny");
+		expect(d.reason.type).toBe("rule");
+	});
+
+	it("does not allow semantically unsafe bash through a broad allow rule", async () => {
+		const rules = emptyRuleCollection();
+		rules.user.allow.push({ toolName: "bash", ruleContent: "*" });
+		const d = await decide(bashInfo("eval rm -rf dist"), { rules });
+		expect(d.behavior).toBe("ask");
+		expect(d.reason.type).toBe("parser");
 	});
 });
 
@@ -199,6 +231,14 @@ describe("Gate: modes", () => {
 		const d = await decide(writeInfo(".git/config"), { mode: "acceptEdits" });
 		expect(d.behavior).toBe("ask");
 		expect(d.reason.type).toBe("redline");
+	});
+
+	it("acceptEdits and auto require approval for paths outside the working directory", async () => {
+		const acceptEdits = await decide(writeInfo("../outside/file"), { mode: "acceptEdits" });
+		expect(acceptEdits).toMatchObject({ behavior: "ask", reason: { type: "mode" } });
+
+		const auto = await decide(writeInfo("/tmp/other-project/file"), { mode: "auto" });
+		expect(auto).toMatchObject({ behavior: "ask", reason: { type: "mode" } });
 	});
 
 	it("chat mode read of home shell config is not redlined, writes are", async () => {

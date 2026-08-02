@@ -16,6 +16,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@handy_wote/pi-coding-agent";
+import { permissionsSummary, showModePicker } from "./mode-picker.ts";
 import { parseRuleString, ruleValueToString } from "./rules/index.ts";
 import type { PermissionRuleStore } from "./rules/store.ts";
 import type { PermissionBehavior } from "./rules/types.ts";
@@ -38,27 +39,6 @@ function isPermissionMode(value: string): value is PermissionMode {
 
 function isBehavior(value: string): value is PermissionBehavior {
 	return value === "allow" || value === "deny" || value === "ask";
-}
-
-function formatList(items: readonly string[]): string {
-	return items.length === 0 ? "none" : items.join(", ");
-}
-
-function summarize(store: PermissionRuleStore, state: SessionState): string {
-	const user = store.userRuleStrings();
-	const session = store.collection().session.allow;
-	return [
-		`Mode: ${state.getMode()}`,
-		"User rules:",
-		`  allow: ${formatList(user.allow ?? [])}`,
-		`  deny: ${formatList(user.deny ?? [])}`,
-		`  ask: ${formatList(user.ask ?? [])}`,
-		"Session rules:",
-		`  allow: ${formatList(session.map((rule) => ruleValueToString(rule)))}`,
-		"CLI rules:",
-		`  allow: ${formatList(store.cliAllow)}`,
-		`  deny: ${formatList(store.cliDeny)}`,
-	].join("\n");
 }
 
 function setMode(ctx: ExtensionCommandContext, state: SessionState, value: string): void {
@@ -139,7 +119,11 @@ export function registerPermissionsCommand(
 				return;
 			}
 			if (args.trim() === "") {
-				ctx.ui.notify(summarize(store, state), "info");
+				if (ctx.mode === "tui") {
+					await showModePicker(ctx, deps);
+					return;
+				}
+				ctx.ui.notify(permissionsSummary(store, state), "info");
 				return;
 			}
 			const parts = /^(\S+)(?:\s+([\s\S]*))?$/.exec(args.trim());

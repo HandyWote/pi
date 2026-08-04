@@ -40,14 +40,15 @@ function isStringMap(value: unknown): value is Record<string, string> {
 }
 
 function isDefinition(value: unknown): value is AgentDefinition {
+	if (!isObject(value) || !isIdentifier(value.name)) return false;
+	const hasValidFilePath =
+		typeof value.filePath === "string" &&
+		(value.source === "built-in" ? value.filePath === `built-in:${value.name}` : path.isAbsolute(value.filePath));
 	return (
-		isObject(value) &&
-		isIdentifier(value.name) &&
 		typeof value.description === "string" &&
 		typeof value.systemPrompt === "string" &&
 		(value.source === "built-in" || value.source === "user" || value.source === "project") &&
-		typeof value.filePath === "string" &&
-		path.isAbsolute(value.filePath) &&
+		hasValidFilePath &&
 		(value.isolation === "none" || value.isolation === "worktree") &&
 		(value.tools === undefined ||
 			(Array.isArray(value.tools) && value.tools.every((tool) => typeof tool === "string"))) &&

@@ -60,6 +60,34 @@ describe("AgentRegistry", () => {
 		expect(fs.readdirSync(path.join(root, "registries"))).toEqual(["parent-1.json"]);
 	});
 
+	it("persists built-in definitions with controlled virtual paths", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		const registry = new AgentRegistry(root, "parent-1");
+		const record = fixture(root);
+		record.definition = {
+			...record.definition,
+			source: "built-in",
+			filePath: "built-in:worker",
+		};
+
+		await registry.save(record);
+		const restored = new AgentRegistry(root, "parent-1");
+		await restored.load();
+		expect(restored.get("agent-1")?.definition).toMatchObject({
+			name: "worker",
+			source: "built-in",
+			filePath: "built-in:worker",
+		});
+
+		await expect(
+			registry.save({
+				...record,
+				definition: { ...record.definition, filePath: "built-in:explore" },
+			}),
+		).rejects.toThrow("Invalid definition for agent agent-1");
+	});
+
 	it("rejects corrupt registry files with a clear diagnostic", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
 		tempRoots.push(root);

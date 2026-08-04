@@ -307,6 +307,25 @@ describe("AgentManager", () => {
 		expect(await manager.registry.readTranscript(completed.agentId)).toContain("Created new session");
 	});
 
+	it("completes a settled agent whose process does not exit", async () => {
+		const root = temporaryDirectory();
+		const notifications: AgentRecord[] = [];
+		const manager = createManager(root, { onTerminal: (record) => notifications.push(record) });
+		await manager.initialize();
+		const started = await manager.start(definition, {
+			task: "settle-hang ignore-term",
+			mode: "background",
+		});
+
+		const completed = await started.completion;
+
+		expect(completed.status).toBe("completed");
+		expect(completed.lastOutput).toContain("finished");
+		expect(await manager.registry.readTranscript(completed.agentId)).toContain('"type":"agent_settled"');
+		expect(notifications).toHaveLength(1);
+		expect(manager.getActiveCount()).toBe(0);
+	});
+
 	it("marks orphaned running records interrupted without restarting them", async () => {
 		const root = temporaryDirectory();
 		const stateRoot = path.join(root, "state");

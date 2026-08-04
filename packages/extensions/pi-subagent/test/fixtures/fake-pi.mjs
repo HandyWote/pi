@@ -17,14 +17,14 @@ const priorSession = fs.existsSync(sessionPath) ? fs.readFileSync(sessionPath, "
 if (!priorSession) fs.writeFileSync(sessionPath, `${JSON.stringify({ type: "session", id: sessionId })}\n`);
 fs.appendFileSync(sessionPath, `${JSON.stringify({ type: "task", task })}\n`);
 const readyFile = /ready-file:(\S+)/.exec(task)?.[1];
+const emit = (event) => fs.writeSync(process.stdout.fd, `${JSON.stringify(event)}\n`);
 
 if (task.includes("ignore-term")) {
 	process.on("SIGTERM", () => {});
 }
 if (task.includes("benign-stderr")) console.error("Created new session with requested ID");
 
-console.log(
-	JSON.stringify({
+	emit({
 		type: "message_end",
 		message: {
 			role: "assistant",
@@ -49,8 +49,7 @@ console.log(
 			stopReason: "stop",
 			timestamp: Date.now(),
 		},
-	}),
-);
+	});
 if (readyFile) fs.writeFileSync(readyFile, String(process.pid));
 
 setTimeout(() => {
@@ -58,8 +57,7 @@ setTimeout(() => {
 		console.error("requested failure");
 		process.exit(2);
 	}
-	console.log(
-		JSON.stringify({
+	emit({
 			type: "message_end",
 			message: {
 				role: "assistant",
@@ -78,9 +76,10 @@ setTimeout(() => {
 				stopReason: "stop",
 				timestamp: Date.now(),
 			},
-		}),
-	);
-	process.exit(0);
+		});
+	emit({ type: "agent_settled" });
+	if (task.includes("settle-hang")) return;
+	process.exitCode = 0;
 }, delay);
 
 if (task.includes("ignore-term")) setInterval(() => {}, 1000);

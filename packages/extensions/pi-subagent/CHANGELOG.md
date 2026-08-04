@@ -14,6 +14,10 @@
 
 - Added concrete guidance to batch independent delegated work in background mode.
 
+### Fixed
+
+- Terminated child processes after `agent_settled` so leaked extension handles cannot leave completed agents running indefinitely.
+
 ## [0.1.1] - 2026-07-31
 
 ### Added

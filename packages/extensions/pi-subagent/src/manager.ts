@@ -520,11 +520,19 @@ export class AgentManager {
 		let stdoutBuffer = "";
 		let stderrBuffer = "";
 		let processing = Promise.resolve();
+		let resolveSettled = () => {};
+		const settledPromise = new Promise<void>((resolve) => {
+			resolveSettled = resolve;
+		});
 		child.stdout.on("data", (chunk: Buffer) => {
 			stdoutBuffer += chunk.toString("utf8");
 			const lines = stdoutBuffer.split("\n");
 			stdoutBuffer = lines.pop() ?? "";
-			for (const line of lines) processing = processing.then(() => this.processLine(agentId, line));
+			for (const line of lines) {
+				processing = processing.then(async () => {
+					if (await this.processLine(agentId, line)) resolveSettled();
+				});
+			}
 		});
 		const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", resolve));
 		child.stderr.on("data", (chunk: Buffer) => {
@@ -562,27 +570,39 @@ export class AgentManager {
 		}));
 		this.publish(record);
 
-		const exit = await exitPromise;
+		const firstOutcome = await Promise.race([
+			exitPromise.then((exit) => ({ type: "exit" as const, exit })),
+			settledPromise.then(() => ({ type: "settled" as const })),
+		]);
+		const settledBeforeExit = firstOutcome.type === "settled";
+		if (settledBeforeExit) {
+			this.terminate(child);
+		}
+		const exit = firstOutcome.type === "exit" ? firstOutcome.exit : await exitPromise;
 		if (!exit.ok) throw exit.error;
 		await Promise.all([stdoutEnded, stderrEnded]);
-		if (stdoutBuffer.trim()) processing = processing.then(() => this.processLine(record.agentId, stdoutBuffer));
+		if (stdoutBuffer.trim()) {
+			processing = processing.then(async () => {
+				await this.processLine(record.agentId, stdoutBuffer);
+			});
+		}
 		await processing;
 		const currentRun = this.active.get(record.agentId);
 		const desiredStatus = currentRun?.desiredStatus;
-		const status: AgentStatus = desiredStatus ?? (exit.code === 0 ? "completed" : "failed");
+		const status: AgentStatus = desiredStatus ?? (exit.code === 0 || settledBeforeExit ? "completed" : "failed");
 		const message =
 			desiredStatus === "stopped"
 				? "Stopped by user"
 				: desiredStatus === "interrupted"
 					? "Parent session stopped"
-					: exit.code === 0
+					: exit.code === 0 || settledBeforeExit
 						? undefined
 						: `Agent exited with code ${exit.code ?? "null"}${exit.signal ? ` (${exit.signal})` : ""}${stderrBuffer.trim() ? `\n${stderrBuffer.trim()}` : ""}`;
 		return this.finish(record.agentId, status, message, exit.code ?? undefined);
 	}
 
-	private async processLine(agentId: string, line: string): Promise<void> {
-		if (!line.trim()) return;
+	private async processLine(agentId: string, line: string): Promise<boolean> {
+		if (!line.trim()) return false;
 		let event: unknown;
 		try {
 			event = JSON.parse(line);
@@ -590,12 +610,13 @@ export class AgentManager {
 			event = { type: "stdout", text: line, timestamp: Date.now() };
 		}
 		await this.registry.appendTranscript(agentId, event);
-		if (!isRecord(event)) return;
-		if (event.type !== "message_end" && event.type !== "tool_result_end") return;
-		if (!isRecord(event.message) || !Array.isArray(event.message.content)) return;
-		if (event.message.role !== "assistant" && event.message.role !== "toolResult") return;
+		if (!isRecord(event)) return false;
+		if (event.type === "agent_settled") return true;
+		if (event.type !== "message_end" && event.type !== "tool_result_end") return false;
+		if (!isRecord(event.message) || !Array.isArray(event.message.content)) return false;
+		if (event.message.role !== "assistant" && event.message.role !== "toolResult") return false;
 		if (event.message.role === "assistant" && (!isRecord(event.message.usage) || !isRecord(event.message.usage.cost)))
-			return;
+			return false;
 		const message = event.message as unknown as Message;
 		const text = getTextContent(message);
 		const updated = await this.registry.update(agentId, (entry) => {
@@ -633,6 +654,7 @@ export class AgentManager {
 			};
 		});
 		this.notifySubscribers(updated);
+		return false;
 	}
 
 	private async finishWithoutProcess(agentId: string, status: AgentStatus, error?: string): Promise<AgentRecord> {
@@ -828,6 +850,6 @@ export class AgentManager {
 		const timer = setTimeout(() => {
 			if (child.exitCode === null) child.kill("SIGKILL");
 		}, this.killGraceMs);
-		timer.unref();
+		child.once("close", () => clearTimeout(timer));
 	}
 }

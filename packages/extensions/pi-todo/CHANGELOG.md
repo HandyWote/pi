@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-04
+
 ### Breaking Changes
 
 - Removed claim tokens from Todo tasks, tools, metadata, and lifecycle integration, and upgraded the optional Agent protocol to version 2.

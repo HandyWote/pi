@@ -13,8 +13,9 @@ function record(): AgentRecord {
 	const root = "/tmp/pi-subagent-render";
 	const now = new Date().toISOString();
 	return {
-		version: 1,
+		version: 2,
 		agentId: "agent-render-width-test",
+		runId: "run-render-width-test",
 		parentSessionId: "parent-render",
 		definition: {
 			name: "worker-with-an-extremely-long-display-name",

@@ -90,7 +90,6 @@ describe("dependency graph", () => {
 				...task("A"),
 				status: "in_progress",
 				owner: "main",
-				claim_token: "a",
 				created_at: "x",
 				updated_at: "x",
 				revision: 1,
@@ -144,7 +143,7 @@ describe("FileTodoStore", () => {
 		expect(list.history.length).toBe(3);
 	});
 
-	it("claims atomically across processes and releases only matching ownership", async () => {
+	it("claims atomically across processes and releases without credentials", async () => {
 		await store.create("Parallel work", [task("A")], "list-1");
 		const results = await Promise.allSettled([
 			execFileAsync(process.execPath, [CLAIM_WORKER.pathname, directory, "agent-1"]),
@@ -156,36 +155,47 @@ describe("FileTodoStore", () => {
 		const claimed = await store.read("list-1");
 		const claimedTask = claimed.tasks[0];
 		expect(claimedTask?.status).toBe("in_progress");
-		await expect(store.release("list-1", "A", "wrong", claimedTask?.claim_token ?? "")).rejects.toThrow("not owned");
-		await store.release("list-1", "A", claimedTask?.owner ?? "", claimedTask?.claim_token ?? "");
+		expect(claimedTask).not.toHaveProperty("claim_token");
+		await store.release("list-1", "A");
 		const released = (await store.read("list-1")).tasks[0];
 		expect(released?.status).toBe("pending");
 		expect(released?.owner).toBeUndefined();
 	});
 
-	it("requires claims for in_progress and a matching token for claimed updates", async () => {
+	it("requires claims for in_progress and permits credential-free claimed updates", async () => {
 		await store.create("Protected work", [task("A")], "list-1");
 		await expect(store.update("list-1", "A", { status: "in_progress" })).rejects.toThrow("through todo_claim");
 		const claim = await store.claim("list-1", "A", "agent-1");
-		await expect(store.update("list-1", "A", { status: "completed" })).rejects.toThrow("current claim token");
-		await store.update("list-1", "A", { status: "completed", claim_token: claim.claim_token });
+		expect(claim).toEqual({ task: expect.objectContaining({ id: "A", owner: "agent-1" }) });
+		await store.update("list-1", "A", { subject: "Updated while claimed", status: "completed" });
 		expect((await store.read("list-1")).tasks[0]?.status).toBe("completed");
 	});
 
-	it("transfers ownership idempotently and rejects stale lifecycle tokens", async () => {
+	it("returns claimed work to pending and deletes in-progress work directly", async () => {
+		await store.create("Recover work", [task("A"), task("B", ["A"])], "list-1");
+		await store.claim("list-1", "A", "agent-1");
+		const pending = await store.update("list-1", "A", { status: "pending" });
+		expect(pending.tasks[0]).toMatchObject({ status: "pending", owner: undefined });
+		await store.claim("list-1", "A", "agent-2");
+		const deleted = await store.delete("list-1", "A");
+		expect(deleted.tasks.map((item) => item.id)).toEqual(["B"]);
+		expect(deleted.tasks[0]?.depends_on).toEqual([]);
+		expect(deleted.tombstones).toEqual([expect.objectContaining({ id: "A" })]);
+	});
+
+	it("transfers ownership idempotently and conditionally releases the expected owner", async () => {
 		await store.create("Delegate safely", [task("A")], "list-1");
-		const initial = await store.claim("list-1", "A", "main");
-		const transferred = await store.transfer("list-1", "A", "agent-1", initial.claim_token);
+		await store.claim("list-1", "A", "main");
+		const transferred = await store.transfer("list-1", "A", "agent-1");
 		const transferredRevision = transferred.revision;
 		expect(transferred.tasks[0]?.owner).toBe("agent-1");
-		expect((await store.transfer("list-1", "A", "agent-1", initial.claim_token)).revision).toBe(transferredRevision);
-		await store.release("list-1", "A", "agent-1", initial.claim_token);
-		const current = await store.claim("list-1", "A", "agent-2");
-		await expect(store.transfer("list-1", "A", "stale-agent", initial.claim_token)).rejects.toThrow("does not match");
-		expect((await store.read("list-1")).tasks[0]).toMatchObject({
-			owner: "agent-2",
-			claim_token: current.claim_token,
-		});
+		expect((await store.transfer("list-1", "A", "agent-1")).revision).toBe(transferredRevision);
+		expect((await store.releaseIfOwned("list-1", "A", "stale-agent")).revision).toBe(transferredRevision);
+		expect((await store.read("list-1")).tasks[0]).toMatchObject({ status: "in_progress", owner: "agent-1" });
+		await store.releaseIfOwned("list-1", "A", "agent-1");
+		const released = (await store.read("list-1")).tasks[0];
+		expect(released?.status).toBe("pending");
+		expect(released?.owner).toBeUndefined();
 	});
 
 	it("reclaims a lock left by a dead process", async () => {
@@ -488,7 +498,6 @@ describe("FileTodoStore", () => {
 		expect(reconciled.tasks.find((item) => item.id === "B")).toMatchObject({
 			status: "pending",
 			owner: undefined,
-			claim_token: undefined,
 		});
 	});
 
@@ -499,11 +508,8 @@ describe("FileTodoStore", () => {
 	it("has only three public states and completes without review or retry state", async () => {
 		await store.create("Finish directly", [task("A")], "list-1");
 		await expect(store.update("list-1", "A", { status: "completed" })).rejects.toThrow("claimed before completion");
-		const claim = await store.claim("list-1", "A", "main");
-		const completed = await store.update("list-1", "A", {
-			status: "completed",
-			claim_token: claim.claim_token,
-		});
+		await store.claim("list-1", "A", "main");
+		const completed = await store.update("list-1", "A", { status: "completed" });
 		expect(completed.tasks[0]?.status).toBe("completed");
 		expect(Object.keys(completed.tasks[0] ?? {})).not.toContain("retry");
 		expect((await store.view("list-1")).summary).toEqual({
@@ -552,7 +558,6 @@ describe("FileTodoStore", () => {
 		const fork = await store.clone("source", undefined, "fork");
 		expect(fork.tasks[0]?.status).toBe("pending");
 		expect(fork.tasks[0]?.owner).toBeUndefined();
-		expect(fork.tasks[0]?.claim_token).toBeUndefined();
 	});
 
 	it("updates dependent revisions on deletion and forbids tombstone id reuse", async () => {
@@ -576,6 +581,18 @@ describe("FileTodoStore", () => {
 		expect(JSON.parse(await readFile(join(directory, "list-1", "tasks.json"), "utf8"))).toBeDefined();
 		await writeFile(join(directory, "list-1", "tasks.json"), "{partial-again", "utf8");
 		expect((await store.read("list-1")).tasks.map((item) => item.id)).toEqual(["A"]);
+	});
+
+	it("accepts legacy claim_token fields as unknown document data", async () => {
+		await store.create("Legacy", [task("A")], "list-1");
+		await store.claim("list-1", "A", "agent-1");
+		const path = join(directory, "list-1", "tasks.json");
+		const legacy = JSON.parse(await readFile(path, "utf8")) as { tasks: Array<Record<string, unknown>> };
+		legacy.tasks[0]!.claim_token = "legacy-token";
+		await writeFile(path, JSON.stringify(legacy), "utf8");
+		expect((await store.read("list-1")).tasks[0]).toMatchObject({ status: "in_progress", owner: "agent-1" });
+		await store.update("list-1", "A", { subject: "Still writable" });
+		expect((await store.read("list-1")).tasks[0]?.subject).toBe("Still writable");
 	});
 
 	it("rejects malformed task state and a document id that does not match its locked directory", async () => {

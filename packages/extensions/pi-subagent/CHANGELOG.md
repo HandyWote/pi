@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Upgraded lifecycle events and persisted agent records to version 2 with per-invocation run IDs; version 1 registry records are discarded rather than migrated.
+
+### Added
+
+- Added built-in `worker` and read-only `explore` agents with user and project override support.
+
+### Changed
+
+- Added concrete guidance to batch independent delegated work in background mode.
+
 ## [0.1.1] - 2026-07-31
 
 ### Added

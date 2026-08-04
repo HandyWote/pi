@@ -17,8 +17,9 @@ afterEach(() => {
 function projectRecord(root: string): AgentRecord {
 	const now = new Date().toISOString();
 	return {
-		version: 1,
+		version: 2,
 		agentId: "agent-project",
+		runId: "run-project",
 		parentSessionId: "parent",
 		definition: {
 			name: "project-worker",
@@ -102,10 +103,12 @@ describe("/agents", () => {
 
 		expect(setupResult.resume).not.toHaveBeenCalled();
 		expect(setupResult.input).not.toHaveBeenCalled();
-		expect(setupResult.notify).toHaveBeenCalledWith(
-			`Unknown agent: ${setupResult.record.agentId}. Available agents: none`,
-			"error",
-		);
+		expect(setupResult.notify).toHaveBeenCalledOnce();
+		const message = String(setupResult.notify.mock.calls[0]?.[0]);
+		expect(message).toContain(`Unknown agent: ${setupResult.record.agentId}.`);
+		expect(message).toContain("worker");
+		expect(message).toContain("explore");
+		expect(setupResult.notify.mock.calls[0]?.[1]).toBe("error");
 	});
 
 	it("resumes a project agent only after approval", async () => {
@@ -123,10 +126,13 @@ describe("/agents", () => {
 
 		await setupResult.handler("missing-id", setupResult.context);
 
-		expect(setupResult.notify).toHaveBeenCalledWith(
-			"Unknown agent: missing-id. Available agents: available",
-			"error",
-		);
+		expect(setupResult.notify).toHaveBeenCalledOnce();
+		const message = String(setupResult.notify.mock.calls[0]?.[0]);
+		expect(message).toContain("Unknown agent: missing-id.");
+		expect(message).toContain("worker");
+		expect(message).toContain("explore");
+		expect(message).toContain("available");
+		expect(setupResult.notify.mock.calls[0]?.[1]).toBe("error");
 	});
 
 	it("hides project definitions and history when project trust is revoked", async () => {
@@ -134,8 +140,10 @@ describe("/agents", () => {
 
 		await setupResult.handler("", setupResult.context);
 
-		expect(setupResult.notify).toHaveBeenCalledWith("No agents", "info");
+		expect(setupResult.notify).toHaveBeenCalledOnce();
 		const output = setupResult.notify.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(output).toContain("worker [built-in]");
+		expect(output).toContain("explore [built-in]");
 		expect(output).not.toContain("project-worker");
 		expect(output).not.toContain("Safe description");
 		expect(output).not.toContain("Secret prompt");

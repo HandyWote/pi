@@ -10,8 +10,9 @@ const tempRoots: string[] = [];
 function fixture(root: string): AgentRecord {
 	const now = new Date().toISOString();
 	return {
-		version: 1,
+		version: 2,
 		agentId: "agent-1",
+		runId: "run-1",
 		parentSessionId: "parent-1",
 		definition: {
 			name: "worker",
@@ -100,7 +101,7 @@ describe("AgentRegistry", () => {
 		fs.mkdirSync(path.join(root, "registries"), { recursive: true });
 		fs.writeFileSync(
 			path.join(root, "registries", "parent-1.json"),
-			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [record] }),
+			JSON.stringify({ version: 2, parentSessionId: "parent-1", records: [record] }),
 		);
 		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Invalid transcript path");
 	});
@@ -121,14 +122,44 @@ describe("AgentRegistry", () => {
 		const incomplete = { ...fixture(root), usage: undefined };
 		fs.writeFileSync(
 			registry.registryPath,
-			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [incomplete] }),
+			JSON.stringify({ version: 2, parentSessionId: "parent-1", records: [incomplete] }),
 		);
 		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Invalid usage");
 
 		fs.writeFileSync(
 			registry.registryPath,
-			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [fixture(root), fixture(root)] }),
+			JSON.stringify({ version: 2, parentSessionId: "parent-1", records: [fixture(root), fixture(root)] }),
 		);
 		await expect(new AgentRegistry(root, "parent-1").load()).rejects.toThrow("Duplicate agent ID");
+	});
+
+	it("discards a v1 registry and rewrites it as an empty v2 registry", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		const registry = new AgentRegistry(root, "parent-1");
+		fs.mkdirSync(path.dirname(registry.registryPath), { recursive: true });
+		fs.writeFileSync(
+			registry.registryPath,
+			JSON.stringify({ version: 1, parentSessionId: "parent-1", records: [{ agentId: "legacy" }] }),
+		);
+
+		await registry.load();
+
+		expect(registry.list()).toEqual([]);
+		expect(JSON.parse(fs.readFileSync(registry.registryPath, "utf8"))).toEqual({
+			version: 2,
+			parentSessionId: "parent-1",
+			records: [],
+		});
+	});
+
+	it("rejects unknown future registry versions", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-registry-"));
+		tempRoots.push(root);
+		const registry = new AgentRegistry(root, "parent-1");
+		fs.mkdirSync(path.dirname(registry.registryPath), { recursive: true });
+		fs.writeFileSync(registry.registryPath, JSON.stringify({ version: 3, parentSessionId: "parent-1", records: [] }));
+
+		await expect(registry.load()).rejects.toThrow("Invalid subagent registry");
 	});
 });

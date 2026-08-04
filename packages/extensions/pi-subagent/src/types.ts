@@ -1,8 +1,8 @@
 export const AGENT_PROTOCOL_CHANNEL = "pi:agent:lifecycle";
-export const AGENT_PROTOCOL_VERSION = 1;
+export const AGENT_PROTOCOL_VERSION = 2;
 
 export type AgentScope = "user" | "project" | "both";
-export type AgentSource = "user" | "project";
+export type AgentSource = "built-in" | "user" | "project";
 export type AgentIsolation = "none" | "worktree";
 export type AgentMode = "foreground" | "background";
 export type AgentStatus = "queued" | "running" | "completed" | "failed" | "stopped" | "interrupted";
@@ -48,8 +48,9 @@ export interface AgentActivity {
 }
 
 export interface AgentRecord {
-	version: 1;
+	version: 2;
 	agentId: string;
+	runId: string;
 	parentSessionId: string;
 	definition: AgentDefinition;
 	task: string;
@@ -83,8 +84,9 @@ export interface AgentRecord {
 }
 
 export interface AgentLifecycleEvent {
-	version: 1;
+	version: 2;
 	eventId: string;
+	runId: string;
 	agentId: string;
 	parentSessionId: string;
 	status: AgentStatus;

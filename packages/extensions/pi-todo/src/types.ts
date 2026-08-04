@@ -14,7 +14,6 @@ export interface TodoDefinition {
 export interface TodoTask extends TodoDefinition {
 	status: TodoStatus;
 	owner?: string;
-	claim_token?: string;
 	created_at: string;
 	updated_at: string;
 	revision: number;
@@ -59,7 +58,6 @@ export interface TodoListView {
 
 export interface TodoClaim {
 	task: TodoTask;
-	claim_token: string;
 }
 
 export interface TodoBindingEntry {
@@ -72,12 +70,12 @@ export interface TodoBindingEntry {
 export interface TodoAgentMetadata {
 	"pi.todo/list-id": string;
 	"pi.todo/task-id": string;
-	"pi.todo/claim-token": string;
 }
 
 export interface AgentLifecycleEvent {
-	version: 1;
+	version: 2;
 	eventId: string;
+	runId: string;
 	agentId: string;
 	parentSessionId: string;
 	status: "queued" | "started" | "running" | "completed" | "failed" | "stopped" | "interrupted";

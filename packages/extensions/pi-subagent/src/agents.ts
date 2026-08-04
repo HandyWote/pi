@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@handy_wote/pi-coding-agent";
+import { getBuiltInAgents } from "./built-in-agents.ts";
 import type {
 	AgentDefinition,
 	AgentDiscoveryDiagnostic,
@@ -158,7 +159,7 @@ function loadAgentsFromDir(
 }
 
 export function loadAgentPrompt(definition: AgentDefinition): AgentDefinition {
-	if (definition.source === "user")
+	if (definition.source === "user" || definition.source === "built-in")
 		return { ...definition, tools: definition.tools ? [...definition.tools] : undefined };
 	const loaded = parseAgentDefinition(
 		definition.filePath,
@@ -172,6 +173,7 @@ export function loadAgentPrompt(definition: AgentDefinition): AgentDefinition {
 }
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+	const builtIn = getBuiltInAgents();
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 	const user = scope === "project" ? { agents: [], diagnostics: [] } : loadAgentsFromDir(userDir, "user");
@@ -181,10 +183,15 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 			: loadAgentsFromDir(projectAgentsDir, "project");
 	const diagnostics = [...user.diagnostics, ...project.diagnostics];
 	const byName = new Map<string, AgentDefinition>();
+	for (const agent of builtIn) byName.set(agent.name, agent);
+	const userNames = new Set<string>();
 	for (const agent of user.agents) {
-		if (byName.has(agent.name))
+		if (userNames.has(agent.name))
 			diagnostics.push({ filePath: agent.filePath, message: `Duplicate user agent: ${agent.name}` });
-		else byName.set(agent.name, agent);
+		else {
+			userNames.add(agent.name);
+			byName.set(agent.name, agent);
+		}
 	}
 	const projectNames = new Set<string>();
 	for (const agent of project.agents) {

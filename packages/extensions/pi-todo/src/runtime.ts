@@ -43,14 +43,13 @@ export class TodoRuntime {
 		return this.binding?.list_id ?? undefined;
 	}
 
-	getTaskContext(): { listId: string; taskId: string; claimToken: string; agentId?: string } | undefined {
+	getTaskContext(): { listId: string; taskId: string; agentId?: string } | undefined {
 		const metadata = this.agentContext?.metadata;
 		if (!metadata) return undefined;
 		const listId = metadata["pi.todo/list-id"];
 		const taskId = metadata["pi.todo/task-id"];
-		const claimToken = metadata["pi.todo/claim-token"];
-		if (typeof listId !== "string" || typeof taskId !== "string" || typeof claimToken !== "string") return undefined;
-		return { listId, taskId, claimToken, agentId: this.agentContext?.agentId };
+		if (typeof listId !== "string" || typeof taskId !== "string") return undefined;
+		return { listId, taskId, agentId: this.agentContext?.agentId };
 	}
 
 	async initialize(event: SessionStartEvent, ctx: ExtensionContext): Promise<void> {
@@ -125,17 +124,7 @@ export class TodoRuntime {
 	}
 
 	async update(taskId: string, patch: Parameters<FileTodoStore["update"]>[2]): Promise<TodoListDocument> {
-		const listId = this.requireListId();
-		const taskContext = this.getTaskContext();
-		if (patch.claim_token === undefined && taskContext?.listId === listId && taskContext.taskId === taskId) {
-			patch.claim_token = taskContext.claimToken;
-		}
-		if (patch.claim_token === undefined) {
-			const task = await this.getTask(taskId);
-			const sessionOwner = this.context?.sessionManager.getSessionId();
-			if (task?.status === "in_progress" && task.owner === sessionOwner) patch.claim_token = task.claim_token;
-		}
-		return this.record(await this.store.update(listId, taskId, patch));
+		return this.record(await this.store.update(this.requireListId(), taskId, patch));
 	}
 
 	async claim(taskId: string, owner?: string, expectedRevision?: number) {
@@ -149,17 +138,17 @@ export class TodoRuntime {
 		return claim;
 	}
 
-	async release(taskId: string, owner: string, claimToken: string): Promise<TodoListDocument> {
-		return this.record(await this.store.release(this.requireListId(), taskId, owner, claimToken));
+	async release(taskId: string): Promise<TodoListDocument> {
+		return this.record(await this.store.release(this.requireListId(), taskId));
 	}
 
-	async transfer(taskId: string, owner: string, claimToken: string): Promise<TodoListDocument> {
-		return this.record(await this.store.transfer(this.requireListId(), taskId, owner, claimToken));
+	async transfer(taskId: string, owner: string): Promise<TodoListDocument> {
+		return this.record(await this.store.transfer(this.requireListId(), taskId, owner));
 	}
 
-	async confirmOwnerLive(taskId: string, owner: string, claimToken: string): Promise<void> {
+	async confirmOwnerLive(taskId: string, owner: string): Promise<void> {
 		const evidence = (async () => {
-			const document = await this.store.transfer(this.requireListId(), taskId, owner, claimToken);
+			const document = await this.store.transfer(this.requireListId(), taskId, owner);
 			this.liveOwners.add(owner);
 			await this.record(document);
 		})();
@@ -175,8 +164,8 @@ export class TodoRuntime {
 		return this.record(await this.store.read(this.requireListId()));
 	}
 
-	async releaseClaim(taskId: string, claimToken: string): Promise<TodoListDocument> {
-		return this.record(await this.store.releaseClaim(this.requireListId(), taskId, claimToken));
+	async releaseIfOwned(taskId: string, owner: string): Promise<TodoListDocument> {
+		return this.record(await this.store.releaseIfOwned(this.requireListId(), taskId, owner));
 	}
 
 	async reconcileOwners(): Promise<boolean> {
@@ -185,7 +174,7 @@ export class TodoRuntime {
 		const sessionId = this.context?.sessionManager.getSessionId();
 		if (!sessionId) return false;
 		this.pi.events.emit(AGENT_STATUS_REQUEST_CHANNEL, {
-			version: 1,
+			version: 2,
 			parentSessionId: sessionId,
 			timestamp: new Date().toISOString(),
 		});
@@ -238,7 +227,9 @@ export class TodoRuntime {
 		appendDigestSection(lines, "Ready", view.ready, (task) => `${task.id}: ${task.subject}`);
 		appendDigestSection(lines, "Blocked", view.blocked, (task) => `${task.id} <- ${task.depends_on.join(",")}`);
 		if (view.ready.length > 1 && hasAgentCapability(this.pi.getActiveTools())) {
-			lines.push("Several independent tasks are ready. Prefer parallel delegation when appropriate.");
+			lines.push(
+				"Several independent tasks are ready. Claim them, then use one background agent_start batch with worker and each claim's metadata. Use explore only for unbound read-only investigation.",
+			);
 		} else if (view.ready.length) {
 			lines.push("Claim a ready task and continue it in the current session.");
 		}
@@ -328,7 +319,7 @@ function parseAgentContext(raw: string | undefined): AgentContext | undefined {
 }
 
 function hasAgentCapability(activeTools: readonly string[]): boolean {
-	return activeTools.some((name) => name.toLowerCase().includes("agent"));
+	return activeTools.includes("agent_start");
 }
 
 function appendDigestSection(

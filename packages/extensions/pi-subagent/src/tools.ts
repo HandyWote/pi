@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@handy_wote/pi-coding-agent
 import { Type } from "typebox";
 import { discoverAgents, loadAgentPrompt } from "./agents.ts";
 import { approveProjectAgents } from "./approval.ts";
+import { resolveBuiltInAgentTools } from "./built-in-agents.ts";
 import type { AgentManager } from "./manager.ts";
 import { type AgentToolDetails, BoundedText, renderAgentResult } from "./render.ts";
 import type { AgentDefinition, AgentIsolation, AgentMode, AgentRecord, AgentScope, StartResult } from "./types.ts";
@@ -94,6 +95,14 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 		name: "agent_start",
 		label: "Agent",
 		description: "Start one or more independent subagents. Background mode returns stable agent IDs immediately.",
+		promptSnippet: "Delegate independent implementation or investigation work to persistent subagents",
+		promptGuidelines: [
+			"When two or more ready tasks are independent and have clear file ownership, claim each Todo first, then launch them in one agent_start batch with mode=background and pass each claim's metadata unchanged.",
+			"Delegate broad read-only investigation, independent verification, or context-heavy work; keep small edits, tightly ordered work, shared-file changes, and decisions requiring frequent coordination in the main session.",
+			"Use built-in worker for implementation, verification, and claimed Todo work. Use built-in explore only for unbound read-only investigation; agent_list is not required before using these built-ins.",
+			"After a background terminal notification, inspect agent_list and todo_list, and use agent_output when needed; process completion does not imply Todo completion.",
+			"Do not start a subagent for a simple answer or a single quick file read.",
+		],
 		parameters: StartParams,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			try {
@@ -140,6 +149,10 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 				throwIfAborted(signal);
 				for (const item of resolved) {
 					item.definition = loadAgentPrompt(item.definition);
+					item.definition = resolveBuiltInAgentTools(
+						item.definition,
+						pi.getAllTools().map((tool) => tool.name),
+					);
 					validateDefinition(pi, ctx, item.definition);
 				}
 				const mode: AgentMode = params.mode ?? "foreground";

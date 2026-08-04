@@ -98,8 +98,8 @@ describe("TodoRuntime recovery", () => {
 			{ id: "B", subject: "Task B", depends_on: ["A"] },
 			{ id: "C", subject: "Task C", depends_on: [] },
 		]);
-		const external = await runtime.claim("C");
-		await runtime.transfer("C", "agent-orphan", external.claim_token);
+		await runtime.claim("C");
+		await runtime.transfer("C", "agent-orphan");
 		const currentBinding = bindingEntry(original);
 
 		const resumedEnvironment = fakeEnvironment("session-1", branchWithBinding(currentBinding));
@@ -166,8 +166,8 @@ describe("TodoRuntime recovery", () => {
 		const runtime = new TodoRuntime(original.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, original.ctx);
 		await runtime.replace("Delegate", [{ id: "A", subject: "Agent task", depends_on: [] }]);
-		const claim = await runtime.claim("A");
-		await runtime.transfer("A", "agent-live", claim.claim_token);
+		await runtime.claim("A");
+		await runtime.transfer("A", "agent-live");
 		const binding = bindingEntry(original);
 
 		const resumedEnvironment = fakeEnvironment("session-1", branchWithBinding(binding));
@@ -175,8 +175,9 @@ describe("TodoRuntime recovery", () => {
 		const disposeProtocol = registerAgentLifecycleProtocol(resumedEnvironment.eventBus, resumed);
 		const disposeResponder = resumedEnvironment.eventBus.on("pi:agent:status-request", () => {
 			resumedEnvironment.eventBus.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 1,
+				version: 2,
 				eventId: "running-after-resume",
+				runId: "run-after-resume",
 				agentId: "agent-live",
 				parentSessionId: "session-1",
 				status: "running",
@@ -184,7 +185,6 @@ describe("TodoRuntime recovery", () => {
 				metadata: {
 					"pi.todo/list-id": binding.list_id,
 					"pi.todo/task-id": "A",
-					"pi.todo/claim-token": claim.claim_token,
 				},
 			});
 		});
@@ -204,8 +204,8 @@ describe("TodoRuntime recovery", () => {
 			const runtime = new TodoRuntime(original.pi, { dataDir });
 			await runtime.initialize({ type: "session_start", reason: "startup" }, original.ctx);
 			await runtime.replace(order, [{ id: "A", subject: "Agent task", depends_on: [] }]);
-			const claim = await runtime.claim("A");
-			await runtime.transfer("A", `agent-${order}`, claim.claim_token);
+			await runtime.claim("A");
+			await runtime.transfer("A", `agent-${order}`);
 			const binding = bindingEntry(original);
 
 			const resumedEnvironment = fakeEnvironment(`session-${order}`, branchWithBinding(binding));
@@ -215,8 +215,9 @@ describe("TodoRuntime recovery", () => {
 			const disposeResponder = resumedEnvironment.eventBus.on("pi:agent:status-request", () => {
 				if (!managerReady) return;
 				resumedEnvironment.eventBus.emit(AGENT_LIFECYCLE_CHANNEL, {
-					version: 1,
+					version: 2,
 					eventId: `running-${order}`,
+					runId: `run-${order}`,
 					agentId: `agent-${order}`,
 					parentSessionId: `session-${order}`,
 					status: "running",
@@ -224,7 +225,6 @@ describe("TodoRuntime recovery", () => {
 					metadata: {
 						"pi.todo/list-id": binding.list_id,
 						"pi.todo/task-id": "A",
-						"pi.todo/claim-token": claim.claim_token,
 					},
 				});
 			});
@@ -251,18 +251,18 @@ describe("TodoRuntime recovery", () => {
 			{ id: "A", subject: "Agent task", depends_on: [] },
 			{ id: "B", subject: "Failing agent task", depends_on: [] },
 		]);
-		const claim = await runtime.claim("A");
+		await runtime.claim("A");
 		const metadata = {
 			"pi.todo/list-id": runtime.getListId(),
 			"pi.todo/task-id": "A",
-			"pi.todo/claim-token": claim.claim_token,
 		};
 		const events = environment.eventBus;
 		const dispose = registerAgentLifecycleProtocol(events, runtime);
 		try {
 			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 1,
+				version: 2,
 				eventId: "queued-1",
+				runId: "run-1",
 				agentId: "agent-1",
 				parentSessionId: "session-1",
 				status: "queued",
@@ -272,13 +272,11 @@ describe("TodoRuntime recovery", () => {
 			await vi.waitFor(async () => expect(await runtime.getTask("A")).toMatchObject({ owner: "agent-1" }), {
 				timeout: 5000,
 			});
-			await runtime.store.update(runtime.getListId() ?? "", "A", {
-				status: "completed",
-				claim_token: claim.claim_token,
-			});
+			await runtime.store.update(runtime.getListId() ?? "", "A", { status: "completed" });
 			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 1,
+				version: 2,
 				eventId: "complete-1",
+				runId: "run-1",
 				agentId: "agent-1",
 				parentSessionId: "session-1",
 				status: "completed",
@@ -299,15 +297,15 @@ describe("TodoRuntime recovery", () => {
 			await fork.initialize({ type: "session_start", reason: "fork" }, forkEnvironment.ctx);
 			expect((await fork.getTask("A"))?.status).toBe("completed");
 
-			const failedClaim = await runtime.claim("B");
+			await runtime.claim("B");
 			const failedMetadata = {
 				"pi.todo/list-id": runtime.getListId(),
 				"pi.todo/task-id": "B",
-				"pi.todo/claim-token": failedClaim.claim_token,
 			};
 			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 1,
+				version: 2,
 				eventId: "queued-2",
+				runId: "run-2",
 				agentId: "agent-2",
 				parentSessionId: "session-1",
 				status: "queued",
@@ -318,8 +316,9 @@ describe("TodoRuntime recovery", () => {
 				timeout: 5000,
 			});
 			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 1,
+				version: 2,
 				eventId: "failed-1",
+				runId: "run-2",
 				agentId: "agent-2",
 				parentSessionId: "session-1",
 				status: "failed",
@@ -333,31 +332,28 @@ describe("TodoRuntime recovery", () => {
 		}
 	});
 
-	it("serializes lifecycle races, gives terminal states priority, and retries unapplied event ids", async () => {
+	it("serializes lifecycle events and ignores stale active or failure events", async () => {
 		const environment = fakeEnvironment("session-1");
 		const runtime = new TodoRuntime(environment.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
 		await runtime.replace("Race", [
-			{ id: "A", subject: "Terminal first", depends_on: [] },
-			{ id: "B", subject: "Active first", depends_on: [] },
-			{ id: "C", subject: "Retry event", depends_on: [] },
+			{ id: "A", subject: "Late active", depends_on: [] },
+			{ id: "B", subject: "Changed owner", depends_on: [] },
+			{ id: "C", subject: "Old protocol", depends_on: [] },
 		]);
 		const events = environment.eventBus;
 		const dispose = registerAgentLifecycleProtocol(events, runtime);
 		try {
-			for (const [id, ordering] of [
-				["A", "terminal-first"],
-				["B", "active-first"],
-			] as const) {
-				const claim = await runtime.claim(id);
+			for (const id of ["A", "B"] as const) {
+				await runtime.claim(id);
 				const metadata = {
 					"pi.todo/list-id": runtime.getListId(),
 					"pi.todo/task-id": id,
-					"pi.todo/claim-token": claim.claim_token,
 				};
 				const active = {
-					version: 1,
+					version: 2,
 					eventId: `${id}-running`,
+					runId: `${id}-run`,
 					agentId: `agent-${id}`,
 					parentSessionId: "session-1",
 					status: "running",
@@ -365,48 +361,43 @@ describe("TodoRuntime recovery", () => {
 					metadata,
 				};
 				const terminal = { ...active, eventId: `${id}-failed`, status: "failed" };
-				if (ordering === "terminal-first") {
-					events.emit(AGENT_LIFECYCLE_CHANNEL, terminal);
-					events.emit(AGENT_LIFECYCLE_CHANNEL, active);
-				} else {
-					events.emit(AGENT_LIFECYCLE_CHANNEL, active);
-					events.emit(AGENT_LIFECYCLE_CHANNEL, terminal);
-				}
-				await vi.waitFor(async () => expect((await runtime.getTask(id))?.status).toBe("pending"), {
+				events.emit(AGENT_LIFECYCLE_CHANNEL, active);
+				await vi.waitFor(async () => expect((await runtime.getTask(id))?.owner).toBe(`agent-${id}`), {
 					timeout: 5000,
 				});
-				expect((await runtime.getTask(id))?.owner).toBeUndefined();
+				if (id === "B") await runtime.transfer(id, "replacement-agent");
+				events.emit(AGENT_LIFECYCLE_CHANNEL, terminal);
+				if (id === "A") {
+					await vi.waitFor(async () => expect((await runtime.getTask(id))?.status).toBe("pending"), {
+						timeout: 5000,
+					});
+					events.emit(AGENT_LIFECYCLE_CHANNEL, { ...active, eventId: `${id}-late-running` });
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect((await runtime.getTask(id))?.status).toBe("pending");
+				} else {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(await runtime.getTask(id)).toMatchObject({
+						status: "in_progress",
+						owner: "replacement-agent",
+					});
+				}
 			}
 
-			const claim = await runtime.claim("C");
-			const baseEvent = {
+			await runtime.claim("C");
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
 				version: 1,
-				eventId: "retry-same-id",
+				eventId: "old-version",
 				agentId: "agent-C",
 				parentSessionId: "session-1",
 				status: "running",
 				timestamp: new Date().toISOString(),
-			};
-			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				...baseEvent,
 				metadata: {
 					"pi.todo/list-id": runtime.getListId(),
 					"pi.todo/task-id": "C",
-					"pi.todo/claim-token": "wrong-token",
 				},
 			});
 			await new Promise((resolve) => setTimeout(resolve, 0));
-			events.emit(AGENT_LIFECYCLE_CHANNEL, {
-				...baseEvent,
-				metadata: {
-					"pi.todo/list-id": runtime.getListId(),
-					"pi.todo/task-id": "C",
-					"pi.todo/claim-token": claim.claim_token,
-				},
-			});
-			await vi.waitFor(async () => expect(await runtime.getTask("C")).toMatchObject({ owner: "agent-C" }), {
-				timeout: 5000,
-			});
+			expect((await runtime.getTask("C"))?.owner).not.toBe("agent-C");
 		} finally {
 			dispose();
 			events.clear();

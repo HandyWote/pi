@@ -71,6 +71,7 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 		promptGuidelines: [
 			"Use todo_list after interruption or when selecting the next task.",
 			"Several ready tasks may be claimed independently; there is no wave barrier.",
+			"When at least two ready tasks are independent and have separate file ownership, claim them and delegate them in one background agent_start batch using worker.",
 		],
 		parameters: Type.Object({ ready_only: Type.Optional(Type.Boolean()) }),
 		executionMode: "parallel",
@@ -115,7 +116,6 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 			status: Type.Optional(
 				Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
 			),
-			claim_token: Type.Optional(Type.String()),
 			expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
 		}),
 		executionMode: "sequential",
@@ -131,7 +131,10 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 		label: "Claim Todo",
 		description: "Atomically claim one dependency-ready task",
 		promptSnippet: "Claim a ready todo task before starting work",
-		promptGuidelines: ["Pass expected_revision when coordinating concurrent workers to reject stale claims."],
+		promptGuidelines: [
+			"Pass expected_revision when coordinating concurrent workers to reject stale claims.",
+			"Copy the returned metadata unchanged into the matching agent_start item.",
+		],
 		parameters: Type.Object({
 			id: TodoId,
 			owner: Type.Optional(Type.String({ minLength: 1 })),
@@ -145,13 +148,14 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 			const metadata = {
 				"pi.todo/list-id": listId,
 				"pi.todo/task-id": params.id,
-				"pi.todo/claim-token": claim.claim_token,
 			};
+			const batchItem = { agent: "worker", task: claim.task.subject, metadata };
 			return result(
-				`Claimed ${params.id} for ${claim.task.owner}. Pass this exact metadata to a delegated Agent:\n${JSON.stringify(metadata)}`,
+				`Claimed ${params.id} for ${claim.task.owner}. Agent batch item:\n${JSON.stringify(batchItem)}`,
 				{
 					...claim,
 					metadata,
+					agent_start_item: batchItem,
 				},
 			);
 		},
@@ -160,16 +164,12 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 	pi.registerTool({
 		name: "todo_release",
 		label: "Release Todo",
-		description: "Release a claimed task when owner and claim token still match",
+		description: "Return an in-progress task to pending",
 		promptSnippet: "Return unfinished claimed work to pending",
-		parameters: Type.Object({
-			id: TodoId,
-			owner: Type.String({ minLength: 1 }),
-			claim_token: Type.String({ minLength: 1 }),
-		}),
+		parameters: Type.Object({ id: TodoId }),
 		executionMode: "parallel",
 		async execute(_toolCallId, params) {
-			const list = await runtime.release(params.id, params.owner, params.claim_token);
+			const list = await runtime.release(params.id);
 			return result(
 				`Released ${params.id}; it is ready when its dependencies are complete.`,
 				requireTask(list, params.id),

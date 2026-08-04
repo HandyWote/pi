@@ -13,12 +13,12 @@ import { AGENT_PROTOCOL_CHANNEL, type AgentLifecycleEvent, type AgentRecord } fr
 const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 const TERMINAL_SUMMARY_LIMIT = 1200;
 
-function isStatusRequest(data: unknown): data is { version: 1; parentSessionId: string } {
+function isStatusRequest(data: unknown): data is { version: 2; parentSessionId: string } {
 	return (
 		typeof data === "object" &&
 		data !== null &&
 		"version" in data &&
-		data.version === 1 &&
+		data.version === 2 &&
 		"parentSessionId" in data &&
 		typeof data.parentSessionId === "string"
 	);
@@ -29,6 +29,7 @@ function terminalNotificationContent(record: AgentRecord): string {
 	return [
 		"Subagent lifecycle event recorded. It is historical and may have been superseded by later events.",
 		`Subagent ${record.agentId} (${record.definition.name}) ${record.status}.`,
+		`Run: ${record.runId}`,
 		`Task: ${record.task}`,
 		`Recorded result: ${summary}`,
 		`Usage: ${record.toolCount} tools, ${record.usage.input + record.usage.output} tokens`,

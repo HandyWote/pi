@@ -300,8 +300,9 @@ export class AgentManager {
 		const agentId = `agent-${randomUUID()}`;
 		const now = new Date().toISOString();
 		const record: AgentRecord = {
-			version: 1,
+			version: 2,
 			agentId,
+			runId: randomUUID(),
 			parentSessionId: this.options.parentSessionId,
 			definition,
 			task: input.task,
@@ -351,6 +352,7 @@ export class AgentManager {
 				throw new Error(`Agent ${agentId} cannot resume because its durable child session changed`);
 			return {
 				...entry,
+				runId: randomUUID(),
 				mode: mode ?? entry.mode,
 				status: "queued",
 				updatedAt: now,
@@ -504,6 +506,7 @@ export class AgentManager {
 				PI_AGENT_CONTEXT: JSON.stringify({
 					version: AGENT_PROTOCOL_VERSION,
 					agentId: record.agentId,
+					runId: record.runId,
 					parentSessionId: record.parentSessionId,
 					metadata: record.metadata,
 				}),
@@ -677,6 +680,7 @@ export class AgentManager {
 		const event: AgentLifecycleEvent = {
 			version: AGENT_PROTOCOL_VERSION,
 			eventId: record.lifecycleEventId,
+			runId: record.runId,
 			agentId: record.agentId,
 			parentSessionId: record.parentSessionId,
 			status: record.status,
@@ -696,6 +700,7 @@ export class AgentManager {
 		const notification = event ?? {
 			version: AGENT_PROTOCOL_VERSION,
 			eventId: record.lifecycleEventId,
+			runId: record.runId,
 			agentId: record.agentId,
 			parentSessionId: record.parentSessionId,
 			status: record.status,

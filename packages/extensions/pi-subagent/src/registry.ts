@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { AgentActivity, AgentDefinition, AgentRecord, AgentStatus, AgentUsage } from "./types.ts";
 
 interface RegistryFile {
-	version: 1;
+	version: 2;
 	parentSessionId: string;
 	records: AgentRecord[];
 }
@@ -45,7 +45,7 @@ function isDefinition(value: unknown): value is AgentDefinition {
 		isIdentifier(value.name) &&
 		typeof value.description === "string" &&
 		typeof value.systemPrompt === "string" &&
-		(value.source === "user" || value.source === "project") &&
+		(value.source === "built-in" || value.source === "user" || value.source === "project") &&
 		typeof value.filePath === "string" &&
 		path.isAbsolute(value.filePath) &&
 		(value.isolation === "none" || value.isolation === "worktree") &&
@@ -126,7 +126,12 @@ export class AgentRegistry {
 					`Cannot load subagent registry ${this.registryPath}: ${error instanceof Error ? error.message : error}`,
 				);
 			}
-			if (!isObject(parsed) || parsed.version !== 1 || parsed.parentSessionId !== this.parentSessionId) {
+			if (isObject(parsed) && parsed.version === 1) {
+				this.records = new Map();
+				await this.flush(this.records);
+				return;
+			}
+			if (!isObject(parsed) || parsed.version !== 2 || parsed.parentSessionId !== this.parentSessionId) {
 				throw new Error(`Invalid subagent registry: ${this.registryPath}`);
 			}
 			if (!Array.isArray(parsed.records)) throw new Error(`Invalid subagent records: ${this.registryPath}`);
@@ -203,8 +208,9 @@ export class AgentRegistry {
 	}
 
 	private validateRecord(value: unknown): AgentRecord {
-		if (!isObject(value) || value.version !== 1) throw new Error("Invalid agent record version");
+		if (!isObject(value) || value.version !== 2) throw new Error("Invalid agent record version");
 		if (!isIdentifier(value.agentId)) throw new Error("Invalid agent ID");
+		if (!isIdentifier(value.runId)) throw new Error(`Invalid run ID for agent ${value.agentId}`);
 		if (value.parentSessionId !== this.parentSessionId) throw new Error("Agent belongs to another parent session");
 		if (!isDefinition(value.definition)) throw new Error(`Invalid definition for agent ${value.agentId}`);
 		if (typeof value.task !== "string" || !value.task.trim())
@@ -282,7 +288,7 @@ export class AgentRegistry {
 
 	private async flush(records: Map<string, AgentRecord>): Promise<void> {
 		const data: RegistryFile = {
-			version: 1,
+			version: 2,
 			parentSessionId: this.parentSessionId,
 			records: [...records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
 		};

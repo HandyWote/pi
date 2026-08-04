@@ -304,7 +304,6 @@ export class FileTodoStore {
 			depends_on?: string[];
 			acceptance_criteria?: string[] | null;
 			status?: TodoStatus;
-			claim_token?: string;
 			expected_revision?: number;
 		},
 	): Promise<TodoListDocument> {
@@ -315,17 +314,11 @@ export class FileTodoStore {
 					`Todo "${taskId}" revision changed from ${patch.expected_revision} to ${task.revision}`,
 				);
 			}
-			if (task.status === "in_progress" && patch.claim_token !== task.claim_token) {
-				throw new TodoValidationError(`Todo "${taskId}" requires its current claim token for updates`);
-			}
 			if (patch.status === "in_progress" && task.status !== "in_progress") {
 				throw new TodoValidationError(`Todo "${taskId}" must enter in_progress through todo_claim`);
 			}
 			if (patch.status === "completed" && task.status !== "in_progress") {
 				throw new TodoValidationError(`Todo "${taskId}" must be claimed before completion`);
-			}
-			if (task.status === "in_progress" && patch.status === "pending") {
-				throw new TodoValidationError(`Todo "${taskId}" must return to pending through todo_release`);
 			}
 			if (patch.subject !== undefined) task.subject = patch.subject;
 			if (patch.description !== undefined) task.description = patch.description?.trim() || undefined;
@@ -338,7 +331,6 @@ export class FileTodoStore {
 				task.status = patch.status;
 				if (patch.status !== "in_progress") {
 					task.owner = undefined;
-					task.claim_token = undefined;
 				}
 			}
 			validateDefinitions(definitions(document.tasks));
@@ -350,7 +342,6 @@ export class FileTodoStore {
 
 	async claim(listId: string, taskId: string, owner: string, expectedRevision?: number): Promise<TodoClaim> {
 		if (!owner.trim()) throw new TodoValidationError("Claim owner must not be empty");
-		let claimToken = "";
 		const list = await this.mutate(listId, (document, now) => {
 			const task = requireTask(document, taskId);
 			if (expectedRevision !== undefined && task.revision !== expectedRevision) {
@@ -362,54 +353,46 @@ export class FileTodoStore {
 				throw new TodoValidationError(`Todo "${taskId}" is ${task.status}, not pending`);
 			const readyIds = new Set(getReadyTasks(document.tasks).map((candidate) => candidate.id));
 			if (!readyIds.has(taskId)) throw new TodoValidationError(`Todo "${taskId}" is blocked by dependencies`);
-			claimToken = randomUUID();
 			task.status = "in_progress";
 			task.owner = owner.trim();
-			task.claim_token = claimToken;
 			task.updated_at = now;
 			task.revision = document.revision + 1;
 			return true;
 		});
-		return { task: cloneTask(requireTask(list, taskId)), claim_token: claimToken };
+		return { task: cloneTask(requireTask(list, taskId)) };
 	}
 
-	async release(listId: string, taskId: string, owner: string, claimToken: string): Promise<TodoListDocument> {
+	async release(listId: string, taskId: string): Promise<TodoListDocument> {
 		return this.mutate(listId, (document, now) => {
 			const task = requireTask(document, taskId);
-			if (task.status !== "in_progress" || task.owner !== owner || task.claim_token !== claimToken) {
-				throw new TodoValidationError(`Todo "${taskId}" is not owned by "${owner}" with the supplied claim token`);
-			}
+			if (task.status !== "in_progress")
+				throw new TodoValidationError(`Todo "${taskId}" is ${task.status}, not in_progress`);
 			task.status = "pending";
 			task.owner = undefined;
-			task.claim_token = undefined;
 			task.updated_at = now;
 			task.revision = document.revision + 1;
 			return true;
 		});
 	}
 
-	async releaseClaim(listId: string, taskId: string, claimToken: string): Promise<TodoListDocument> {
+	async releaseIfOwned(listId: string, taskId: string, expectedOwner: string): Promise<TodoListDocument> {
 		return this.mutate(listId, (document, now) => {
 			const task = requireTask(document, taskId);
-			if (task.status !== "in_progress" || task.claim_token !== claimToken) {
-				throw new TodoValidationError(`Todo "${taskId}" claim token does not match an active claim`);
-			}
+			if (task.status !== "in_progress" || task.owner !== expectedOwner) return false;
 			task.status = "pending";
 			task.owner = undefined;
-			task.claim_token = undefined;
 			task.updated_at = now;
 			task.revision = document.revision + 1;
 			return true;
 		});
 	}
 
-	async transfer(listId: string, taskId: string, newOwner: string, claimToken: string): Promise<TodoListDocument> {
+	async transfer(listId: string, taskId: string, newOwner: string): Promise<TodoListDocument> {
 		if (!newOwner.trim()) throw new TodoValidationError("New claim owner must not be empty");
 		return this.mutate(listId, (document, now) => {
 			const task = requireTask(document, taskId);
-			if (task.status !== "in_progress" || task.claim_token !== claimToken) {
-				throw new TodoValidationError(`Todo "${taskId}" claim token does not match an active claim`);
-			}
+			if (task.status !== "in_progress")
+				throw new TodoValidationError(`Todo "${taskId}" is ${task.status}, not in_progress`);
 			if (task.owner === newOwner) return false;
 			task.owner = newOwner.trim();
 			task.updated_at = now;
@@ -427,7 +410,6 @@ export class FileTodoStore {
 			for (const task of orphans) {
 				task.status = "pending";
 				task.owner = undefined;
-				task.claim_token = undefined;
 				task.updated_at = now;
 				task.revision = document.revision + 1;
 			}
@@ -437,9 +419,7 @@ export class FileTodoStore {
 
 	async delete(listId: string, taskId: string): Promise<TodoListDocument> {
 		return this.mutate(listId, (document, now) => {
-			const task = requireTask(document, taskId);
-			if (task.status === "in_progress")
-				throw new TodoValidationError(`Todo "${taskId}" must be released before deletion`);
+			requireTask(document, taskId);
 			document.tasks = document.tasks.filter((candidate) => candidate.id !== taskId);
 			for (const candidate of document.tasks) {
 				if (!candidate.depends_on.includes(taskId)) continue;
@@ -473,7 +453,6 @@ export class FileTodoStore {
 					...cloneTask(task),
 					status: task.status === "in_progress" ? "pending" : task.status,
 					owner: undefined,
-					claim_token: undefined,
 					created_at: now,
 					updated_at: now,
 				})),
@@ -1013,14 +992,10 @@ function assertTask(value: unknown, listRevision: number, path: string): asserts
 		throw new TodoPersistenceError(`Malformed task in ${path}`);
 	}
 	const hasOwner = typeof task.owner === "string" && task.owner.length > 0;
-	const hasToken = typeof task.claim_token === "string" && task.claim_token.length > 0;
-	if ((task.owner !== undefined && !hasOwner) || (task.claim_token !== undefined && !hasToken)) {
+	if (task.owner !== undefined && !hasOwner) {
 		throw new TodoPersistenceError(`Malformed task ownership in ${path}`);
 	}
-	if (
-		(task.status === "in_progress" && (!hasOwner || !hasToken)) ||
-		(task.status !== "in_progress" && (hasOwner || hasToken))
-	) {
+	if ((task.status === "in_progress" && !hasOwner) || (task.status !== "in_progress" && hasOwner)) {
 		throw new TodoPersistenceError(`Inconsistent task ownership in ${path}`);
 	}
 }

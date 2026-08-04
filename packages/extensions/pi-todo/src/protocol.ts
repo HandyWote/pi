@@ -8,51 +8,56 @@ const PROTOCOL_STATE_LIMIT = 2000;
 
 export function registerAgentLifecycleProtocol(events: EventBus, runtime: TodoRuntime): () => void {
 	const seen = new Set<string>();
-	const terminalClaims = new Set<string>();
+	const terminalRuns = new Set<string>();
+	const currentRuns = new Map<string, { agentId: string; runId: string; timestamp: string }>();
 	const operations = new Map<string, Promise<void>>();
 	return events.on(AGENT_LIFECYCLE_CHANNEL, async (data) => {
 		const event = parseLifecycleEvent(data);
 		if (!event) return;
 		const metadata = parseTodoMetadata(event.metadata);
 		if (!metadata || metadata["pi.todo/list-id"] !== runtime.getListId()) return;
-		const claimKey = `${metadata["pi.todo/list-id"]}\0${metadata["pi.todo/task-id"]}\0${metadata["pi.todo/claim-token"]}`;
-		const previous = operations.get(claimKey) ?? Promise.resolve();
+		const taskKey = `${metadata["pi.todo/list-id"]}\0${metadata["pi.todo/task-id"]}`;
+		const runKey = `${taskKey}\0${event.agentId}\0${event.runId}`;
+		const previous = operations.get(taskKey) ?? Promise.resolve();
 		const operation = previous
 			.catch(() => {})
 			.then(async () => {
 				if (seen.has(event.eventId)) return;
 				try {
+					const current = currentRuns.get(taskKey);
 					if (isActiveStatus(event.status)) {
-						if (!terminalClaims.has(claimKey)) {
-							await runtime.confirmOwnerLive(
-								metadata["pi.todo/task-id"],
-								event.agentId,
-								metadata["pi.todo/claim-token"],
-							);
-						}
-					} else if (terminalClaims.has(claimKey)) {
-						// A terminal event for this exact claim already won.
-					} else if (event.status === "completed") {
-						const task = await runtime.getTask(metadata["pi.todo/task-id"]);
-						if (task?.status !== "completed") {
-							throw new TodoValidationError(`Todo "${metadata["pi.todo/task-id"]}" is not completed`);
-						}
-						await runtime.syncCurrent();
-						remember(terminalClaims, claimKey);
+						if (terminalRuns.has(runKey)) return;
+						if (
+							current &&
+							(current.agentId !== event.agentId || current.runId !== event.runId) &&
+							current.timestamp > event.timestamp
+						)
+							return;
+						await runtime.confirmOwnerLive(metadata["pi.todo/task-id"], event.agentId);
+						currentRuns.set(taskKey, { agentId: event.agentId, runId: event.runId, timestamp: event.timestamp });
 					} else {
-						await runtime.releaseClaim(metadata["pi.todo/task-id"], metadata["pi.todo/claim-token"]);
-						remember(terminalClaims, claimKey);
+						if (current && (current.agentId !== event.agentId || current.runId !== event.runId)) return;
+						if (event.status === "completed") {
+							const task = await runtime.getTask(metadata["pi.todo/task-id"]);
+							if (task?.status !== "completed") {
+								throw new TodoValidationError(`Todo "${metadata["pi.todo/task-id"]}" is not completed`);
+							}
+							await runtime.syncCurrent();
+						} else {
+							await runtime.releaseIfOwned(metadata["pi.todo/task-id"], event.agentId);
+						}
+						remember(terminalRuns, runKey);
 					}
 					remember(seen, event.eventId);
 				} catch (error) {
 					if (!(error instanceof TodoValidationError)) throw error;
 				}
 			});
-		operations.set(claimKey, operation);
+		operations.set(taskKey, operation);
 		try {
 			await operation;
 		} finally {
-			if (operations.get(claimKey) === operation) operations.delete(claimKey);
+			if (operations.get(taskKey) === operation) operations.delete(taskKey);
 		}
 	});
 }
@@ -70,8 +75,9 @@ function parseLifecycleEvent(value: unknown): AgentLifecycleEvent | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
 	if (
-		record.version !== 1 ||
+		record.version !== 2 ||
 		typeof record.eventId !== "string" ||
+		typeof record.runId !== "string" ||
 		typeof record.agentId !== "string" ||
 		typeof record.parentSessionId !== "string" ||
 		typeof record.timestamp !== "string" ||
@@ -87,13 +93,8 @@ function parseLifecycleEvent(value: unknown): AgentLifecycleEvent | undefined {
 function parseTodoMetadata(metadata: Record<string, unknown>): TodoAgentMetadata | undefined {
 	const listId = metadata["pi.todo/list-id"];
 	const taskId = metadata["pi.todo/task-id"];
-	const claimToken = metadata["pi.todo/claim-token"];
-	if (typeof listId !== "string" || typeof taskId !== "string" || typeof claimToken !== "string") return undefined;
-	return {
-		"pi.todo/list-id": listId,
-		"pi.todo/task-id": taskId,
-		"pi.todo/claim-token": claimToken,
-	};
+	if (typeof listId !== "string" || typeof taskId !== "string") return undefined;
+	return { "pi.todo/list-id": listId, "pi.todo/task-id": taskId };
 }
 
 function isLifecycleStatus(value: unknown): value is AgentLifecycleEvent["status"] {

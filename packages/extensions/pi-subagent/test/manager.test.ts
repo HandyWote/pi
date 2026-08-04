@@ -95,6 +95,7 @@ describe("AgentManager", () => {
 		expect(await manager.registry.readTranscript(completed.agentId)).toContain("external/correlation");
 		expect(events.map((event) => event.status)).toEqual(["queued", "running", "completed"]);
 		expect(new Set(events.map((event) => event.eventId)).size).toBe(3);
+		expect(new Set(events.map((event) => event.runId))).toEqual(new Set([started.record.runId]));
 		expect(events.every((event) => event.metadata["external/correlation"] === "value")).toBe(true);
 	});
 
@@ -242,6 +243,7 @@ describe("AgentManager", () => {
 		await manager.initialize();
 		const started = await manager.start(definition, { task: "fail", mode: "background" });
 		const failed = await started.completion;
+		const firstRunId = failed.runId;
 		expect(failed.status).toBe("failed");
 		expect(events.filter((event) => event.status === "running")).toHaveLength(1);
 
@@ -249,6 +251,7 @@ describe("AgentManager", () => {
 		const completed = await resumed.completion;
 
 		expect(completed.agentId).toBe(failed.agentId);
+		expect(completed.runId).not.toBe(firstRunId);
 		expect(completed.childSessionId).toBe(failed.childSessionId);
 		expect(completed.status).toBe("completed");
 		expect(completed.usage.turns).toBe(3);
@@ -256,6 +259,7 @@ describe("AgentManager", () => {
 		expect(await manager.registry.readTranscript(completed.agentId)).toContain("prior-context:true");
 		expect(fs.readFileSync(completed.childSessionPath!, "utf8")).toContain("Task: resumed");
 		expect(events.filter((event) => event.status === "running")).toHaveLength(2);
+		expect(new Set(events.map((event) => event.runId))).toEqual(new Set([firstRunId, completed.runId]));
 	});
 
 	it("refuses resume when the durable child session is missing", async () => {
@@ -308,8 +312,9 @@ describe("AgentManager", () => {
 		const stateRoot = path.join(root, "state");
 		const now = new Date().toISOString();
 		const orphan: AgentRecord = {
-			version: 1,
+			version: 2,
 			agentId: "agent-orphan",
+			runId: "run-orphan",
 			parentSessionId: "parent-1",
 			definition,
 			task: "old task",
@@ -395,8 +400,9 @@ describe("AgentManager", () => {
 		const token = "windows:638895000000000000";
 		const now = new Date().toISOString();
 		const record: AgentRecord = {
-			version: 1,
+			version: 2,
 			agentId: "agent-windows-recovery",
+			runId: "run-windows-recovery",
 			parentSessionId: "parent-1",
 			definition,
 			task: "recover",
@@ -454,8 +460,9 @@ describe("AgentManager", () => {
 		await manager.initialize();
 		const now = new Date().toISOString();
 		const queued: AgentRecord = {
-			version: 1,
+			version: 2,
 			agentId: "agent-probe",
+			runId: "run-probe",
 			parentSessionId: "parent-1",
 			definition,
 			task: "probe task",
@@ -482,6 +489,7 @@ describe("AgentManager", () => {
 
 		expect(events.at(-1)).toMatchObject({
 			agentId: queued.agentId,
+			runId: queued.runId,
 			status: "queued",
 			eventId: queued.lifecycleEventId,
 			metadata: queued.metadata,

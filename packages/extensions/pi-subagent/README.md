@@ -14,7 +14,7 @@ The extension registers `agent_start`, `agent_list`, `agent_output`, `agent_stop
 
 ## Agent Definitions
 
-User agents live in `~/.pi/agent/agents/*.md`. Project agents live in the nearest `.pi/agents/*.md` directory.
+The built-in `worker` and `explore` agents are available without configuration. `worker` handles implementation and investigation with the parent's available tools except subagent orchestration tools. `explore` is limited to available read-only tools and is not used for claimed Todo work. User agents live in `~/.pi/agent/agents/*.md`. Project agents live in the nearest `.pi/agents/*.md` directory.
 
 ```markdown
 ---
@@ -30,11 +30,11 @@ Review the delegated change and report concrete findings.
 
 `name` and `description` are required. `tools`, `model`, `isolation`, `displayName`, and `color` are optional. Isolation is `none` by default or `worktree`.
 
-Project definitions require a trusted project and explicit interactive confirmation on every start. Discovery reads only frontmatter; the prompt body is read after confirmation and its metadata is revalidated before launch.
+Definitions are resolved with `built-in < user < project` precedence. Project definitions require a trusted project and explicit interactive confirmation on every start. Discovery reads only frontmatter; the prompt body is read after confirmation and its metadata is revalidated before launch. Built-in agents never require project approval.
 
 ## Operation
 
-Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit.
+Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit. Tool guidance directs the model to use one background batch when two or more independent tasks have clear ownership boundaries.
 
 `agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks.
 
@@ -48,8 +48,9 @@ Lifecycle events are emitted on `pi:agent:lifecycle`:
 
 ```ts
 interface AgentLifecycleEvent {
-	version: 1;
+	version: 2;
 	eventId: string;
+	runId: string;
 	agentId: string;
 	parentSessionId: string;
 	status: "queued" | "running" | "completed" | "failed" | "stopped" | "interrupted";
@@ -58,4 +59,6 @@ interface AgentLifecycleEvent {
 }
 ```
 
-Consumers may emit `{ version: 1, parentSessionId }` on `pi:agent:status-request` to request replay of active status. Replays retain the persisted event ID. Metadata is transported unchanged and has no package-defined meaning.
+The stable agent ID identifies the durable child session. A new run ID is generated for every start or resume and shared by that invocation's queued, running, and terminal events. Consumers may emit `{ version: 2, parentSessionId }` on `pi:agent:status-request` to request replay of active status. Replays retain the persisted event and run IDs. Metadata is transported unchanged and has no package-defined meaning.
+
+Registry schema version 1 is not migrated. When encountered, its records are discarded and an empty version 2 registry is initialized; those old agents cannot be listed or resumed.

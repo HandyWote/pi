@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed claim tokens from Todo tasks, tools, metadata, and lifecycle integration, and upgraded the optional Agent protocol to version 2.
+
+### Changed
+
+- Allowed in-progress tasks to be edited, released, returned to pending, or deleted without credentials.
+- Added concrete background batch delegation guidance for multiple independent ready tasks.
+
 ## [0.2.1] - 2026-07-31
 
 ### Fixed

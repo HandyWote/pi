@@ -123,7 +123,8 @@ describe("pi-todo standalone end-to-end", () => {
 				const text = getMessageText(claimResult);
 				expect(text).toContain('"pi.todo/list-id"');
 				expect(text).toContain('"pi.todo/task-id"');
-				expect(text).toContain('"pi.todo/claim-token"');
+				expect(text).not.toContain("claim-token");
+				expect(text).toContain('"agent":"worker"');
 			}
 			expect(getToolResults(harness.session.messages, "todo_update")).toHaveLength(2);
 			expect(getToolResults(harness.session.messages, "todo_create")).toHaveLength(1);

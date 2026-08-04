@@ -22,7 +22,6 @@ const originalCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
 type TodoExtensionAPI = Parameters<typeof piTodo>[0];
 
 interface ClaimDetails {
-	claim_token: string;
 	task: TodoTask;
 	metadata: Record<string, string>;
 }
@@ -82,7 +81,6 @@ async function waitForReleasedTask(harness: Harness, id: string): Promise<void> 
 			const task = await getTask(harness, id);
 			expect(task.status).toBe("pending");
 			expect(task.owner).toBeUndefined();
-			expect(task.claim_token).toBeUndefined();
 		},
 		{ timeout: 5000, interval: 10 },
 	);
@@ -140,11 +138,12 @@ async function createCombinedHarness(taskIds: readonly string[]) {
 async function createAgentTodoHarness(
 	todoRoot: string,
 	agentId: string,
+	runId: string,
 	parentSessionId: string,
 	metadata: Record<string, string>,
 ): Promise<Harness> {
 	const previousAgentContext = process.env.PI_AGENT_CONTEXT;
-	process.env.PI_AGENT_CONTEXT = JSON.stringify({ version: 1, agentId, parentSessionId, metadata });
+	process.env.PI_AGENT_CONTEXT = JSON.stringify({ version: 2, agentId, runId, parentSessionId, metadata });
 	let harness: Harness;
 	try {
 		harness = await createHarness({
@@ -201,17 +200,14 @@ describe("pi-todo and pi-subagent integration", () => {
 		});
 		try {
 			const completedClaim = await claim(harness, "A");
-			expect(Object.keys(completedClaim.metadata).sort()).toEqual([
-				"pi.todo/claim-token",
-				"pi.todo/list-id",
-				"pi.todo/task-id",
-			]);
+			expect(Object.keys(completedClaim.metadata).sort()).toEqual(["pi.todo/list-id", "pi.todo/task-id"]);
 			const completedAgent = await startAgent(harness, "delay:150 explicit-completion", completedClaim.metadata);
 			expect(completedAgent.metadata).toEqual(completedClaim.metadata);
 			await waitForTask(harness, "A", { status: "in_progress", owner: completedAgent.agentId });
 			const childTodoHarness = await createAgentTodoHarness(
 				todoRoot,
 				completedAgent.agentId,
+				completedAgent.runId,
 				completedAgent.parentSessionId,
 				completedAgent.metadata,
 			);
@@ -238,7 +234,7 @@ describe("pi-todo and pi-subagent integration", () => {
 		}
 	});
 
-	it("releases failed, stopped, and interrupted claims by token and ignores stale lifecycle events", async () => {
+	it("releases failed, stopped, and interrupted claims and ignores stale lifecycle runs", async () => {
 		const { harness, events, managers } = await createCombinedHarness(["F", "S", "I"]);
 		const terminalEvents: AgentLifecycleEvent[] = [];
 		const dispose = events.on(AGENT_PROTOCOL_CHANNEL, (value) => {
@@ -253,22 +249,26 @@ describe("pi-todo and pi-subagent integration", () => {
 			await waitForReleasedTask(harness, "F");
 
 			const replacementClaim = await claim(harness, "F");
-			expect(replacementClaim.claim_token).not.toBe(failedClaim.claim_token);
+			const resumeResult = await requireTool(harness, "agent_resume").execute("resume-F", {
+				agentId: failedAgent.agentId,
+				prompt: "ignore-term delay:10000",
+				mode: "background",
+			});
+			const replacementAgent = (resumeResult.details as AgentToolDetails).records[0];
+			if (!replacementAgent) throw new Error("Agent did not resume");
+			expect(replacementAgent.agentId).toBe(failedAgent.agentId);
+			expect(replacementAgent.runId).not.toBe(failedAgent.runId);
+			expect(replacementAgent.metadata).toEqual(replacementClaim.metadata);
+			await waitForAgent(managers[0]!, replacementAgent.agentId, "running");
+			await waitForTask(harness, "F", { status: "in_progress", owner: replacementAgent.agentId });
 			const failedEvent = terminalEvents.find((event) => event.agentId === failedAgent.agentId);
 			if (!failedEvent) throw new Error("Missing failed lifecycle event");
 			events.emit(AGENT_PROTOCOL_CHANNEL, lifecycleEvent(failedEvent, "running", "stale-running"));
-			events.emit(AGENT_PROTOCOL_CHANNEL, lifecycleEvent(failedEvent, "failed", failedEvent.eventId));
+			events.emit(AGENT_PROTOCOL_CHANNEL, lifecycleEvent(failedEvent, "failed", "stale-failed"));
 			await new Promise((resolve) => setTimeout(resolve, 20));
-			await waitForTask(harness, "F", {
-				status: "in_progress",
-				owner: replacementClaim.task.owner,
-				claim_token: replacementClaim.claim_token,
-			});
-			await requireTool(harness, "todo_release").execute("release-F", {
-				id: "F",
-				owner: replacementClaim.task.owner,
-				claim_token: replacementClaim.claim_token,
-			});
+			await waitForTask(harness, "F", { status: "in_progress", owner: replacementAgent.agentId });
+			await requireTool(harness, "agent_stop").execute("stop-F", { agentId: replacementAgent.agentId });
+			await waitForReleasedTask(harness, "F");
 
 			const stoppedClaim = await claim(harness, "S");
 			const stoppedAgent = await startAgent(harness, "ignore-term delay:10000", stoppedClaim.metadata);
@@ -322,7 +322,7 @@ describe("pi-todo and pi-subagent integration", () => {
 		if (!running) throw new Error("Missing running agent");
 		const beforeReplay = observed.filter((event) => event.eventId === running.lifecycleEventId).length;
 		events.emit(AGENT_STATUS_REQUEST_CHANNEL, {
-			version: 1,
+			version: 2,
 			parentSessionId: running.parentSessionId,
 			timestamp: new Date().toISOString(),
 		});
@@ -335,6 +335,7 @@ describe("pi-todo and pi-subagent integration", () => {
 		);
 		expect(observed.at(-1)).toMatchObject({
 			agentId,
+			runId: running.runId,
 			status: "running",
 			metadata: activeClaim.metadata,
 		});

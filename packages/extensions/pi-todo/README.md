@@ -56,7 +56,7 @@ A pending task is ready when every dependency is completed. Independent tasks ha
 - `todo_release`: return unfinished owned work to pending.
 - `todo_delete`: delete a task and clean dependent edges.
 
-Claims use an owner, opaque token, task revision, and a cross-process file lock. Entering `in_progress` is only possible through `todo_claim`. Updating or releasing claimed work requires the current claim token.
+Claims use an owner, task revision, and a cross-process file lock. The owner is coordination and display data, not an authorization credential. Entering `in_progress` is only possible through `todo_claim`; an in-progress task can then be edited, completed, returned to pending, released, or deleted without a token. `todo_claim` returns namespaced metadata and a ready-to-use `worker` batch item for delegation.
 
 ## Persistence
 
@@ -66,16 +66,17 @@ The active list and revision are recorded in session custom entries. Reload and 
 
 ## Optional Agent Protocol
 
-There is no package dependency or source import between Todo and any Agent extension. Optional integration uses EventBus channel `pi:agent:lifecycle` with protocol version `1`. Todo reads only these namespaced entries from opaque lifecycle metadata:
+There is no package dependency or source import between Todo and any Agent extension. Optional integration uses EventBus channel `pi:agent:lifecycle` with protocol version `2`. Todo reads only these namespaced entries from opaque lifecycle metadata:
 
 ```text
 pi.todo/list-id
 pi.todo/task-id
-pi.todo/claim-token
 ```
 
 An Agent child may receive the same metadata through the generic `PI_AGENT_CONTEXT` JSON value. Todo parses its namespace itself.
 
-`queued`, `started`, or `running` events transfer a matching claim to the stable agent ID. `failed`, `stopped`, or `interrupted` events release only the matching claim token. Events for the same claim are serialized, and terminal events take priority over late active events. A `completed` event synchronizes the revision after the worker explicitly updates the task; Agent success never completes a Todo by itself.
+Each lifecycle event includes a stable agent ID and a run ID that changes on every start or resume. `queued`, `started`, or `running` events assign the task to that agent. `failed`, `stopped`, or `interrupted` events release it only while that agent still owns it. Events for a task are serialized, and terminal or stale events from an older run cannot affect the current run. A `completed` event synchronizes the revision after the worker explicitly updates the task; Agent success never completes a Todo by itself.
 
-Before the first agent turn or `/todo` command after reload or resume, Todo emits protocol version `1` on `pi:agent:status-request`. This happens after every extension has handled `session_start`, so plugin loading order does not affect recovery. A compatible Agent plugin may answer by re-emitting `pi:agent:lifecycle` with `running` and the original metadata. Matching claim-token evidence preserves that owner. Current-session ownership is preserved directly, while unconfirmed external owners are atomically released to `pending`. This recovers from missing lifecycle events without coupling either plugin to the other.
+Before the first agent turn or `/todo` command after reload or resume, Todo emits protocol version `2` on `pi:agent:status-request`. This happens after every extension has handled `session_start`, so plugin loading order does not affect recovery. A compatible Agent plugin may answer by re-emitting `pi:agent:lifecycle` with `running`, its current run ID, and the original metadata. Current-session ownership is preserved directly, while unconfirmed external owners are atomically released to `pending`. Version 1 lifecycle events are ignored.
+
+When two or more ready tasks are independent and have separate file ownership, the model is instructed to claim them and use one background `worker` batch. Small, coupled, and same-file tasks remain in the main session. The read-only `explore` agent is reserved for unbound investigation because it cannot update Todo state.

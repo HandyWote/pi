@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@handy_wote/pi-agent-core";
 import type { Transport } from "@handy_wote/pi-ai";
-import type { ScrollViewScrollbar, TuiMode } from "@handy_wote/pi-tui";
+import type { TuiMode as RendererTuiMode, ScrollViewScrollbar } from "@handy_wote/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -34,7 +34,7 @@ export interface RetrySettings {
 	provider?: ProviderRetrySettings;
 }
 
-export type UiMode = TuiMode;
+export type TuiMode = RendererTuiMode;
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -132,8 +132,8 @@ export interface Settings {
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	/** External compat registry sources (file only for now; git/npm planned). Merged on top of the builtin. */
 	compatRegistries?: CompatRegistrySource[];
-	uiMode?: UiMode; // default: "regular"
-	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular UI mode
+	tuiMode?: TuiMode; // default: "regular"
+	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -1133,13 +1133,13 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getUiMode(): UiMode {
-		return this.settings.uiMode === "fullscreen" ? "fullscreen" : "regular";
+	getTuiMode(): TuiMode {
+		return this.settings.tuiMode === "fullscreen" ? "fullscreen" : "regular";
 	}
 
-	setUiMode(mode: UiMode): void {
-		this.globalSettings.uiMode = mode;
-		this.markModified("uiMode");
+	setTuiMode(mode: TuiMode): void {
+		this.globalSettings.tuiMode = mode;
+		this.markModified("tuiMode");
 		this.save();
 	}
 

@@ -35,6 +35,7 @@ export interface RetrySettings {
 }
 
 export type TuiMode = RendererTuiMode;
+export type FullscreenExitOutput = "transcript" | "resume-hint";
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -133,6 +134,7 @@ export interface Settings {
 	/** External compat registry sources (file only for now; git/npm planned). Merged on top of the builtin. */
 	compatRegistries?: CompatRegistrySource[];
 	tuiMode?: TuiMode; // default: "regular"
+	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 }
 
@@ -1140,6 +1142,16 @@ export class SettingsManager {
 	setTuiMode(mode: TuiMode): void {
 		this.globalSettings.tuiMode = mode;
 		this.markModified("tuiMode");
+		this.save();
+	}
+
+	getFullscreenExitOutput(): FullscreenExitOutput {
+		return this.settings.fullscreenExitOutput === "resume-hint" ? "resume-hint" : "transcript";
+	}
+
+	setFullscreenExitOutput(output: FullscreenExitOutput): void {
+		this.globalSettings.fullscreenExitOutput = output;
+		this.markModified("fullscreenExitOutput");
 		this.save();
 	}
 

@@ -5,11 +5,8 @@ import { registerAgentLifecycleProtocol } from "./protocol.ts";
 import { TodoRuntime, type TodoRuntimeOptions } from "./runtime.ts";
 import { registerTodoTools } from "./tools.ts";
 
-const PERIODIC_REMINDER_TURNS = 10;
-
 export default function piTodo(pi: ExtensionAPI, options: TodoRuntimeOptions = {}): void {
 	const runtime = new TodoRuntime(pi, options);
-	let turnsSinceReminder = 0;
 
 	registerTodoCommand(pi, runtime);
 	registerTodoTools(pi, runtime);
@@ -41,10 +38,7 @@ export default function piTodo(pi: ExtensionAPI, options: TodoRuntimeOptions = {
 	});
 
 	pi.on("turn_end", async () => {
-		turnsSinceReminder++;
-		if (turnsSinceReminder < PERIODIC_REMINDER_TURNS) return;
-		turnsSinceReminder = 0;
-		await runtime.injectDigest("followUp");
+		await runtime.onTurnEnd();
 	});
 
 	pi.on("session_shutdown", () => {

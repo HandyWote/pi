@@ -58,30 +58,30 @@ The initial message preserves the existing `sendMessage` shape and provides fall
 
 ## Queue Semantics
 
-Each keyed queue maintains a monotonically increasing generation per key.
+One broker owns keyed entries across `steer`, `followUp`, and `nextTurn` lanes.
 
-1. Enqueue increments the generation, removes older pending entries with the key, and appends the new entry.
-2. Cancel increments the generation and removes pending entries with the key.
-3. Drain removes the entry and awaits its resolver.
-4. After resolution, drain compares the entry generation with the current key generation.
-5. A generation mismatch drops the resolved result because replacement or cancellation won the race.
-6. A resolver result of `undefined` drops the message.
-7. Drain continues past dropped entries until it finds deliverable messages or the queue is empty.
+1. Enqueue invalidates an older entry with the same key in any lane and appends the new entry to its requested lane.
+2. Invalidation aborts the old resolver signal and resolves a separate superseded promise.
+3. Drain races the resolver against supersession and run cancellation, so a resolver that ignores its abort signal cannot block a replacement.
+4. Before commit, drain verifies that the resolved entry is still the broker's current entry for its key.
+5. A resolver result of `undefined` drops the message.
+6. Drain restarts from the highest-priority eligible lane after a superseded entry.
+7. Drain continues past dropped entries until it finds deliverable messages or the selected lanes are synchronously empty.
 8. Only deliverable messages count toward `one-at-a-time` or `all` mode limits.
 
-This check closes the race where cancellation happens after an entry leaves the pending array but before its resolver completes.
+The synchronous empty check is the delivery boundary. A message enqueued after that check belongs to the next eligible drain.
 
 Resolver failures are isolated like extension event failures: report the extension error, drop the message, and do not fail the active model run.
 
 ## Agent Integration
 
-The agent-core steering and follow-up queues become asynchronous keyed queues. Existing calls without queue options retain FIFO behavior. `Agent.continue()` and loop queue drains await resolution before starting another model turn.
+Agent core owns the shared broker. Existing calls without queue options retain FIFO behavior. `Agent.continue()` and loop queue drains await resolution before starting another model turn. A follow-up drain also rechecks steering after a superseded resolver so cross-lane replacement cannot strand the newer message.
 
 The coding-agent session keeps UI queue accounting for ordinary user text unchanged. Extension custom messages use their keyed entries directly and are persisted only after a resolver returns a deliverable message and normal message lifecycle events begin.
 
-`nextTurn` uses the same keyed generation registry. Its entries resolve before they are added to the next user prompt. Dropped entries never enter session state or model context.
+`nextTurn` uses the same broker. Its entries resolve to a stable empty boundary before they are added to the next user prompt. Dropped entries never enter session state or model context.
 
-Session replacement, extension reload, and reset invalidate all generations and clear pending resolvers. Resolver closures from stale extension instances cannot deliver afterward.
+Session replacement, extension reload, and reset invalidate all keyed entries and pending resolvers. Resolver closures from stale extension instances cannot deliver afterward.
 
 ## Todo Integration
 
@@ -112,6 +112,8 @@ The digest contains the revision read during resolution, so a delivered digest i
 - Targeted cancellation leaves unkeyed and differently keyed messages intact.
 - A resolver returning `undefined` does not consume the one-at-a-time delivery allowance.
 - Replacement and cancellation during an unresolved resolver suppress the old result.
+- Cross-lane replacement rechecks higher-priority steering before the drain exits.
+- Replacement does not wait for an old resolver that ignores its abort signal.
 - Resolver failure is reported and does not terminate the current run.
 
 ### Coding Agent
@@ -119,6 +121,7 @@ The digest contains the revision read during resolution, so a delivered digest i
 - Keyed extension follow-ups persist only their resolved message.
 - A dropped follow-up does not cause a provider call.
 - `steer`, `followUp`, and `nextTurn` use equivalent replacement and cancellation rules.
+- A `nextTurn` replacement arriving during resolution is included in the prompt currently being built.
 - User queue counts and dequeue behavior remain unchanged.
 - Extension reload and session replacement invalidate pending live messages.
 

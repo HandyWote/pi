@@ -10,6 +10,7 @@ export const TODO_DIGEST_MESSAGE = "pi-todo-digest";
 export const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 
 const OWNER_EVIDENCE_WAIT_MS = 50;
+const PERIODIC_REMINDER_TURNS = 10;
 const DIGEST_TASKS_PER_SECTION = 5;
 const DIGEST_DIRECTION_LIMIT = 500;
 const DIGEST_CHAR_LIMIT = 4000;
@@ -32,6 +33,8 @@ export class TodoRuntime {
 	private readonly liveOwners = new Set<string>();
 	private readonly pendingOwnerEvidence = new Set<Promise<void>>();
 	private ownerReconciliationPending = false;
+	private digestActive = false;
+	private turnsSinceReminder = 0;
 
 	constructor(pi: ExtensionAPI, options: TodoRuntimeOptions = {}) {
 		this.pi = pi;
@@ -68,6 +71,8 @@ export class TodoRuntime {
 		if (event.reason === "new") {
 			this.cancelDigest();
 			this.binding = undefined;
+			this.digestActive = false;
+			this.turnsSinceReminder = 0;
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -76,6 +81,8 @@ export class TodoRuntime {
 		if (!restored?.list_id) {
 			this.cancelDigest();
 			this.binding = undefined;
+			this.digestActive = false;
+			this.turnsSinceReminder = 0;
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -98,6 +105,8 @@ export class TodoRuntime {
 		if (!restored?.list_id) {
 			this.cancelDigest();
 			this.binding = undefined;
+			this.digestActive = false;
+			this.turnsSinceReminder = 0;
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -198,6 +207,8 @@ export class TodoRuntime {
 		const listId = this.binding?.list_id;
 		if (listId) this.cancelDigest(listId);
 		this.binding = undefined;
+		this.digestActive = false;
+		this.turnsSinceReminder = 0;
 		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
 			version: 1,
 			list_id: null,
@@ -245,6 +256,8 @@ export class TodoRuntime {
 		if (!listId) return;
 		const content = await this.digest();
 		if (!content) {
+			this.digestActive = false;
+			this.turnsSinceReminder = 0;
 			this.cancelDigest(listId);
 			return;
 		}
@@ -264,6 +277,17 @@ export class TodoRuntime {
 				},
 			},
 		);
+	}
+
+	async onTurnEnd(): Promise<void> {
+		if (!this.digestActive) {
+			this.turnsSinceReminder = 0;
+			return;
+		}
+		this.turnsSinceReminder++;
+		if (this.turnsSinceReminder < PERIODIC_REMINDER_TURNS) return;
+		this.turnsSinceReminder = 0;
+		await this.injectDigest("followUp");
 	}
 
 	cancelDigest(listId = this.binding?.list_id): void {
@@ -286,14 +310,21 @@ export class TodoRuntime {
 
 	private setBinding(document: TodoListDocument, persist: boolean): void {
 		const previousListId = this.binding?.list_id;
-		if (previousListId && previousListId !== document.id) this.cancelDigest(previousListId);
+		if (previousListId && previousListId !== document.id) {
+			this.cancelDigest(previousListId);
+			this.turnsSinceReminder = 0;
+		}
 		this.binding = {
 			version: 1,
 			list_id: document.id,
 			revision: document.revision,
 			timestamp: new Date().toISOString(),
 		};
-		if (document.tasks.every((task) => task.status === "completed")) this.cancelDigest(document.id);
+		this.digestActive = document.tasks.some((task) => task.status !== "completed");
+		if (!this.digestActive) {
+			this.turnsSinceReminder = 0;
+			this.cancelDigest(document.id);
+		}
 		if (persist) this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, this.binding);
 	}
 

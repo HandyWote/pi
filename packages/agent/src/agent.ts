@@ -8,6 +8,12 @@ import type {
 	Transport,
 } from "@handy_wote/pi-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import {
+	PendingMessageBroker,
+	type PendingMessageDrainResult,
+	type PendingMessageLane,
+	type QueuedAgentMessageOptions,
+} from "./pending-message-broker.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AfterToolCallContext,
@@ -28,6 +34,7 @@ import type {
 	ToolExecutionMode,
 } from "./types.ts";
 
+export type { QueuedAgentMessageOptions } from "./pending-message-broker.ts";
 export type { QueueMode } from "./types.ts";
 
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
@@ -122,89 +129,6 @@ export interface AgentOptions {
 	toolExecution?: ToolExecutionMode;
 }
 
-export interface QueuedAgentMessageOptions {
-	key: string;
-	resolve: (signal: AbortSignal) => AgentMessage | undefined | Promise<AgentMessage | undefined>;
-	onError?: (error: unknown) => void;
-}
-
-interface PendingMessage {
-	message: AgentMessage;
-	key?: string;
-	generation?: number;
-	resolve?: QueuedAgentMessageOptions["resolve"];
-	onError?: QueuedAgentMessageOptions["onError"];
-}
-
-class PendingMessageQueue {
-	private messages: PendingMessage[] = [];
-	private readonly generations = new Map<string, number>();
-	public mode: QueueMode;
-
-	constructor(mode: QueueMode) {
-		this.mode = mode;
-	}
-
-	enqueue(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
-		if (!options) {
-			this.messages.push({ message });
-			return;
-		}
-		const generation = (this.generations.get(options.key) ?? 0) + 1;
-		this.generations.set(options.key, generation);
-		this.messages = this.messages.filter((entry) => entry.key !== options.key);
-		this.messages.push({
-			message,
-			key: options.key,
-			generation,
-			resolve: options.resolve,
-			onError: options.onError,
-		});
-	}
-
-	hasItems(): boolean {
-		return this.messages.length > 0;
-	}
-
-	async drain(signal: AbortSignal): Promise<AgentMessage[]> {
-		const resolved: AgentMessage[] = [];
-		const limit = this.mode === "all" ? Number.POSITIVE_INFINITY : 1;
-		while (resolved.length < limit) {
-			if (signal.aborted) break;
-			const entry = this.messages.shift();
-			if (!entry) break;
-			let message = entry.message;
-			if (entry.resolve) {
-				try {
-					const next = await entry.resolve(signal);
-					if (!next || signal.aborted) continue;
-					message = next;
-				} catch (error) {
-					try {
-						entry.onError?.(error);
-					} catch {}
-					continue;
-				}
-			}
-			if (entry.key && this.generations.get(entry.key) !== entry.generation) continue;
-			resolved.push(message);
-		}
-		return resolved;
-	}
-
-	cancel(key: string): void {
-		this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
-		this.messages = this.messages.filter((entry) => entry.key !== key);
-	}
-
-	clear(): void {
-		for (const key of this.generations.keys()) {
-			this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
-		}
-		this.messages = [];
-	}
-}
-
 type ActiveRun = {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -220,9 +144,8 @@ type ActiveRun = {
 export class Agent {
 	private _state: MutableAgentState;
 	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
-	private readonly steeringQueue: PendingMessageQueue;
-	private readonly followUpQueue: PendingMessageQueue;
-	private queueResolutionAbortController?: AbortController;
+	private readonly pendingMessages = new PendingMessageBroker();
+	private readonly queueResolutionAbortControllers = new Set<AbortController>();
 
 	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
@@ -273,8 +196,8 @@ export class Agent {
 		this.prepareNextTurn = runtimeOptions.prepareNextTurn;
 		this.prepareNextTurnWithContext = runtimeOptions.prepareNextTurnWithContext;
 		this.shouldStopAfterTurn = runtimeOptions.shouldStopAfterTurn;
-		this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time");
-		this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time");
+		this.pendingMessages.setMode("steer", runtimeOptions.steeringMode ?? "one-at-a-time");
+		this.pendingMessages.setMode("followUp", runtimeOptions.followUpMode ?? "one-at-a-time");
 		this.sessionId = runtimeOptions.sessionId;
 		this.thinkingBudgets = runtimeOptions.thinkingBudgets;
 		this.transport = runtimeOptions.transport ?? "auto";
@@ -308,59 +231,65 @@ export class Agent {
 
 	/** Controls how queued steering messages are drained. */
 	set steeringMode(mode: QueueMode) {
-		this.steeringQueue.mode = mode;
+		this.pendingMessages.setMode("steer", mode);
 	}
 
 	get steeringMode(): QueueMode {
-		return this.steeringQueue.mode;
+		return this.pendingMessages.getMode("steer");
 	}
 
 	/** Controls how queued follow-up messages are drained. */
 	set followUpMode(mode: QueueMode) {
-		this.followUpQueue.mode = mode;
+		this.pendingMessages.setMode("followUp", mode);
 	}
 
 	get followUpMode(): QueueMode {
-		return this.followUpQueue.mode;
+		return this.pendingMessages.getMode("followUp");
 	}
 
 	/** Queue a message to be injected after the current assistant turn finishes. */
 	steer(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
-		if (options) this.followUpQueue.cancel(options.key);
-		this.steeringQueue.enqueue(message, options);
+		this.pendingMessages.enqueue("steer", message, options);
 	}
 
 	/** Queue a message to run only after the agent would otherwise stop. */
 	followUp(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
-		if (options) this.steeringQueue.cancel(options.key);
-		this.followUpQueue.enqueue(message, options);
+		this.pendingMessages.enqueue("followUp", message, options);
 	}
 
-	/** Cancel a keyed message in either queue. */
+	/** Queue a message to be included with the next explicit prompt. */
+	nextTurn(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
+		this.pendingMessages.enqueue("nextTurn", message, options);
+	}
+
+	/** Cancel a keyed message in any delivery lane. */
 	cancelQueuedMessage(key: string): void {
-		this.steeringQueue.cancel(key);
-		this.followUpQueue.cancel(key);
+		this.pendingMessages.cancel(key);
+	}
+
+	/** Cancel all keyed messages without affecting ordinary queued user input. */
+	cancelAllKeyedMessages(): void {
+		this.pendingMessages.cancelAllKeyed();
 	}
 
 	/** Remove all queued steering messages. */
 	clearSteeringQueue(): void {
-		this.steeringQueue.clear();
+		this.pendingMessages.clear(["steer"]);
 	}
 
 	/** Remove all queued follow-up messages. */
 	clearFollowUpQueue(): void {
-		this.followUpQueue.clear();
+		this.pendingMessages.clear(["followUp"]);
 	}
 
-	/** Remove all queued steering and follow-up messages. */
+	/** Remove all queued messages, including deferred next-turn messages. */
 	clearAllQueues(): void {
-		this.clearSteeringQueue();
-		this.clearFollowUpQueue();
+		this.pendingMessages.clear();
 	}
 
 	/** Returns true when either queue still contains pending messages. */
 	hasQueuedMessages(): boolean {
-		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
+		return this.pendingMessages.hasItems(["steer", "followUp"]);
 	}
 
 	/** Active abort signal for the current run, if any. */
@@ -371,7 +300,7 @@ export class Agent {
 	/** Abort the current run, if one is active. */
 	abort(): void {
 		this.activeRun?.abortController.abort();
-		this.queueResolutionAbortController?.abort();
+		for (const controller of this.queueResolutionAbortControllers) controller.abort();
 	}
 
 	/**
@@ -390,8 +319,7 @@ export class Agent {
 		this._state.streamingMessage = undefined;
 		this._state.pendingToolCalls = new Set<string>();
 		this._state.errorMessage = undefined;
-		this.clearFollowUpQueue();
-		this.clearSteeringQueue();
+		this.clearAllQueues();
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
@@ -419,33 +347,37 @@ export class Agent {
 		}
 
 		if (lastMessage.role === "assistant") {
-			const queueResolutionAbortController = new AbortController();
-			this.queueResolutionAbortController = queueResolutionAbortController;
-			try {
-				let consumedQueuedMessage = this.steeringQueue.hasItems();
-				const queuedSteering = await this.steeringQueue.drain(queueResolutionAbortController.signal);
-				if (queuedSteering.length > 0) {
-					await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
-					return;
-				}
-
-				consumedQueuedMessage ||= this.followUpQueue.hasItems();
-				const queuedFollowUps = await this.followUpQueue.drain(queueResolutionAbortController.signal);
-				if (queuedFollowUps.length > 0) {
-					await this.runPromptMessages(queuedFollowUps);
-					return;
-				}
-				if (consumedQueuedMessage) return;
-			} finally {
-				if (this.queueResolutionAbortController === queueResolutionAbortController) {
-					this.queueResolutionAbortController = undefined;
-				}
+			const queued = await this.drainPendingMessages(["steer", "followUp"]);
+			if (queued.messages.length > 0) {
+				await this.runPromptMessages(queued.messages, { skipInitialSteeringPoll: queued.lane === "steer" });
+				return;
 			}
+			if (queued.consumed) return;
 
 			throw new Error("Cannot continue from message role: assistant");
 		}
 
 		await this.runContinuation();
+	}
+
+	/** Resolve all messages currently eligible for the next explicit prompt. */
+	async drainNextTurnMessages(): Promise<AgentMessage[]> {
+		return (await this.drainPendingMessages(["nextTurn"])).messages;
+	}
+
+	/** Resolve a keyed message immediately while retaining cross-lane replacement semantics. */
+	async resolveQueuedMessage(
+		message: AgentMessage,
+		options: QueuedAgentMessageOptions,
+	): Promise<AgentMessage | undefined> {
+		const id = this.pendingMessages.enqueue("immediate", message, options);
+		const queueResolutionAbortController = new AbortController();
+		this.queueResolutionAbortControllers.add(queueResolutionAbortController);
+		try {
+			return await this.pendingMessages.resolve(id, queueResolutionAbortController.signal);
+		} finally {
+			this.queueResolutionAbortControllers.delete(queueResolutionAbortController);
+		}
 	}
 
 	private normalizePromptInput(
@@ -536,13 +468,23 @@ export class Agent {
 					return [];
 				}
 				const signal = this.activeRun?.abortController.signal;
-				return signal ? this.steeringQueue.drain(signal) : [];
+				return signal ? (await this.pendingMessages.drain(["steer"], signal)).messages : [];
 			},
 			getFollowUpMessages: async () => {
 				const signal = this.activeRun?.abortController.signal;
-				return signal ? this.followUpQueue.drain(signal) : [];
+				return signal ? (await this.pendingMessages.drain(["steer", "followUp"], signal)).messages : [];
 			},
 		};
+	}
+
+	private async drainPendingMessages(lanes: readonly PendingMessageLane[]): Promise<PendingMessageDrainResult> {
+		const queueResolutionAbortController = new AbortController();
+		this.queueResolutionAbortControllers.add(queueResolutionAbortController);
+		try {
+			return await this.pendingMessages.drain(lanes, queueResolutionAbortController.signal);
+		} finally {
+			this.queueResolutionAbortControllers.delete(queueResolutionAbortController);
+		}
 	}
 
 	private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {

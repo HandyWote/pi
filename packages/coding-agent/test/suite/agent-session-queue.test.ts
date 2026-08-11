@@ -481,6 +481,74 @@ describe("AgentSession queue characterization", () => {
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
+	it("delivers steering that replaces a follow-up while its resolver is running", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		let markResolverStarted: (() => void) | undefined;
+		const resolverStarted = new Promise<void>((resolve) => {
+			markResolverStarted = resolve;
+		});
+		let releaseStaleResolver: (() => void) | undefined;
+		const staleResolverRelease = new Promise<void>((resolve) => {
+			releaseStaleResolver = resolve;
+		});
+		const waiting = await createWaitingHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+		let sawLatest = false;
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("original turn complete"),
+			(context) => {
+				sawLatest = context.messages.some(
+					(message) => message.role === "user" && getMessageText(message) === "latest steer",
+				);
+				return fauxAssistantMessage("handled latest");
+			},
+		]);
+
+		await waitForToolStart;
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "stale follow-up", display: false },
+			{
+				deliverAs: "followUp",
+				queue: {
+					key: "live:cross-lane",
+					resolve: async () => {
+						markResolverStarted?.();
+						await staleResolverRelease;
+						return { customType: "live", content: "stale follow-up", display: false };
+					},
+				},
+			},
+		);
+		releaseToolExecution();
+		await resolverStarted;
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "latest steer", display: false },
+			{
+				deliverAs: "steer",
+				queue: {
+					key: "live:cross-lane",
+					resolve: async () => ({ customType: "live", content: "latest steer", display: false }),
+				},
+			},
+		);
+		await promptPromise;
+		releaseStaleResolver?.();
+
+		expect(sawLatest).toBe(true);
+		expect(
+			harness.session.messages.filter((message) => message.role === "custom" && message.customType === "live"),
+		).toHaveLength(1);
+	});
+
 	it("replaces and cancels keyed nextTurn messages without affecting the user prompt", async () => {
 		let extensionApi: ExtensionAPI | undefined;
 		const harness = await createHarness({
@@ -527,6 +595,70 @@ describe("AgentSession queue characterization", () => {
 
 		expect(sawCancelled).toBe(true);
 		expect(getUserTexts(harness)).toEqual(["normal prompt"]);
+	});
+
+	it("uses a nextTurn replacement that arrives while the old resolver is running", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		let markResolverStarted: (() => void) | undefined;
+		const resolverStarted = new Promise<void>((resolve) => {
+			markResolverStarted = resolve;
+		});
+		let releaseStaleResolver: (() => void) | undefined;
+		const staleResolverRelease = new Promise<void>((resolve) => {
+			releaseStaleResolver = resolve;
+		});
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		harnesses.push(harness);
+		let promptMessages: string[] = [];
+
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "stale", display: false },
+			{
+				deliverAs: "nextTurn",
+				queue: {
+					key: "live:next",
+					resolve: async () => {
+						markResolverStarted?.();
+						await staleResolverRelease;
+						return { customType: "live", content: "stale", display: false };
+					},
+				},
+			},
+		);
+		harness.setResponses([
+			(context) => {
+				promptMessages = context.messages
+					.filter((message) => message.role === "user")
+					.map((message) => getMessageText(message));
+				return fauxAssistantMessage("done");
+			},
+		]);
+
+		const promptPromise = harness.session.prompt("normal prompt");
+		await resolverStarted;
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "latest", display: false },
+			{
+				deliverAs: "nextTurn",
+				queue: {
+					key: "live:next",
+					resolve: async () => ({ customType: "live", content: "latest", display: false }),
+				},
+			},
+		);
+		await promptPromise;
+		releaseStaleResolver?.();
+
+		expect(promptMessages).toEqual(["normal prompt", "latest"]);
+		expect(
+			harness.session.messages.filter((message) => message.role === "custom" && message.customType === "live"),
+		).toHaveLength(1);
 	});
 
 	it("injects nextTurn custom messages into the next prompt", async () => {

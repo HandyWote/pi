@@ -561,6 +561,46 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(oldMessage);
 	});
 
+	it("re-polls steering when a running follow-up resolver is replaced across lanes", async () => {
+		const resolverStarted = createDeferred();
+		const releaseStaleResolver = createDeferred();
+		let requestCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				requestCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("processed") });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const stale = { role: "user", content: "stale follow-up", timestamp: Date.now() } satisfies AgentMessage;
+		const latest = { role: "user", content: "latest steer", timestamp: Date.now() + 1 } satisfies AgentMessage;
+		agent.followUp(stale, {
+			key: "live",
+			resolve: async () => {
+				resolverStarted.resolve();
+				await releaseStaleResolver.promise;
+				return stale;
+			},
+		});
+
+		const continuation = agent.continue();
+		await resolverStarted.promise;
+		agent.steer(latest, { key: "live", resolve: async () => latest });
+		await continuation;
+		releaseStaleResolver.resolve();
+
+		expect(requestCount).toBe(1);
+		expect(agent.state.messages).toContainEqual(latest);
+		expect(agent.state.messages).not.toContainEqual(stale);
+	});
+
 	it("cancels a keyed message while its resolver is running", async () => {
 		const resolverStarted = createDeferred();
 		const releaseResolver = createDeferred();

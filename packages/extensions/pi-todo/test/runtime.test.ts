@@ -192,6 +192,25 @@ describe("TodoRuntime recovery", () => {
 		await runtime.update("B", { status: "completed" });
 		expect(await resolver(new AbortController().signal)).toBeUndefined();
 		expect(environment.cancelledMessages).toContain(`pi-todo:session-1:${runtime.getListId()}`);
+		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
+		expect(environment.messages).toHaveLength(1);
+	});
+
+	it("only schedules periodic digests while a list is active", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
+
+		for (let turn = 0; turn < 9; turn++) await runtime.onTurnEnd();
+		expect(environment.messages).toHaveLength(0);
+		await runtime.onTurnEnd();
+		expect(environment.messages).toHaveLength(1);
+
+		await runtime.claim("A");
+		await runtime.update("A", { status: "completed" });
+		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
+		expect(environment.messages).toHaveLength(1);
 	});
 
 	it("preserves a live external owner when it re-announces matching claim evidence", async () => {

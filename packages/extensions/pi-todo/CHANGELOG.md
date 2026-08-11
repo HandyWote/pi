@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed queued Todo reminders to replace older revisions and disappear when their list is completed, cleared, or superseded.
+
 ## [0.3.0] - 2026-08-04
 
 ### Breaking Changes

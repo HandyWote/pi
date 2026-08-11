@@ -48,6 +48,7 @@ export default function piTodo(pi: ExtensionAPI, options: TodoRuntimeOptions = {
 	});
 
 	pi.on("session_shutdown", () => {
+		runtime.cancelDigest();
 		disposeProtocol();
 	});
 }

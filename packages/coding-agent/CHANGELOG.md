@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added replaceable, cancellable extension messages that resolve live content immediately before `steer`, `followUp`, or `nextTurn` delivery.
+
 ## [0.84.0] - 2026-07-31
 
 ### New Features

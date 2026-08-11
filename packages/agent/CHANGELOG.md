@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added keyed Agent message queues with replacement, targeted cancellation, and asynchronous delivery-time resolution.
+
 ## [0.84.0] - 2026-07-31
 
 ### Added

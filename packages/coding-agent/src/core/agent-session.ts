@@ -22,6 +22,7 @@ import type {
 	AgentState,
 	AgentTool,
 	PrepareNextTurnContext,
+	QueuedAgentMessageOptions,
 	ThinkingLevel,
 } from "@handy_wote/pi-agent-core";
 import { contentText } from "@handy_wote/pi-ai";
@@ -84,6 +85,7 @@ import {
 	type MessageStartEvent,
 	type MessageUpdateEvent,
 	type ReplacedSessionContext,
+	type SendMessageOptions,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionStartEvent,
@@ -298,6 +300,12 @@ interface AutoCompactionOptions {
 	continueAfterThreshold?: boolean;
 }
 
+interface PendingNextTurnMessage {
+	message: CustomMessage;
+	key?: string;
+	resolve?: (signal: AbortSignal) => Promise<CustomMessage | undefined>;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -328,7 +336,8 @@ export class AgentSession {
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
-	private _pendingNextTurnMessages: CustomMessage[] = [];
+	private _pendingNextTurnMessages: PendingNextTurnMessage[] = [];
+	private readonly _liveMessageGenerations = new Map<string, number>();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -888,6 +897,7 @@ export class AgentSession {
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
 		}
+		this._invalidateLiveMessages();
 
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
@@ -1275,10 +1285,13 @@ export class AgentSession {
 			});
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this._pendingNextTurnMessages) {
-				messages.push(msg);
-			}
+			const pendingNextTurnMessages = this._pendingNextTurnMessages;
 			this._pendingNextTurnMessages = [];
+			const nextTurnSignal = new AbortController().signal;
+			for (const pending of pendingNextTurnMessages) {
+				const msg = pending.resolve ? await pending.resolve(nextTurnSignal) : pending.message;
+				if (msg) messages.push(msg);
+			}
 
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
@@ -1487,7 +1500,7 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: SendMessageOptions<T>,
 	): Promise<void> {
 		const appMessage = {
 			role: "custom" as const,
@@ -1498,27 +1511,94 @@ export class AgentSession {
 			details: message.details,
 			timestamp: Date.now(),
 		} satisfies CustomMessage<T>;
+		let live:
+			| {
+					key: string;
+					generation: number;
+					resolve: (signal: AbortSignal) => Promise<CustomMessage | undefined>;
+			  }
+			| undefined;
+		if (options?.queue) {
+			const queue = options.queue;
+			const generation = this._replaceLiveMessage(queue.key);
+			live = {
+				key: queue.key,
+				generation,
+				resolve: async (signal) => {
+					try {
+						const resolved = await queue.resolve(signal);
+						if (!resolved || signal.aborted || this._liveMessageGenerations.get(queue.key) !== generation) {
+							return undefined;
+						}
+						return {
+							role: "custom",
+							customType: resolved.customType,
+							content: resolved.content ?? [],
+							display: resolved.display,
+							details: resolved.details,
+							timestamp: Date.now(),
+						};
+					} catch (error) {
+						this._extensionRunner.emitError({
+							extensionPath: "<runtime>",
+							event: "resolve_queued_message",
+							error: error instanceof Error ? error.message : String(error),
+							stack: error instanceof Error ? error.stack : undefined,
+						});
+						return undefined;
+					}
+				},
+			};
+		}
 		if (options?.deliverAs === "nextTurn") {
-			this._pendingNextTurnMessages.push(appMessage);
+			this._pendingNextTurnMessages.push({
+				message: appMessage,
+				key: live?.key,
+				resolve: live?.resolve,
+			});
 		} else if (this.isStreaming) {
+			const queueOptions: QueuedAgentMessageOptions | undefined = live
+				? { key: live.key, resolve: live.resolve }
+				: undefined;
 			if (options?.deliverAs === "followUp") {
-				this.agent.followUp(appMessage);
+				this.agent.followUp(appMessage, queueOptions);
 			} else {
-				this.agent.steer(appMessage);
+				this.agent.steer(appMessage, queueOptions);
 			}
 		} else if (options?.triggerTurn) {
-			await this._runAgentPrompt(appMessage);
+			const resolved = live ? await live.resolve(new AbortController().signal) : appMessage;
+			if (resolved) await this._runAgentPrompt(resolved);
 		} else {
-			this.agent.state.messages.push(appMessage);
+			const resolved = live ? await live.resolve(new AbortController().signal) : appMessage;
+			if (!resolved) return;
+			this.agent.state.messages.push(resolved);
 			this.sessionManager.appendCustomMessageEntry(
-				message.customType,
-				message.content,
-				message.display,
-				message.details,
+				resolved.customType,
+				resolved.content,
+				resolved.display,
+				resolved.details,
 			);
-			this._emit({ type: "message_start", message: appMessage });
-			this._emit({ type: "message_end", message: appMessage });
+			this._emit({ type: "message_start", message: resolved });
+			this._emit({ type: "message_end", message: resolved });
 		}
+	}
+
+	cancelMessage(key: string): void {
+		this._liveMessageGenerations.set(key, (this._liveMessageGenerations.get(key) ?? 0) + 1);
+		this._pendingNextTurnMessages = this._pendingNextTurnMessages.filter((entry) => entry.key !== key);
+		this.agent.cancelQueuedMessage(key);
+	}
+
+	private _replaceLiveMessage(key: string): number {
+		const generation = (this._liveMessageGenerations.get(key) ?? 0) + 1;
+		this._liveMessageGenerations.set(key, generation);
+		this._pendingNextTurnMessages = this._pendingNextTurnMessages.filter((entry) => entry.key !== key);
+		this.agent.cancelQueuedMessage(key);
+		return generation;
+	}
+
+	private _invalidateLiveMessages(): void {
+		for (const key of this._liveMessageGenerations.keys()) this.cancelMessage(key);
 	}
 
 	/**
@@ -1572,6 +1652,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this.agent.clearAllQueues();
+		this._invalidateLiveMessages();
 		this._emitQueueUpdate();
 		return { steering, followUp };
 	}
@@ -2476,6 +2557,9 @@ export class AgentSession {
 						});
 					});
 				},
+				cancelMessage: (key) => {
+					this.cancelMessage(key);
+				},
 				sendUserMessage: (content, options) => {
 					this.sendUserMessage(content, options).catch((err) => {
 						runner.emitError({
@@ -2712,6 +2796,7 @@ export class AgentSession {
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		this._invalidateLiveMessages();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
@@ -3413,6 +3498,7 @@ export class AgentSession {
 			Object.getOwnPropertyDescriptors(this._extensionRunner.createCommandContext()),
 		) as ReplacedSessionContext;
 		context.sendMessage = (message, options) => this.sendCustomMessage(message, options);
+		context.cancelMessage = (key) => this.cancelMessage(key);
 		context.sendUserMessage = (content, options) => this.sendUserMessage(content, options);
 		return context;
 	}

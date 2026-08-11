@@ -117,6 +117,40 @@ describe("repro: deletion after full completion", () => {
 		}
 	}, 15_000);
 
+	it("cancels a periodic digest queued immediately before full completion", async () => {
+		const harness = await createHarness({
+			extensionFactories: [(pi) => piTodo(pi as unknown as TodoExtensionAPI, { dataDir })],
+		});
+		try {
+			harness.setResponses([
+				fauxAssistantMessage(
+					fauxToolCall("write_todo", {
+						global_direction: "Finish without stale reminders",
+						items: [{ id: "A", subject: "Complete the task", depends_on: [] }],
+					}),
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(fauxToolCall("todo_claim", { id: "A" }), { stopReason: "toolUse" }),
+				...Array.from({ length: 8 }, () =>
+					fauxAssistantMessage(fauxToolCall("todo_list", {}), { stopReason: "toolUse" }),
+				),
+				fauxAssistantMessage(fauxToolCall("todo_update", { id: "A", status: "completed" }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Complete."),
+			]);
+
+			await harness.session.prompt("complete the task");
+			await harness.session.waitForIdle();
+
+			expect(getToolResults(harness.session.messages, "todo_update")).toHaveLength(1);
+			expect(getCustomMessages(harness.session.messages, "pi-todo-digest")).toHaveLength(0);
+			expect(harness.getPendingResponseCount()).toBe(0);
+		} finally {
+			harness.cleanup();
+		}
+	}, 15_000);
+
 	it("deletes a claimed task after reload without credentials and stops reactivating the list", async () => {
 		const harness = await createHarness({
 			extensionFactories: [(pi) => piTodo(pi as unknown as TodoExtensionAPI, { dataDir })],

@@ -40,6 +40,7 @@ export type {
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	CancelMessageHandler,
 	// Context
 	CompactOptions,
 	// Events - Agent
@@ -122,6 +123,7 @@ export type {
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
 	SendMessageHandler,
+	SendMessageOptions,
 	SendUserMessageHandler,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,

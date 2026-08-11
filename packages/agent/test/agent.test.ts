@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	Agent,
 	type AgentEvent,
+	type AgentMessage,
 	type AgentTool,
 	type AgentToolUpdateCallback,
 	type StreamFn,
@@ -518,6 +519,167 @@ describe("Agent", () => {
 
 		// The message is queued but not yet in state.messages
 		expect(agent.state.messages).not.toContainEqual(message);
+	});
+
+	it("replaces a keyed message while its resolver is running", async () => {
+		const resolverStarted = createDeferred();
+		const releaseResolver = createDeferred();
+		let requestCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				requestCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("processed") });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const oldMessage = { role: "user", content: "old", timestamp: Date.now() } satisfies AgentMessage;
+		const newMessage = { role: "user", content: "new", timestamp: Date.now() + 1 } satisfies AgentMessage;
+		agent.followUp(oldMessage, {
+			key: "live",
+			resolve: async () => {
+				resolverStarted.resolve();
+				await releaseResolver.promise;
+				return oldMessage;
+			},
+		});
+
+		const continuation = agent.continue();
+		await resolverStarted.promise;
+		agent.followUp(newMessage, { key: "live", resolve: async () => newMessage });
+		releaseResolver.resolve();
+		await continuation;
+
+		expect(requestCount).toBe(1);
+		expect(agent.state.messages).toContainEqual(newMessage);
+		expect(agent.state.messages).not.toContainEqual(oldMessage);
+	});
+
+	it("cancels a keyed message while its resolver is running", async () => {
+		const resolverStarted = createDeferred();
+		const releaseResolver = createDeferred();
+		let requestCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				requestCount++;
+				return new MockAssistantStream();
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const queued = { role: "user", content: "cancelled", timestamp: Date.now() } satisfies AgentMessage;
+		agent.followUp(queued, {
+			key: "live",
+			resolve: async () => {
+				resolverStarted.resolve();
+				await releaseResolver.promise;
+				return queued;
+			},
+		});
+
+		const continuation = agent.continue();
+		await resolverStarted.promise;
+		agent.cancelQueuedMessage("live");
+		releaseResolver.resolve();
+		await continuation;
+
+		expect(requestCount).toBe(0);
+		expect(agent.state.messages).not.toContainEqual(queued);
+	});
+
+	it("does not charge dropped messages against one-at-a-time delivery", async () => {
+		let requestCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				requestCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("processed") });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const dropped = { role: "user", content: "dropped", timestamp: Date.now() } satisfies AgentMessage;
+		const delivered = { role: "user", content: "delivered", timestamp: Date.now() + 1 } satisfies AgentMessage;
+		agent.followUp(dropped, { key: "drop", resolve: async () => undefined });
+		agent.followUp(delivered);
+
+		await agent.continue();
+
+		expect(requestCount).toBe(1);
+		expect(agent.state.messages).not.toContainEqual(dropped);
+		expect(agent.state.messages).toContainEqual(delivered);
+	});
+
+	it("isolates resolver failures and continues to the next queued message", async () => {
+		const failures: unknown[] = [];
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("processed") });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const delivered = { role: "user", content: "delivered", timestamp: Date.now() } satisfies AgentMessage;
+		agent.followUp(delivered, {
+			key: "broken",
+			resolve: async () => {
+				throw new Error("resolver failed");
+			},
+			onError: (error) => failures.push(error),
+		});
+		agent.followUp(delivered);
+
+		await agent.continue();
+
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toEqual(new Error("resolver failed"));
+		expect(agent.state.messages).toContainEqual(delivered);
+	});
+
+	it("cancels only the targeted keyed message", async () => {
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("processed") });
+				});
+				return stream;
+			},
+			followUpMode: "all",
+		});
+		agent.state.messages = [
+			{ role: "user", content: "initial", timestamp: Date.now() - 1 },
+			createAssistantMessage("initial response"),
+		];
+		const cancelled = { role: "user", content: "cancelled", timestamp: Date.now() } satisfies AgentMessage;
+		const retained = { role: "user", content: "retained", timestamp: Date.now() + 1 } satisfies AgentMessage;
+		agent.followUp(cancelled, { key: "cancel", resolve: async () => cancelled });
+		agent.followUp(retained, { key: "retain", resolve: async () => retained });
+		agent.cancelQueuedMessage("cancel");
+
+		await agent.continue();
+
+		expect(agent.state.messages).not.toContainEqual(cancelled);
+		expect(agent.state.messages).toContainEqual(retained);
 	});
 
 	it("should handle abort controller", () => {

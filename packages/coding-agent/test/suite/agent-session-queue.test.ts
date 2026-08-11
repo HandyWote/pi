@@ -325,6 +325,210 @@ describe("AgentSession queue characterization", () => {
 		).toBe(true);
 	});
 
+	it("replaces keyed extension follow-ups with live resolved content", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		const waiting = await createWaitingHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+		let liveContent = "revision 1";
+		let sawResolvedRevision = false;
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("original turn complete"),
+			(context) => {
+				sawResolvedRevision = context.messages.some(
+					(message) => message.role === "user" && getMessageText(message) === "revision 3",
+				);
+				return fauxAssistantMessage("handled live follow-up");
+			},
+		]);
+
+		await waitForToolStart;
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "revision 1", display: false },
+			{
+				deliverAs: "followUp",
+				queue: {
+					key: "live:todo",
+					resolve: async () => ({ customType: "live", content: liveContent, display: false }),
+				},
+			},
+		);
+		liveContent = "revision 2";
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "revision 2", display: false },
+			{
+				deliverAs: "followUp",
+				queue: {
+					key: "live:todo",
+					resolve: async () => ({ customType: "live", content: liveContent, display: false }),
+				},
+			},
+		);
+		liveContent = "revision 3";
+		releaseToolExecution();
+		await promptPromise;
+
+		expect(sawResolvedRevision).toBe(true);
+		expect(
+			harness.session.messages.filter((message) => message.role === "custom" && message.customType === "live"),
+		).toHaveLength(1);
+	});
+
+	it("replaces keyed extension steering messages before the next model call", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		const waiting = await createWaitingHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+		let liveContent = "revision 1";
+		let sawLatest = false;
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			(context) => {
+				sawLatest = context.messages.some(
+					(message) => message.role === "user" && getMessageText(message) === "revision 2",
+				);
+				return fauxAssistantMessage("handled live steering");
+			},
+		]);
+
+		await waitForToolStart;
+		for (const content of ["revision 1", "revision 2"]) {
+			liveContent = content;
+			extensionApi?.sendMessage(
+				{ customType: "live-steer", content, display: false },
+				{
+					deliverAs: "steer",
+					queue: {
+						key: "live:steer",
+						resolve: async () => ({ customType: "live-steer", content: liveContent, display: false }),
+					},
+				},
+			);
+		}
+		releaseToolExecution();
+		await promptPromise;
+
+		expect(sawLatest).toBe(true);
+		expect(
+			harness.session.messages.filter((message) => message.role === "custom" && message.customType === "live-steer"),
+		).toHaveLength(1);
+	});
+
+	it("drops a cancelled live follow-up while its resolver is running", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		let releaseResolver: (() => void) | undefined;
+		const resolverRelease = new Promise<void>((resolve) => {
+			releaseResolver = resolve;
+		});
+		let markResolverStarted: (() => void) | undefined;
+		const resolverStarted = new Promise<void>((resolve) => {
+			markResolverStarted = resolve;
+		});
+		const waiting = await createWaitingHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("original turn complete"),
+		]);
+
+		await waitForToolStart;
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "stale", display: false },
+			{
+				deliverAs: "followUp",
+				queue: {
+					key: "live:todo",
+					resolve: async () => {
+						markResolverStarted?.();
+						await resolverRelease;
+						return { customType: "live", content: "stale", display: false };
+					},
+				},
+			},
+		);
+		releaseToolExecution();
+		await resolverStarted;
+		extensionApi?.cancelMessage("live:todo");
+		releaseResolver?.();
+		await promptPromise;
+
+		expect(
+			harness.session.messages.some((message) => message.role === "custom" && message.customType === "live"),
+		).toBe(false);
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("replaces and cancels keyed nextTurn messages without affecting the user prompt", async () => {
+		let extensionApi: ExtensionAPI | undefined;
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					extensionApi = pi;
+				},
+			],
+		});
+		harnesses.push(harness);
+		let sawCancelled = false;
+
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "old", display: false },
+			{
+				deliverAs: "nextTurn",
+				queue: {
+					key: "live:next",
+					resolve: async () => ({ customType: "live", content: "old", display: false }),
+				},
+			},
+		);
+		extensionApi?.sendMessage(
+			{ customType: "live", content: "new", display: false },
+			{
+				deliverAs: "nextTurn",
+				queue: {
+					key: "live:next",
+					resolve: async () => ({ customType: "live", content: "new", display: false }),
+				},
+			},
+		);
+		extensionApi?.cancelMessage("live:next");
+		harness.setResponses([
+			(context) => {
+				sawCancelled = !context.messages.some(
+					(message) => message.role === "user" && ["old", "new"].includes(getMessageText(message)),
+				);
+				return fauxAssistantMessage("normal response");
+			},
+		]);
+
+		await harness.session.prompt("normal prompt");
+
+		expect(sawCancelled).toBe(true);
+		expect(getUserTexts(harness)).toEqual(["normal prompt"]);
+	});
+
 	it("injects nextTurn custom messages into the next prompt", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

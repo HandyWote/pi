@@ -1,7 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@handy_wote/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	SendMessageOptions,
+	SessionEntry,
+	Theme,
+} from "@handy_wote/pi-coding-agent";
 import { createEventBus } from "@handy_wote/pi-coding-agent";
 import { visibleWidth } from "@handy_wote/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,13 +20,15 @@ interface FakeEnvironment {
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	entries: SessionEntry[];
-	messages: Array<{ customType: string; content: string }>;
+	messages: Array<{ customType: string; content: string; options?: SendMessageOptions }>;
+	cancelledMessages: string[];
 	eventBus: ReturnType<typeof createEventBus>;
 }
 
 function fakeEnvironment(sessionId: string, initialEntries: SessionEntry[] = []): FakeEnvironment {
 	const entries = [...initialEntries];
-	const messages: Array<{ customType: string; content: string }> = [];
+	const messages: Array<{ customType: string; content: string; options?: SendMessageOptions }> = [];
+	const cancelledMessages: string[] = [];
 	const eventBus = createEventBus();
 	const theme = {
 		fg: (_slot: string, text: string) => text,
@@ -37,8 +45,11 @@ function fakeEnvironment(sessionId: string, initialEntries: SessionEntry[] = [])
 				data,
 			});
 		},
-		sendMessage(message: { customType: string; content: string }) {
-			messages.push(message);
+		sendMessage(message: { customType: string; content: string }, options?: SendMessageOptions) {
+			messages.push({ ...message, options });
+		},
+		cancelMessage(key: string) {
+			cancelledMessages.push(key);
 		},
 		getActiveTools: () => [],
 		events: eventBus,
@@ -51,7 +62,7 @@ function fakeEnvironment(sessionId: string, initialEntries: SessionEntry[] = [])
 			getSessionId: () => sessionId,
 		},
 	} as unknown as ExtensionContext;
-	return { pi, ctx, entries, messages, eventBus };
+	return { pi, ctx, entries, messages, cancelledMessages, eventBus };
 }
 
 function bindingEntry(environment: FakeEnvironment, index = -1): TodoBindingEntry {
@@ -159,6 +170,28 @@ describe("TodoRuntime recovery", () => {
 		expect(environment.messages[0]?.content).toContain("Snapshot: list ");
 		expect(environment.messages[0]?.content).toContain("... 3 more");
 		expect(environment.messages[0]?.content.length).toBeLessThanOrEqual(4000);
+	});
+
+	it("resolves queued digests from live state and cancels them after completion", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
+		await runtime.injectDigest("followUp");
+		const queued = environment.messages[0];
+		const resolver = queued?.options?.queue?.resolve;
+		if (!resolver) throw new Error("Missing live digest resolver");
+
+		await runtime.add([{ id: "B", subject: "Task B", depends_on: [] }]);
+		const latest = await resolver(new AbortController().signal);
+		expect(latest?.content).toContain("Ready: A: Task A; B: Task B");
+
+		await runtime.claim("A");
+		await runtime.update("A", { status: "completed" });
+		await runtime.claim("B");
+		await runtime.update("B", { status: "completed" });
+		expect(await resolver(new AbortController().signal)).toBeUndefined();
+		expect(environment.cancelledMessages).toContain(`pi-todo:session-1:${runtime.getListId()}`);
 	});
 
 	it("preserves a live external owner when it re-announces matching claim evidence", async () => {

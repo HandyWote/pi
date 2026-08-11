@@ -122,38 +122,85 @@ export interface AgentOptions {
 	toolExecution?: ToolExecutionMode;
 }
 
+export interface QueuedAgentMessageOptions {
+	key: string;
+	resolve: (signal: AbortSignal) => AgentMessage | undefined | Promise<AgentMessage | undefined>;
+	onError?: (error: unknown) => void;
+}
+
+interface PendingMessage {
+	message: AgentMessage;
+	key?: string;
+	generation?: number;
+	resolve?: QueuedAgentMessageOptions["resolve"];
+	onError?: QueuedAgentMessageOptions["onError"];
+}
+
 class PendingMessageQueue {
-	private messages: AgentMessage[] = [];
+	private messages: PendingMessage[] = [];
+	private readonly generations = new Map<string, number>();
 	public mode: QueueMode;
 
 	constructor(mode: QueueMode) {
 		this.mode = mode;
 	}
 
-	enqueue(message: AgentMessage): void {
-		this.messages.push(message);
+	enqueue(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
+		if (!options) {
+			this.messages.push({ message });
+			return;
+		}
+		const generation = (this.generations.get(options.key) ?? 0) + 1;
+		this.generations.set(options.key, generation);
+		this.messages = this.messages.filter((entry) => entry.key !== options.key);
+		this.messages.push({
+			message,
+			key: options.key,
+			generation,
+			resolve: options.resolve,
+			onError: options.onError,
+		});
 	}
 
 	hasItems(): boolean {
 		return this.messages.length > 0;
 	}
 
-	drain(): AgentMessage[] {
-		if (this.mode === "all") {
-			const drained = this.messages.slice();
-			this.messages = [];
-			return drained;
+	async drain(signal: AbortSignal): Promise<AgentMessage[]> {
+		const resolved: AgentMessage[] = [];
+		const limit = this.mode === "all" ? Number.POSITIVE_INFINITY : 1;
+		while (resolved.length < limit) {
+			if (signal.aborted) break;
+			const entry = this.messages.shift();
+			if (!entry) break;
+			let message = entry.message;
+			if (entry.resolve) {
+				try {
+					const next = await entry.resolve(signal);
+					if (!next || signal.aborted) continue;
+					message = next;
+				} catch (error) {
+					try {
+						entry.onError?.(error);
+					} catch {}
+					continue;
+				}
+			}
+			if (entry.key && this.generations.get(entry.key) !== entry.generation) continue;
+			resolved.push(message);
 		}
+		return resolved;
+	}
 
-		const first = this.messages[0];
-		if (!first) {
-			return [];
-		}
-		this.messages = this.messages.slice(1);
-		return [first];
+	cancel(key: string): void {
+		this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+		this.messages = this.messages.filter((entry) => entry.key !== key);
 	}
 
 	clear(): void {
+		for (const key of this.generations.keys()) {
+			this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+		}
 		this.messages = [];
 	}
 }
@@ -175,6 +222,7 @@ export class Agent {
 	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
 	private readonly steeringQueue: PendingMessageQueue;
 	private readonly followUpQueue: PendingMessageQueue;
+	private queueResolutionAbortController?: AbortController;
 
 	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
@@ -277,13 +325,21 @@ export class Agent {
 	}
 
 	/** Queue a message to be injected after the current assistant turn finishes. */
-	steer(message: AgentMessage): void {
-		this.steeringQueue.enqueue(message);
+	steer(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
+		if (options) this.followUpQueue.cancel(options.key);
+		this.steeringQueue.enqueue(message, options);
 	}
 
 	/** Queue a message to run only after the agent would otherwise stop. */
-	followUp(message: AgentMessage): void {
-		this.followUpQueue.enqueue(message);
+	followUp(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
+		if (options) this.steeringQueue.cancel(options.key);
+		this.followUpQueue.enqueue(message, options);
+	}
+
+	/** Cancel a keyed message in either queue. */
+	cancelQueuedMessage(key: string): void {
+		this.steeringQueue.cancel(key);
+		this.followUpQueue.cancel(key);
 	}
 
 	/** Remove all queued steering messages. */
@@ -315,6 +371,7 @@ export class Agent {
 	/** Abort the current run, if one is active. */
 	abort(): void {
 		this.activeRun?.abortController.abort();
+		this.queueResolutionAbortController?.abort();
 	}
 
 	/**
@@ -362,16 +419,27 @@ export class Agent {
 		}
 
 		if (lastMessage.role === "assistant") {
-			const queuedSteering = this.steeringQueue.drain();
-			if (queuedSteering.length > 0) {
-				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
-				return;
-			}
+			const queueResolutionAbortController = new AbortController();
+			this.queueResolutionAbortController = queueResolutionAbortController;
+			try {
+				let consumedQueuedMessage = this.steeringQueue.hasItems();
+				const queuedSteering = await this.steeringQueue.drain(queueResolutionAbortController.signal);
+				if (queuedSteering.length > 0) {
+					await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
+					return;
+				}
 
-			const queuedFollowUps = this.followUpQueue.drain();
-			if (queuedFollowUps.length > 0) {
-				await this.runPromptMessages(queuedFollowUps);
-				return;
+				consumedQueuedMessage ||= this.followUpQueue.hasItems();
+				const queuedFollowUps = await this.followUpQueue.drain(queueResolutionAbortController.signal);
+				if (queuedFollowUps.length > 0) {
+					await this.runPromptMessages(queuedFollowUps);
+					return;
+				}
+				if (consumedQueuedMessage) return;
+			} finally {
+				if (this.queueResolutionAbortController === queueResolutionAbortController) {
+					this.queueResolutionAbortController = undefined;
+				}
 			}
 
 			throw new Error("Cannot continue from message role: assistant");
@@ -467,9 +535,13 @@ export class Agent {
 					skipInitialSteeringPoll = false;
 					return [];
 				}
-				return this.steeringQueue.drain();
+				const signal = this.activeRun?.abortController.signal;
+				return signal ? this.steeringQueue.drain(signal) : [];
 			},
-			getFollowUpMessages: async () => this.followUpQueue.drain(),
+			getFollowUpMessages: async () => {
+				const signal = this.activeRun?.abortController.signal;
+				return signal ? this.followUpQueue.drain(signal) : [];
+			},
 		};
 	}
 

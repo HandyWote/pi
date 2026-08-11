@@ -66,6 +66,7 @@ export class TodoRuntime {
 		}
 
 		if (event.reason === "new") {
+			this.cancelDigest();
 			this.binding = undefined;
 			updateTodoWidget(ctx, undefined);
 			return;
@@ -73,6 +74,7 @@ export class TodoRuntime {
 
 		const restored = latestBinding(ctx.sessionManager.getBranch());
 		if (!restored?.list_id) {
+			this.cancelDigest();
 			this.binding = undefined;
 			updateTodoWidget(ctx, undefined);
 			return;
@@ -94,6 +96,7 @@ export class TodoRuntime {
 		this.context = ctx;
 		const restored = latestBinding(ctx.sessionManager.getBranch());
 		if (!restored?.list_id) {
+			this.cancelDigest();
 			this.binding = undefined;
 			updateTodoWidget(ctx, undefined);
 			return;
@@ -193,6 +196,7 @@ export class TodoRuntime {
 
 	async clear(): Promise<void> {
 		const listId = this.binding?.list_id;
+		if (listId) this.cancelDigest(listId);
 		this.binding = undefined;
 		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
 			version: 1,
@@ -237,12 +241,33 @@ export class TodoRuntime {
 	}
 
 	async injectDigest(deliverAs: "followUp" | "nextTurn" = "nextTurn"): Promise<void> {
+		const listId = this.binding?.list_id;
+		if (!listId) return;
 		const content = await this.digest();
-		if (!content) return;
+		if (!content) {
+			this.cancelDigest(listId);
+			return;
+		}
 		this.pi.sendMessage(
 			{ customType: TODO_DIGEST_MESSAGE, content, display: false },
-			{ triggerTurn: false, deliverAs },
+			{
+				triggerTurn: false,
+				deliverAs,
+				queue: {
+					key: this.digestQueueKey(listId),
+					resolve: async (signal) => {
+						if (signal.aborted || this.binding?.list_id !== listId) return undefined;
+						const latest = await this.digest();
+						if (!latest || signal.aborted || this.binding?.list_id !== listId) return undefined;
+						return { customType: TODO_DIGEST_MESSAGE, content: latest, display: false };
+					},
+				},
+			},
 		);
+	}
+
+	cancelDigest(listId = this.binding?.list_id): void {
+		if (listId) this.pi.cancelMessage(this.digestQueueKey(listId));
 	}
 
 	async refresh(): Promise<void> {
@@ -260,18 +285,25 @@ export class TodoRuntime {
 	}
 
 	private setBinding(document: TodoListDocument, persist: boolean): void {
+		const previousListId = this.binding?.list_id;
+		if (previousListId && previousListId !== document.id) this.cancelDigest(previousListId);
 		this.binding = {
 			version: 1,
 			list_id: document.id,
 			revision: document.revision,
 			timestamp: new Date().toISOString(),
 		};
+		if (document.tasks.every((task) => task.status === "completed")) this.cancelDigest(document.id);
 		if (persist) this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, this.binding);
 	}
 
 	private requireListId(): string {
 		if (!this.binding?.list_id) throw new Error("No todo list is active");
 		return this.binding.list_id;
+	}
+
+	private digestQueueKey(listId: string): string {
+		return `pi-todo:${this.context?.sessionManager.getSessionId() ?? "unknown"}:${listId}`;
 	}
 
 	private async waitForOwnerEvidence(): Promise<void> {

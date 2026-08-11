@@ -383,8 +383,9 @@ export interface ExtensionCommandContext extends ExtensionContext {
 export interface ReplacedSessionContext extends ExtensionCommandContext {
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: SendMessageOptions<T>,
 	): Promise<void>;
+	cancelMessage(key: string): void;
 
 	sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
@@ -1270,8 +1271,11 @@ export interface ExtensionAPI {
 	/** Send a custom message to the session. */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: SendMessageOptions<T>,
 	): void;
+
+	/** Cancel a keyed extension message without affecting user or unrelated extension messages. */
+	cancelMessage(key: string): void;
 
 	/**
 	 * Send a user message to the agent. Always triggers a turn.
@@ -1502,8 +1506,24 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
 export type SendMessageHandler = <T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-	options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
+	options?: SendMessageOptions<T>,
 ) => void;
+
+export interface SendMessageOptions<T = unknown> {
+	triggerTurn?: boolean;
+	deliverAs?: "steer" | "followUp" | "nextTurn";
+	queue?: {
+		key: string;
+		resolve: (
+			signal: AbortSignal,
+		) =>
+			| Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">
+			| undefined
+			| Promise<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details"> | undefined>;
+	};
+}
+
+export type CancelMessageHandler = (key: string) => void;
 
 export type SendUserMessageHandler = (
 	content: string | (TextContent | ImageContent)[],
@@ -1570,6 +1590,7 @@ export interface ExtensionRuntimeState {
  */
 export interface ExtensionActions {
 	sendMessage: SendMessageHandler;
+	cancelMessage: CancelMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
 	appendEntry: AppendEntryHandler;
 	setSessionName: SetSessionNameHandler;

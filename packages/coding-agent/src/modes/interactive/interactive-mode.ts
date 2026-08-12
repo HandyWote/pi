@@ -3152,45 +3152,7 @@ export class InteractiveMode {
 
 			case "message_end": {
 				if (event.message.role === "user") break;
-<<<<<<< HEAD
 				this.completeStreamingAssistantMessage(event.message);
-=======
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					let errorMessage: string | undefined;
-					if (this.streamingMessage.stopReason === "aborted") {
-						const retryAttempt = this.session.retryAttempt;
-						errorMessage =
-							retryAttempt > 0
-								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
-					}
-					this.streamingComponent.updateContent(this.streamingMessage, false);
-
-					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
-						if (!errorMessage) {
-							errorMessage = this.streamingMessage.errorMessage || "Error";
-						}
-						for (const [, component] of this.pendingTools.entries()) {
-							component.updateResult({
-								content: [{ type: "text", text: errorMessage }],
-								isError: true,
-							});
-						}
-						this.pendingTools.clear();
-					} else {
-						// Args are now complete - trigger diff computation for edit tools
-						for (const [, component] of this.pendingTools.entries()) {
-							component.setArgsComplete();
-						}
-						this.maybeShowCacheMissNotice(this.streamingMessage);
-					}
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-					this.footer.invalidate();
-				}
->>>>>>> 714978bf5 (Markdown api (#7231))
 				this.ui.requestRender();
 				break;
 			}
@@ -3558,31 +3520,7 @@ export class InteractiveMode {
 					// Render user message separately if present
 					if (skillBlock.userMessage) {
 						this.chatContainer.addChild(new Spacer(1));
-<<<<<<< HEAD
-=======
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-								this.getMarkdownTransformers(),
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
->>>>>>> 714978bf5 (Markdown api (#7231))
+
 						const userComponent = new UserMessageComponent(
 							skillBlock.userMessage,
 							this.getMarkdownThemeWithSettings(),
@@ -3596,35 +3534,14 @@ export class InteractiveMode {
 						textContent,
 						this.getMarkdownThemeWithSettings(),
 						this.outputPad,
+						this.getMarkdownTransformers(),
 					);
 					this.chatContainer.addChild(userComponent);
 				}
 				if (options?.populateHistory) {
 					this.editor.addToHistory?.(textContent);
 				}
-<<<<<<< HEAD
-=======
-				break;
-			}
-			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-					this.getMarkdownTransformers(),
-				);
-				this.chatContainer.addChild(assistantComponent);
-				break;
-			}
-			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
-				break;
-			}
-			default: {
-				const _exhaustive: never = message;
->>>>>>> 714978bf5 (Markdown api (#7231))
+
 			}
 			return;
 		}
@@ -3636,6 +3553,7 @@ export class InteractiveMode {
 				this.getMarkdownThemeWithSettings(),
 				this.hiddenThinkingLabel,
 				this.outputPad,
+				this.getMarkdownTransformers(),
 			);
 			this.chatContainer.addChild(assistantComponent);
 			return;
@@ -6821,7 +6739,6 @@ export class InteractiveMode {
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
-		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}

@@ -5,7 +5,7 @@
  */
 
 import type { AssistantMessage } from "@handy_wote/pi-ai";
-import { ProcessTerminal, TUI } from "@handy_wote/pi-tui";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@handy_wote/pi-tui";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -42,7 +42,7 @@ async function sleep(ms: number): Promise<void> {
 
 async function main() {
 	const terminal = new ProcessTerminal();
-	const tui = new TUI(terminal);
+	const tui: TUI = new TuiMainScreen(terminal);
 
 	// Start with empty message
 	const message = {

@@ -3541,7 +3541,6 @@ export class InteractiveMode {
 				if (options?.populateHistory) {
 					this.editor.addToHistory?.(textContent);
 				}
-
 			}
 			return;
 		}

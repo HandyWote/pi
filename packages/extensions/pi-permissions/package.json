@@ -43,7 +43,7 @@
 		"web-tree-sitter": "0.26.11"
 	},
 	"devDependencies": {
-		"@handy_wote/pi-ai": "^0.83.1",
+		"@handy_wote/pi-ai": "^0.84.1",
 		"vitest": "4.1.9"
 	},
 	"peerDependencies": {

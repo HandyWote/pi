@@ -1,5 +1,6 @@
 import type { ThinkingLevel } from "@handy_wote/pi-agent-core";
 import type { Transport } from "@handy_wote/pi-ai";
+import type { ScrollViewScrollbar, TuiMode } from "@handy_wote/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -33,7 +34,7 @@ export interface RetrySettings {
 	provider?: ProviderRetrySettings;
 }
 
-export type UiMode = "regular" | "fullscreen";
+export type UiMode = TuiMode;
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)

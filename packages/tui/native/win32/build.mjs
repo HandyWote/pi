@@ -217,7 +217,7 @@ if (requestedToolchain && requestedToolchain !== "msvc" && requestedToolchain !=
 
 const vsDevCmd = findVisualStudioDevCmd();
 const hasMsvc = vsDevCmd ? canUseMsvc(vsDevCmd) : false;
-const toolchain = requestedToolchain ?? (process.platform === "win32" && vsDevCmd ? "msvc" : "mingw");
+const toolchain = requestedToolchain ?? (process.platform === "win32" && hasMsvc ? "msvc" : "mingw");
 
 if (toolchain === "msvc") {
 	if (!vsDevCmd || !hasMsvc) {

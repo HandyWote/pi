@@ -479,6 +479,8 @@ export interface OpenAICompletionsCompat {
 	vercelGatewayRouting?: VercelGatewayRouting;
 	/** Whether z.ai supports top-level `tool_stream: true` for streaming tool call deltas. Default: false. */
 	zaiToolStream?: boolean;
+	/** Whether the provider supports top-level `thinking_token_budget` to cap reasoning tokens (vLLM). Reasoning and the answer share `max_tokens` on these endpoints, so without a budget a reasoning-heavy turn can consume the whole response and emit no answer. Default: false. */
+	supportsThinkingTokenBudget?: boolean;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: true. */
 	supportsStrictMode?: boolean;
 	/** Whether top-level object tool schemas must include `required`, using an empty array when no fields are required. Default: false. */

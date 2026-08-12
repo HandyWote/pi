@@ -25,6 +25,7 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 						supportsStore: false,
 						supportsDeveloperRole: false,
 						thinkingFormat: "deepseek",
+						maxTokensField: "max_tokens",
 						requiresReasoningContentOnAssistantMessages: true,
 						requiresToolSchemaRequiredArray: true,
 					},
@@ -298,6 +299,11 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 			metadata: {
 				name: "DeepSeek V4 Flash",
 				cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+			},
+			apis: {
+				"openai-completions": {
+					thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", max: "max" },
+				},
 			},
 		},
 		{

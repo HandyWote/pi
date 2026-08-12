@@ -2,7 +2,20 @@
 
 ## [Unreleased]
 
-## [0.84.1] - 2026-08-11
+### New Features
+
+- **Fullscreen TUI mode** — Switch between regular and fullscreen modes at runtime with `--tui-mode fullscreen` or the `/settings` `TUI mode` entry. Fullscreen mode docks the editor and status rows at the bottom and gives the transcript its own scrollable viewport with `PageUp`/`PageDown`, `Home`/`End`, half-page and single-line scrolling, draggable scrollbars, multi-click text selection, and `Ctrl+Shift+F` transcript search. See [TUI Fullscreen Viewport](docs/keybindings.md).
+- **Mermaid and LaTeX rendering** — Render Mermaid diagrams as Unicode box-drawing art and LaTeX math as terminal-friendly Unicode in interactive transcripts. See [Markdown settings](docs/settings.md).
+- **`ctx.scopedModels` extension API** — Extensions can read the session's resolved model scope. See [Extension Context](docs/extensions.md).
+
+### Changed
+
+- Bumped bundled TypeBox to 1.3.7 (extensions using removed deprecated APIs must migrate).
+
+### Fixed
+
+- Fixed `Agent.reset()` rejecting during active runs.
+- Fixed compiled binaries crashing when the cwd contains a `bunfig.toml` with `preload`.
 
 ### Added
 

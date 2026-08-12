@@ -2,8 +2,20 @@
 
 ## [Unreleased]
 
-- Added per-request `fetch` injection for supported text and image provider transports; Google adapters reject non-global implementations rather than silently bypassing them.
-- Added Claude Opus 5 support for the GitHub Copilot provider, routing through the Anthropic Messages API with adaptive thinking, 1M context, and the Copilot `minimal` thinking-level override.
+### Added
+
+- Added per-request `fetch` injection for supported provider transports.
+- Added `thinking_token_budget` support on OpenAI-completions transports.
+
+### Changed
+
+- Bumped bundled TypeBox to 1.3.7, fixing compiled validation of nullable array tool arguments.
+
+### Fixed
+
+- Fixed DeepSeek API models to send the supported `max_tokens` output limit field.
+- Fixed DeepSeek base URL detection to be case-insensitive.
+- Exposed the `low` reasoning effort for native DeepSeek V4 Flash.
 
 ## [0.84.1] - 2026-08-11
 

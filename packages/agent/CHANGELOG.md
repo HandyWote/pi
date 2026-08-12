@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-## [0.84.1] - 2026-08-11
+### Fixed
+
+- Fixed `Agent.reset()` clearing transcript and runtime state during active runs; it now rejects until the agent is idle.
 
 ### Added
 

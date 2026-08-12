@@ -1,5 +1,6 @@
 import type { ThinkingLevel } from "@handy_wote/pi-agent-core";
 import type { Transport } from "@handy_wote/pi-ai";
+import type { ScrollViewScrollbar } from "@handy_wote/pi-tui";
 import {
 	type Component,
 	Container,
@@ -93,6 +94,7 @@ export interface SettingsCallbacks {
 	onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
+	onFullscreenScrollbarChange: (mode: ScrollViewScrollbar) => void;
 	onHttpIdleTimeoutMsChange: (timeoutMs: number) => void;
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onThemeChange: (theme: string) => void;
@@ -615,9 +617,16 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "ui-mode",
 				label: "UI mode",
-				description: "Interface layout used after restart; fullscreen mode is experimental",
+				description: "Interface layout; fullscreen mode is experimental",
 				currentValue: config.uiMode,
 				values: ["regular", "fullscreen"],
+			},
+			{
+				id: "fullscreen-scrollbar",
+				label: "Fullscreen scrollbar",
+				description: "Scrollbar behavior in fullscreen mode; has no effect in regular mode",
+				currentValue: config.fullscreenScrollbar,
+				values: ["auto", "always", "hidden"],
 			},
 			{
 				id: "theme",
@@ -830,6 +839,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "ui-mode":
 						callbacks.onUiModeChange(newValue as UiMode);
+						break;
+					case "fullscreen-scrollbar":
+						callbacks.onFullscreenScrollbarChange(newValue as ScrollViewScrollbar);
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);

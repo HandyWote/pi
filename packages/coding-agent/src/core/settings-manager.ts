@@ -133,6 +133,7 @@ export interface Settings {
 	/** External compat registry sources (file only for now; git/npm planned). Merged on top of the builtin. */
 	compatRegistries?: CompatRegistrySource[];
 	uiMode?: UiMode; // default: "regular"
+	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular UI mode
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -1139,6 +1140,17 @@ export class SettingsManager {
 	setUiMode(mode: UiMode): void {
 		this.globalSettings.uiMode = mode;
 		this.markModified("uiMode");
+		this.save();
+	}
+
+	getFullscreenScrollbar(): ScrollViewScrollbar {
+		const mode = this.settings.fullscreenScrollbar;
+		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	setFullscreenScrollbar(mode: ScrollViewScrollbar): void {
+		this.globalSettings.fullscreenScrollbar = mode;
+		this.markModified("fullscreenScrollbar");
 		this.save();
 	}
 

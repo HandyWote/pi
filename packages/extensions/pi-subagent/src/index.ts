@@ -12,6 +12,12 @@ import { AGENT_PROTOCOL_CHANNEL, type AgentLifecycleEvent, type AgentRecord } fr
 
 const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 const TERMINAL_SUMMARY_LIMIT = 1200;
+const NOTIFICATION_DEBOUNCE_MS = 3000;
+
+interface TerminalNotification {
+	record: AgentRecord;
+	event: AgentLifecycleEvent;
+}
 
 function isStatusRequest(data: unknown): data is { version: 2; parentSessionId: string } {
 	return (
@@ -24,7 +30,30 @@ function isStatusRequest(data: unknown): data is { version: 2; parentSessionId: 
 	);
 }
 
-function terminalNotificationContent(record: AgentRecord): string {
+function terminalNotificationContent(records: AgentRecord[]): string {
+	const [record] = records;
+	if (record === undefined || records.length === 1) return singleTerminalNotificationContent(record);
+	const sections = records.map((entry, index) => {
+		const summary = truncate(entry.lastOutput || entry.error || "No output", TERMINAL_SUMMARY_LIMIT);
+		return [
+			`${index + 1}. Subagent ${entry.agentId} (${entry.definition.name}) ${entry.status}.`,
+			`   Run: ${entry.runId}`,
+			`   Task: ${entry.task}`,
+			`   Recorded result: ${summary}`,
+		].join("\n");
+	});
+	return [
+		"Subagent lifecycle events recorded. They are historical and may have been superseded by later events.",
+		`${records.length} subagents reached terminal state:`,
+		"",
+		...sections,
+		"",
+		"Before acting, call agent_list. If Todo tools are available, call todo_list. Use agent_output for durable output; do not recreate work from this notification alone.",
+	].join("\n");
+}
+
+function singleTerminalNotificationContent(record: AgentRecord | undefined): string {
+	if (record === undefined) return "No subagent lifecycle events recorded.";
 	const summary = truncate(record.lastOutput || record.error || "No output", TERMINAL_SUMMARY_LIMIT);
 	return [
 		"Subagent lifecycle event recorded. It is historical and may have been superseded by later events.",
@@ -44,12 +73,17 @@ function truncate(value: string, limit: number): string {
 
 export interface PiSubagentExtensionOptions {
 	createManager?: (options: AgentManagerOptions) => AgentManager;
+	/** Window in milliseconds during which terminal notifications are batched into one follow-up. */
+	notificationDebounceMs?: number;
 }
 
 export function createPiSubagent(options: PiSubagentExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		let manager: AgentManager | undefined;
 		let currentContext: ExtensionContext | undefined;
+		let notificationBatch: TerminalNotification[] = [];
+		let notificationTimer: ReturnType<typeof setTimeout> | undefined;
+		const notificationDebounceMs = Math.max(0, options.notificationDebounceMs ?? NOTIFICATION_DEBOUNCE_MS);
 
 		const updateStatus = () => {
 			if (!currentContext) return;
@@ -61,6 +95,29 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			);
 		};
 
+		const flushTerminalNotifications = () => {
+			if (notificationTimer !== undefined) {
+				clearTimeout(notificationTimer);
+				notificationTimer = undefined;
+			}
+			const batch = notificationBatch;
+			notificationBatch = [];
+			if (batch.length === 0 || !currentContext) return;
+			try {
+				pi.sendMessage(
+					{
+						customType: "pi-subagent-notification",
+						content: terminalNotificationContent(batch.map((entry) => entry.record)),
+						display: true,
+						details: batch.length === 1 ? batch[0]!.event : batch.map((entry) => entry.event),
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			} catch {
+				// Notifications are advisory; batching failures must not break agent completion.
+			}
+		};
+
 		const notifyTerminal = (record: AgentRecord, event: AgentLifecycleEvent) => {
 			const context = currentContext;
 			if (!context) return;
@@ -68,15 +125,9 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 				`${record.definition.name} ${record.status}: ${record.task}`,
 				record.status === "completed" ? "info" : "warning",
 			);
-			pi.sendMessage(
-				{
-					customType: "pi-subagent-notification",
-					content: terminalNotificationContent(record),
-					display: true,
-					details: event,
-				},
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
+			notificationBatch.push({ record, event });
+			if (notificationTimer !== undefined) clearTimeout(notificationTimer);
+			notificationTimer = setTimeout(flushTerminalNotifications, notificationDebounceMs);
 		};
 
 		pi.on("session_start", async (_event, ctx) => {
@@ -107,6 +158,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 
 		pi.on("session_shutdown", async () => {
 			await manager?.shutdown();
+			flushTerminalNotifications();
 			manager = undefined;
 			currentContext = undefined;
 		});

@@ -34,7 +34,7 @@ Definitions are resolved with `built-in < user < project` precedence. Project de
 
 ## Operation
 
-Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit. Tool guidance directs the model to use one background batch when two or more independent tasks have clear ownership boundaries.
+Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification per agent, batched into a single follow-up when several agents finish within a short window. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit. Tool guidance directs the model to use one background batch when two or more independent tasks have clear ownership boundaries.
 
 `agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks.
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Batched terminal notifications: background agent completions within a short window are merged into a single follow-up message instead of interrupting the parent once per agent.
+
 ## [0.2.0] - 2026-08-04
 
 ### Breaking Changes

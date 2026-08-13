@@ -34,6 +34,7 @@ describe("pi-subagent extension", () => {
 		const managers: AgentManager[] = [];
 		let stateRoot = "";
 		const extension = createPiSubagent({
+			notificationDebounceMs: 30,
 			createManager: (options) => {
 				const manager = new AgentManager({
 					...options,
@@ -146,12 +147,19 @@ describe("pi-subagent extension", () => {
 		expect(revoked.content[0]).toMatchObject({ text: expect.stringContaining("not trusted") });
 		expect(managers[0]!.get(agentId)?.status).toBe("completed");
 		const hiddenList = await listTool.execute("untrusted-list", {});
-		expect(hiddenList.content[0]).toMatchObject({ text: "No agents" });
 		const hiddenText = JSON.stringify(hiddenList);
 		expect(hiddenText).not.toContain("E2E worker");
 		expect(hiddenText).not.toContain("Do the delegated work");
+		expect(hiddenList.content[0]).toMatchObject({
+			text: expect.stringContaining("worker [built-in]"),
+		});
 		await harness.session.prompt("/agents");
-		expect(notify).toHaveBeenLastCalledWith("No agents", "info");
+		expect(select.mock.calls.at(-1)?.[1]).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("worker [built-in]"),
+				expect.stringContaining("explore [built-in]"),
+			]),
+		);
 
 		harness.settingsManager.setProjectTrusted(true);
 		harness.session.extensionRunner.setUIContext(undefined, "print");
@@ -188,6 +196,68 @@ describe("pi-subagent extension", () => {
 		expect(managers).toHaveLength(2);
 		expect(managers[1]!.get(agentId)).toMatchObject({ status: "completed", notified: true });
 		expect(notify.mock.calls.filter((call) => String(call[0]).startsWith("worker completed:")).length).toBe(2);
+	});
+
+	it("merges terminal notifications for agents completing within the debounce window", async () => {
+		let manager: AgentManager | undefined;
+		let stateRoot = "";
+		const harness = await createHarness({
+			extensionFactories: [
+				{
+					name: "pi-subagent",
+					factory: createPiSubagent({
+						notificationDebounceMs: 200,
+						createManager: (options) => {
+							manager = new AgentManager({
+								...options,
+								rootDir: stateRoot,
+								parentSessionId: "e2e-parent",
+								invocation: { command: process.execPath, prefixArgs: [fakePiPath] },
+								killGraceMs: 40,
+							});
+							return manager;
+						},
+					}),
+				},
+			],
+		});
+		harnesses.push(harness);
+		stateRoot = path.join(harness.tempDir, "subagent-state");
+		process.env.PI_CODING_AGENT_DIR = path.join(harness.tempDir, "agent-home");
+		const userAgentDir = path.join(process.env.PI_CODING_AGENT_DIR, "agents");
+		fs.mkdirSync(userAgentDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(userAgentDir, "worker.md"),
+			"---\nname: worker\ndescription: E2E worker\n---\nDo the delegated work.\n",
+		);
+		await harness.session.bindExtensions({});
+		harness.setResponses([fauxAssistantMessage("merged notification handled")]);
+		const startTool = harness.session.state.tools.find((tool) => tool.name === "agent_start");
+		if (!startTool) throw new Error("agent_start was not active");
+		const launched = await startTool.execute("batch", {
+			tasks: [
+				{ agent: "worker", task: "delay:50 first" },
+				{ agent: "worker", task: "delay:60 second" },
+				{ agent: "worker", task: "delay:70 third" },
+			],
+			mode: "background",
+			scope: "user",
+		});
+		expect(launched.content[0]).toMatchObject({ text: expect.stringContaining("Launched") });
+		const records = (launched.details as AgentToolDetails).records;
+		for (const record of records) await waitForTerminal(manager!, record.agentId);
+		await vi.waitFor(
+			() => {
+				const notifications = harness.session.messages.filter(
+					(message) => message.role === "custom" && message.customType === "pi-subagent-notification",
+				);
+				expect(notifications).toHaveLength(1);
+				const text = getMessageText(notifications[0]);
+				expect(text).toContain("3 subagents reached terminal state");
+				for (const record of records) expect(text).toContain(record.agentId);
+			},
+			{ timeout: 5000, interval: 10 },
+		);
 	});
 
 	it("propagates the wrapped tool AbortSignal to a stubborn child", async () => {

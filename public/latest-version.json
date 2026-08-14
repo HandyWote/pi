@@ -1,5 +1,5 @@
 {
-	"version": "0.85.1",
+	"version": "0.85.2",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Release v0.85.1"
+	"note": "Async event lane"
 }

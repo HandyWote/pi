@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-storage-sqlite-node",
-	"version": "0.85.1",
+	"version": "0.85.2",
 	"description": "Node sqlite storage backend for @handy_wote/pi-agent-core sessions",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -32,7 +32,7 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@handy_wote/pi-ai": "^0.85.1",
-		"@handy_wote/pi-agent-core": "^0.85.1"
+		"@handy_wote/pi-ai": "^0.85.2",
+		"@handy_wote/pi-agent-core": "^0.85.2"
 	}
 }

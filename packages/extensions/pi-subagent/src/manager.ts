@@ -23,6 +23,7 @@ const MAX_CONCURRENCY = 8;
 const MAX_ACTIVITIES = 20;
 const SUBAGENT_COMMAND_ENV = "PI_SUBAGENT_COMMAND";
 const SUBAGENT_PREFIX_ARGS_ENV = "PI_SUBAGENT_PREFIX_ARGS";
+const WORKER_MODELS_FILE = "worker-models.json";
 const execFileAsync = promisify(execFile);
 
 interface PendingRun {
@@ -41,6 +42,64 @@ interface ActiveRun {
 interface PiInvocation {
 	command: string;
 	prefixArgs: string[];
+}
+
+/**
+ * A model reference in the /swarm worker pool snapshot. Entries are stored as
+ * `{provider, id}` (plus an optional display label) so a spawned child pi can
+ * resolve them with `--model <provider>/<id>` without re-consulting the
+ * Runtime model list at spawn time.
+ */
+export interface WorkerModelRef {
+	provider: string;
+	id: string;
+	label?: string;
+}
+
+/** Path of the persisted /swarm pool snapshot (`worker-models.json`). */
+export function getWorkerModelsPath(rootDir: string): string {
+	return path.join(rootDir, WORKER_MODELS_FILE);
+}
+
+/**
+ * Read the /swarm pool snapshot in priority order. Entries that cannot be
+ * resolved to a concrete model reference (missing provider/id) are skipped;
+ * a missing, unreadable, or corrupt file yields an empty pool, so spawning
+ * falls back to the main-session model.
+ */
+export async function readWorkerModels(rootDir: string): Promise<WorkerModelRef[]> {
+	let content: string;
+	try {
+		content = await fs.promises.readFile(getWorkerModelsPath(rootDir), "utf8");
+	} catch {
+		return [];
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(content);
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(parsed)) return [];
+	const refs: WorkerModelRef[] = [];
+	for (const entry of parsed) {
+		if (!isRecord(entry)) continue;
+		const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+		const id = typeof entry.id === "string" ? entry.id.trim() : "";
+		if (!provider || !id) continue;
+		const label = typeof entry.label === "string" ? entry.label.trim() : undefined;
+		refs.push(label ? { provider, id, label } : { provider, id });
+	}
+	return refs;
+}
+
+/** Persist the /swarm worker pool snapshot. */
+export async function writeWorkerModels(rootDir: string, refs: readonly WorkerModelRef[]): Promise<void> {
+	await fs.promises.mkdir(rootDir, { recursive: true });
+	await fs.promises.writeFile(getWorkerModelsPath(rootDir), `${JSON.stringify(refs, null, "\t")}\n`, {
+		encoding: "utf8",
+		mode: 0o600,
+	});
 }
 
 export interface AgentManagerOptions {
@@ -223,6 +282,8 @@ async function findChildSessionPath(sessionDir: string, sessionId: string): Prom
 
 export class AgentManager {
 	readonly registry: AgentRegistry;
+	/** Directory holding registry state; also the location of the worker pool snapshot. */
+	readonly rootDir: string;
 	private readonly options: AgentManagerOptions;
 	private readonly concurrency: number;
 	private readonly invocation: PiInvocation;
@@ -238,6 +299,7 @@ export class AgentManager {
 
 	constructor(options: AgentManagerOptions) {
 		this.options = options;
+		this.rootDir = options.rootDir;
 		this.concurrency = Math.max(1, Math.min(options.concurrency ?? 4, MAX_CONCURRENCY));
 		this.invocation = options.invocation ?? getPiInvocation();
 		this.killGraceMs = options.killGraceMs ?? 5000;
@@ -316,7 +378,7 @@ export class AgentManager {
 			childSessionId: agentId,
 			childSessionDir: path.join(this.options.rootDir, "sessions", agentId),
 			transcriptPath: path.join(this.options.rootDir, "transcripts", `${agentId}.jsonl`),
-			model: definition.model,
+			model: await this.resolveWorkerModel(definition),
 			usage: emptyUsage(),
 			toolCount: 0,
 			lastOutput: "",
@@ -438,6 +500,23 @@ export class AgentManager {
 		await Promise.all(active.map((run) => run.completion));
 	}
 
+	/**
+	 * Resolve the model for a worker at spawn time (single source):
+	 * 1. explicit `model` in the agent definition (user-declared intent, used as-is),
+	 * 2. the /swarm pool, first resolvable entry in priority order,
+	 * 3. undefined — no `--model`, the child inherits the main-session model.
+	 * Pool entries carry concrete `{provider, id}` references snapshotted by
+	 * /swarm, so they are passed to the child directly; structurally invalid
+	 * entries are skipped by readWorkerModels.
+	 */
+	private async resolveWorkerModel(definition: AgentDefinition): Promise<string | undefined> {
+		if (definition.model) return definition.model;
+		const pool = await readWorkerModels(this.options.rootDir);
+		const first = pool[0];
+		if (!first) return undefined;
+		return `${first.provider}/${first.id}`;
+	}
+
 	private drain(): void {
 		while (!this.shuttingDown && this.active.size < this.concurrency && this.queue.length > 0) {
 			const pending = this.queue.shift();
@@ -495,7 +574,7 @@ export class AgentManager {
 			"--session-dir",
 			record.childSessionDir,
 		];
-		if (record.definition.model) args.push("--model", record.definition.model);
+		if (record.model) args.push("--model", record.model);
 		if (record.definition.tools?.length) args.push("--tools", record.definition.tools.join(","));
 		if (record.definition.systemPrompt) args.push("--append-system-prompt", promptPath);
 		args.push(`Task: ${pending.prompt}`);

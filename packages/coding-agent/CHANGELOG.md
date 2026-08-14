@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Extension custom messages support `deliverAs: "event"`: while streaming, events are injected at the next tool-round boundary instead of waiting for the run to settle; when idle they trigger a turn immediately.
+
 ## [0.85.1] - 2026-08-13
 
 ## [0.85.0] - 2026-08-12

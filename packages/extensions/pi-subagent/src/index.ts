@@ -7,8 +7,15 @@ import {
 } from "@handy_wote/pi-coding-agent";
 import { registerAgentsCommand } from "./command.ts";
 import { AgentManager, type AgentManagerOptions } from "./manager.ts";
+import { registerAgentPanel, registerNotificationCard } from "./render.ts";
+import { registerSwarmCommand } from "./swarm.ts";
 import { registerAgentTools } from "./tools.ts";
-import { AGENT_PROTOCOL_CHANNEL, type AgentLifecycleEvent, type AgentRecord } from "./types.ts";
+import {
+	AGENT_PROTOCOL_CHANNEL,
+	type AgentLifecycleEvent,
+	type AgentRecord,
+	type AgentTerminalEventDetails,
+} from "./types.ts";
 
 const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 const TERMINAL_SUMMARY_LIMIT = 1200;
@@ -34,37 +41,45 @@ function terminalNotificationContent(records: AgentRecord[]): string {
 	const [record] = records;
 	if (record === undefined || records.length === 1) return singleTerminalNotificationContent(record);
 	const sections = records.map((entry, index) => {
-		const summary = truncate(entry.lastOutput || entry.error || "No output", TERMINAL_SUMMARY_LIMIT);
-		return [
-			`${index + 1}. Subagent ${entry.agentId} (${entry.definition.name}) ${entry.status}.`,
-			`   Run: ${entry.runId}`,
-			`   Task: ${entry.task}`,
-			`   Recorded result: ${summary}`,
-		].join("\n");
+		const hint = actionHint(entry);
+		return `${index + 1}. Subagent ${entry.agentId} (${entry.definition.name}) ${entry.status}. Task: ${entry.task}. ${hint}.`;
 	});
-	return [
-		"Subagent lifecycle events recorded. They are historical and may have been superseded by later events.",
-		`${records.length} subagents reached terminal state:`,
-		"",
-		...sections,
-		"",
-		"Before acting, call agent_list. If Todo tools are available, call todo_list. Use agent_output for durable output; do not recreate work from this notification alone.",
-	].join("\n");
+	return [`${records.length} subagents reached terminal state. Before acting, call agent_list.`, ...sections].join(
+		"\n",
+	);
 }
 
 function singleTerminalNotificationContent(record: AgentRecord | undefined): string {
 	if (record === undefined) return "No subagent lifecycle events recorded.";
-	const summary = truncate(record.lastOutput || record.error || "No output", TERMINAL_SUMMARY_LIMIT);
 	return [
-		"Subagent lifecycle event recorded. It is historical and may have been superseded by later events.",
-		`Subagent ${record.agentId} (${record.definition.name}) ${record.status}.`,
-		`Run: ${record.runId}`,
+		`Agent "${record.definition.description}" ${record.status}.`,
 		`Task: ${record.task}`,
-		`Recorded result: ${summary}`,
-		`Usage: ${record.toolCount} tools, ${record.usage.input + record.usage.output} tokens`,
-		`Output: ${record.transcriptPath}`,
-		"Before acting, call agent_list. If Todo tools are available, call todo_list. Use agent_output for durable output; do not recreate work from this notification alone.",
+		`${actionHint(record)}. Before acting, call agent_list.`,
 	].join("\n");
+}
+
+function actionHint(record: AgentRecord): string {
+	return record.status === "completed" ? `Continue: agent_resume ${record.agentId}` : "Stop: do not resume";
+}
+
+function terminalEventDetails(record: AgentRecord): AgentTerminalEventDetails {
+	const output = record.lastOutput || record.error;
+	return {
+		agentId: record.agentId,
+		runId: record.runId,
+		definition: record.definition.name,
+		status: record.status as AgentTerminalEventDetails["status"],
+		task: record.task,
+		result: output ? truncate(output, TERMINAL_SUMMARY_LIMIT) : undefined,
+		usage: {
+			input: record.usage.input,
+			output: record.usage.output,
+			cost: record.usage.cost,
+			toolCount: record.toolCount,
+		},
+		transcriptPath: record.transcriptPath,
+		worktreePath: record.worktreePath,
+	};
 }
 
 function truncate(value: string, limit: number): string {
@@ -73,7 +88,7 @@ function truncate(value: string, limit: number): string {
 
 export interface PiSubagentExtensionOptions {
 	createManager?: (options: AgentManagerOptions) => AgentManager;
-	/** Window in milliseconds during which terminal notifications are batched into one follow-up. */
+	/** Window in milliseconds during which terminal notifications are batched into one event message. */
 	notificationDebounceMs?: number;
 }
 
@@ -93,6 +108,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 				"pi-subagent",
 				active > 0 ? `${active} local agent${active === 1 ? "" : "s"}` : undefined,
 			);
+			registerAgentPanel(currentContext, manager);
 		};
 
 		const flushTerminalNotifications = () => {
@@ -109,9 +125,12 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 						customType: "pi-subagent-notification",
 						content: terminalNotificationContent(batch.map((entry) => entry.record)),
 						display: true,
-						details: batch.length === 1 ? batch[0]!.event : batch.map((entry) => entry.event),
+						details:
+							batch.length === 1
+								? terminalEventDetails(batch[0]!.record)
+								: batch.map((entry) => terminalEventDetails(entry.record)),
 					},
-					{ triggerTurn: true, deliverAs: "followUp" },
+					{ triggerTurn: true, deliverAs: "event" },
 				);
 			} catch {
 				// Notifications are advisory; batching failures must not break agent completion.
@@ -175,6 +194,8 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		});
 		registerAgentTools(pi, () => manager);
 		registerAgentsCommand(pi, () => manager);
+		registerSwarmCommand(pi, () => manager);
+		registerNotificationCard(pi);
 	};
 }
 
@@ -186,5 +207,7 @@ export type {
 	AgentMode,
 	AgentRecord,
 	AgentStatus,
+	AgentTerminalEventDetails,
+	AgentTerminalStatus,
 } from "./types.ts";
 export { AGENT_PROTOCOL_CHANNEL, AGENT_PROTOCOL_VERSION } from "./types.ts";

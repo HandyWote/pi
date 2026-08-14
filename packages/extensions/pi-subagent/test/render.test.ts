@@ -2,7 +2,8 @@ import * as path from "node:path";
 import type { Theme } from "@handy_wote/pi-coding-agent";
 import { visibleWidth } from "@handy_wote/pi-tui";
 import { describe, expect, it } from "vitest";
-import { renderAgentResult } from "../src/render.ts";
+import type { AgentManager } from "../src/manager.ts";
+import { AgentPanel, renderAgentResult } from "../src/render.ts";
 import { type AgentRecord, emptyUsage } from "../src/types.ts";
 
 const theme = {
@@ -77,5 +78,19 @@ describe("renderAgentResult", () => {
 
 		expect(lines.length).toBeGreaterThan(5);
 		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+	});
+});
+
+describe("AgentPanel", () => {
+	it("flattens multi-line tasks so each record renders as one line", () => {
+		const multiLine = record();
+		multiLine.task = "Step one: read /a/b/c\n1. read /home/handy/projects/pi/README.md\n2. run a command";
+		const manager = { list: () => [multiLine] } as unknown as AgentManager;
+		const lines = new AgentPanel(manager, theme).render(120);
+
+		expect(lines.length).toBe(2); // header + one record row
+		expect(lines.some((line) => line.includes("Step one: read"))).toBe(true);
+		expect(lines.every((line) => !line.includes("\n"))).toBe(true);
+		expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
 	});
 });

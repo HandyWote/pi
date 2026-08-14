@@ -1480,7 +1480,7 @@ export class AgentSession {
 	 *
 	 * @param message Custom message with customType, content, display, details
 	 * @param options.triggerTurn If true and not streaming, triggers a new LLM turn
-	 * @param options.deliverAs Delivery mode: "steer", "followUp", or "nextTurn"
+	 * @param options.deliverAs Delivery mode: "steer", "followUp", "nextTurn", or "event"
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
@@ -1523,7 +1523,9 @@ export class AgentSession {
 		if (options?.deliverAs === "nextTurn") {
 			this.agent.nextTurn(appMessage, queueOptions);
 		} else if (this.isStreaming) {
-			if (options?.deliverAs === "followUp") {
+			if (options?.deliverAs === "event") {
+				this.agent.event(appMessage, queueOptions);
+			} else if (options?.deliverAs === "followUp") {
 				this.agent.followUp(appMessage, queueOptions);
 			} else {
 				this.agent.steer(appMessage, queueOptions);

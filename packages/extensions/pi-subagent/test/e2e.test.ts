@@ -118,7 +118,8 @@ describe("pi-subagent extension", () => {
 				const notification = harness.session.messages.find(
 					(message) => message.role === "custom" && message.customType === "pi-subagent-notification",
 				);
-				expect(getMessageText(notification)).toContain("historical and may have been superseded");
+				expect(getMessageText(notification)).toContain('Agent "E2E worker" completed');
+				expect(getMessageText(notification)).toContain("Continue: agent_resume");
 				expect(getMessageText(notification)).toContain("call agent_list");
 			},
 			{ timeout: 5000, interval: 10 },

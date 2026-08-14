@@ -257,6 +257,11 @@ export class Agent {
 		this.pendingMessages.enqueue("followUp", message, options);
 	}
 
+	/** Queue a message to be delivered to the model at the next turn boundary. */
+	event(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
+		this.pendingMessages.enqueue("event", message, options);
+	}
+
 	/** Queue a message to be included with the next explicit prompt. */
 	nextTurn(message: AgentMessage, options?: QueuedAgentMessageOptions): void {
 		this.pendingMessages.enqueue("nextTurn", message, options);
@@ -408,8 +413,11 @@ export class Agent {
 		options: { skipInitialSteeringPoll?: boolean } = {},
 	): Promise<void> {
 		await this.runWithLifecycle(async (signal) => {
+			// Events retained from a previous run are injected at the start of the
+			// next explicit prompt; they are never dropped.
+			const eventMessages = (await this.pendingMessages.drain(["event"], signal)).messages;
 			await runAgentLoop(
-				messages,
+				[...eventMessages, ...messages],
 				this.createContextSnapshot(),
 				this.createLoopConfig(options),
 				(event) => this.processEvents(event),
@@ -477,6 +485,10 @@ export class Agent {
 			getFollowUpMessages: async () => {
 				const signal = this.activeRun?.abortController.signal;
 				return signal ? (await this.pendingMessages.drain(["steer", "followUp"], signal)).messages : [];
+			},
+			getEventMessages: async () => {
+				const signal = this.activeRun?.abortController.signal;
+				return signal ? (await this.pendingMessages.drain(["event"], signal)).messages : [];
 			},
 		};
 	}

@@ -94,6 +94,25 @@ export interface AgentLifecycleEvent {
 	metadata: Record<string, string>;
 }
 
+export type AgentTerminalStatus = Extract<AgentStatus, "completed" | "failed" | "stopped" | "interrupted">;
+
+/**
+ * Structured payload of a `pi-subagent-notification` message. The model acts on
+ * these details directly; no `agent_output` round-trip required.
+ */
+export interface AgentTerminalEventDetails {
+	agentId: string;
+	runId: string;
+	definition: string;
+	status: AgentTerminalStatus;
+	task: string;
+	/** lastOutput, truncated to TERMINAL_SUMMARY_LIMIT */
+	result?: string;
+	usage: { input: number; output: number; cost: number; toolCount: number };
+	transcriptPath: string;
+	worktreePath?: string;
+}
+
 export interface AgentInvocation {
 	agent: string;
 	task: string;

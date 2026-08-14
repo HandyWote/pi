@@ -257,6 +257,13 @@ async function runLoop(
 			}
 
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
+
+			// Events are polled at the same turn boundary as steering messages and
+			// injected after any steering messages, before the next API call.
+			const eventMessages = (await config.getEventMessages?.()) || [];
+			if (eventMessages.length > 0) {
+				pendingMessages.push(...eventMessages);
+			}
 		}
 
 		// Agent would stop here. Check for follow-up messages.
@@ -264,6 +271,15 @@ async function runLoop(
 		if (followUpMessages.length > 0) {
 			// Set as pending so inner loop processes them
 			pendingMessages = followUpMessages;
+			continue;
+		}
+
+		// Events force an extra round so they are delivered without waiting for
+		// user input. Leftover events at the true run end stay queued and are
+		// injected at the start of the next explicit prompt.
+		const eventMessages = (await config.getEventMessages?.()) || [];
+		if (eventMessages.length > 0) {
+			pendingMessages = eventMessages;
 			continue;
 		}
 

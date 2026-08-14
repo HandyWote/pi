@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Async event lane** — Extension custom messages with `deliverAs: "event"` are delivered at the next tool-round boundary (within seconds of a background task completing) instead of waiting for the current run to settle; queued events batch into one model call and remain available to the next explicit prompt.
+
 ### Added
 
 - Extension custom messages support `deliverAs: "event"`: while streaming, events are injected at the next tool-round boundary instead of waiting for the run to settle; when idle they trigger a turn immediately.

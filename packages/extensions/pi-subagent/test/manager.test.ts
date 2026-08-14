@@ -144,7 +144,9 @@ describe("AgentManager", () => {
 		const completed = await started.completion;
 
 		expect(completed.cwd).toBe(nested);
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${nested}`);
+		// The child process reports its real cwd (macOS resolves the /var symlink
+		// in the temporary directory), so normalize the expectation the same way.
+		expect(await manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${fs.realpathSync(nested)}`);
 	});
 
 	it("uses an environment launcher override for local source execution", async () => {
@@ -519,8 +521,11 @@ describe("AgentManager", () => {
 describe("WorktreeService", () => {
 	it("keeps a stable branch and its commits across worktree cleanup and resume", async () => {
 		const root = temporaryDirectory();
-		const repository = path.join(root, "repository");
-		fs.mkdirSync(repository);
+		const repositoryPath = path.join(root, "repository");
+		fs.mkdirSync(repositoryPath);
+		// git resolves the /var symlink in the macOS temp directory when reporting
+		// the repository toplevel, so use the real path for consistent comparisons.
+		const repository = fs.realpathSync(repositoryPath);
 		execFileSync("git", ["init"], { cwd: repository });
 		fs.writeFileSync(path.join(repository, "README.md"), "test\n");
 		execFileSync("git", ["add", "README.md"], { cwd: repository });

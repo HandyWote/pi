@@ -64,7 +64,10 @@ function formatTokens(count: number): string {
 }
 
 function truncateText(value: string, limit: number): string {
-	return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
+	// Tasks are multi-line prompt text; flatten to a single line so rows rendered
+	// as one terminal line do not break the diff-renderer line model.
+	const singleLine = value.replace(/\s*\n\s*/g, " ").trim();
+	return singleLine.length <= limit ? singleLine : `${singleLine.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 function statusGlyph(status: AgentStatus): string {

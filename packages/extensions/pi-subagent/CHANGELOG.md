@@ -2,11 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added TUI notification cards (`registerMessageRenderer`) and a persistent agent panel above the editor (`setWidget`) showing live status, tool counts, tokens, and duration.
+
 ### Changed
 
 - Terminal notifications now use the core `event` lane: completion events are delivered at the next tool-round boundary (seconds) instead of after the current run settles (potentially hours). Notification payloads are structured (`AgentTerminalEventDetails` in `details`: status, task, result, usage, transcript path) with a three-line summary in `content`.
-- Added TUI notification cards (`registerMessageRenderer`) and a persistent agent panel above the editor (`setWidget`) showing live status, tool counts, tokens, and duration.
 - Batched terminal notifications: background agent completions within a short window are merged into a single follow-up message instead of interrupting the parent once per agent.
+
+### Fixed
+
+- Fixed multi-line agent tasks breaking the agent panel's single-line row contract: newlines are now flattened in panel rows and notification cards, so rows stay single-line during incremental redraws.
 
 ## [0.2.0] - 2026-08-04
 

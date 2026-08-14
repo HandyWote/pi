@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-14
+
 ### Added
 
 - Added TUI notification cards (`registerMessageRenderer`) and a persistent agent panel above the editor (`setWidget`) showing live status, tool counts, tokens, and duration.

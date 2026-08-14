@@ -1530,7 +1530,7 @@ export type SendMessageHandler = <T = unknown>(
 
 export interface SendMessageOptions<T = unknown> {
 	triggerTurn?: boolean;
-	deliverAs?: "steer" | "followUp" | "nextTurn";
+	deliverAs?: "steer" | "followUp" | "nextTurn" | "event";
 	queue?: {
 		key: string;
 		resolve: (

@@ -252,6 +252,23 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	getFollowUpMessages?: () => Promise<AgentMessage[]>;
 
 	/**
+	 * Returns pending event messages to deliver at the next turn boundary.
+	 *
+	 * Called after each turn ends (after tool results are collected), in the
+	 * same position as `getSteeringMessages`, and once more when the agent
+	 * would otherwise stop. Events force an additional turn so they are
+	 * delivered without waiting for user input. Multiple events drain in a
+	 * single poll and are injected as a batch before the next LLM call, after
+	 * any steering messages. Events remaining at run end are retained and
+	 * injected at the start of the next explicit prompt; they are never dropped.
+	 *
+	 * Use this for system events that should reach the model promptly.
+	 *
+	 * Contract: must not throw or reject. Return [] when no events are available.
+	 */
+	getEventMessages?: () => Promise<AgentMessage[]>;
+
+	/**
 	 * Tool execution mode.
 	 * - "sequential": execute tool calls one by one
 	 * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;

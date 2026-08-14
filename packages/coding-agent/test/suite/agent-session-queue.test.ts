@@ -325,6 +325,40 @@ describe("AgentSession queue characterization", () => {
 		).toBe(true);
 	});
 
+	it("queues custom messages with deliverAs event while streaming", async () => {
+		const waiting = await createWaitingHarness();
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;
+		harnesses.push(harness);
+		let sawCustomMessage = false;
+
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			(context) => {
+				sawCustomMessage = context.messages.some(
+					(message) =>
+						message.role === "user" &&
+						typeof message.content !== "string" &&
+						message.content.some((part) => part.type === "text" && part.text === "event custom"),
+				);
+				return fauxAssistantMessage("done");
+			},
+		]);
+
+		await waitForToolStart;
+		await harness.session.sendCustomMessage(
+			{ customType: "queue-test", content: "event custom", display: true, details: { value: 1 } },
+			{ deliverAs: "event" },
+		);
+		releaseToolExecution();
+		await promptPromise;
+
+		// The event is delivered at the next turn boundary, before the second LLM call.
+		expect(sawCustomMessage).toBe(true);
+		expect(
+			harness.session.messages.some((message) => message.role === "custom" && message.customType === "queue-test"),
+		).toBe(true);
+	});
+
 	it("replaces keyed extension follow-ups with live resolved content", async () => {
 		let extensionApi: ExtensionAPI | undefined;
 		const waiting = await createWaitingHarness({

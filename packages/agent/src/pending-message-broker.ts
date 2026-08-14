@@ -1,6 +1,6 @@
 import type { AgentMessage, QueueMode } from "./types.ts";
 
-export type PendingMessageLane = "steer" | "followUp" | "nextTurn" | "immediate";
+export type PendingMessageLane = "steer" | "followUp" | "nextTurn" | "immediate" | "event";
 
 export interface QueuedAgentMessageOptions {
 	key: string;
@@ -33,7 +33,7 @@ type ResolutionOutcome =
 	| { kind: "superseded" }
 	| { kind: "aborted" };
 
-const LANES: readonly PendingMessageLane[] = ["steer", "followUp", "nextTurn", "immediate"];
+const LANES: readonly PendingMessageLane[] = ["steer", "followUp", "nextTurn", "immediate", "event"];
 
 export class PendingMessageBroker {
 	private readonly queues: Record<PendingMessageLane, PendingMessageEntry[]> = {
@@ -41,6 +41,7 @@ export class PendingMessageBroker {
 		followUp: [],
 		nextTurn: [],
 		immediate: [],
+		event: [],
 	};
 	private readonly entries = new Map<number, PendingMessageEntry>();
 	private readonly latestByKey = new Map<string, PendingMessageEntry>();
@@ -50,6 +51,7 @@ export class PendingMessageBroker {
 		followUp: "one-at-a-time",
 		nextTurn: "all",
 		immediate: "one-at-a-time",
+		event: "all",
 	};
 	private nextId = 1;
 

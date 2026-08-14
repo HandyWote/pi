@@ -521,6 +521,65 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it("should support event message queue", async () => {
+		const agent = new Agent({ streamFn: unusedStreamFunction });
+
+		const message = { role: "user" as const, content: "Event message", timestamp: Date.now() };
+		agent.event(message);
+
+		// The message is queued but not yet in state.messages
+		expect(agent.state.messages).not.toContainEqual(message);
+	});
+
+	it("retains events at run end and injects them at the start of the next prompt", async () => {
+		let responseCount = 0;
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					responseCount++;
+					stream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage(`response ${responseCount}`),
+					});
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{ role: "user", content: "Initial", timestamp: Date.now() - 10 },
+			createAssistantMessage("Initial response"),
+		];
+		const eventMessage = { role: "user", content: "late event", timestamp: Date.now() } satisfies AgentMessage;
+
+		const unsubscribe = agent.subscribe((event) => {
+			if (event.type === "agent_end") {
+				// Enqueued after the run's final event-lane poll: must stay queued.
+				agent.event(eventMessage);
+				unsubscribe();
+			}
+		});
+
+		await agent.prompt("First prompt");
+		expect(agent.state.messages).not.toContainEqual(eventMessage);
+
+		await agent.prompt("Second prompt");
+		const userTexts = agent.state.messages
+			.filter((message) => message.role === "user")
+			.map((message) => {
+				if (typeof message.content === "string") return message.content;
+				return message.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text)
+					.join("\n");
+			});
+		const secondPromptIndex = userTexts.indexOf("Second prompt");
+		// The retained event is injected immediately before the explicit prompt.
+		expect(secondPromptIndex).toBeGreaterThan(0);
+		expect(userTexts[secondPromptIndex - 1]).toBe("late event");
+	});
+
 	it("replaces a keyed message while its resolver is running", async () => {
 		const resolverStarted = createDeferred();
 		const releaseResolver = createDeferred();

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Terminal notifications now use the core `event` lane: completion events are delivered at the next tool-round boundary (seconds) instead of after the current run settles (potentially hours). Notification payloads are structured (`AgentTerminalEventDetails` in `details`: status, task, result, usage, transcript path) with a three-line summary in `content`.
+- Added TUI notification cards (`registerMessageRenderer`) and a persistent agent panel above the editor (`setWidget`) showing live status, tool counts, tokens, and duration.
 - Batched terminal notifications: background agent completions within a short window are merged into a single follow-up message instead of interrupting the parent once per agent.
 
 ## [0.2.0] - 2026-08-04
@@ -14,6 +16,7 @@
 
 ### Added
 
+- Added `/swarm`: interactive worker model pool configuration (candidates from the session model scope, ordered by priority, snapshot-persisted to `worker-models.json`) and coordinator behavior guidance. Worker model assignment: agent definition `model` > pool order > main-session model.
 - Added built-in `worker` and read-only `explore` agents with user and project override support.
 
 ### Changed

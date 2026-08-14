@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an `event` pending-message lane drained at every turn end (tool-round boundary); queued events batch into the next model call and remain available to the next explicit prompt when a run settles. Existing `steer`/`followUp`/`nextTurn` semantics are unchanged.
+
 ## [0.85.1] - 2026-08-13
 
 ## [0.85.0] - 2026-08-12

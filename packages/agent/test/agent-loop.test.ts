@@ -1364,6 +1364,292 @@ describe("agentLoop with AgentMessage", () => {
 	});
 });
 
+describe("event lane", () => {
+	it("injects event messages after tool results are collected at turn end", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `ok:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const eventMessage = createUserMessage("worker finished");
+		let eventDelivered = false;
+		let sawEventInContext = false;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolExecution: "sequential",
+			getEventMessages: async () => {
+				// Return the event after the tool has executed, so it is picked up
+				// by the turn-end poll rather than the initial poll.
+				if (executed.length >= 1 && !eventDelivered) {
+					eventDelivered = true;
+					return [eventMessage];
+				}
+				return [];
+			},
+		};
+
+		let callIndex = 0;
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, (_model, ctx, _options) => {
+			if (callIndex === 1) {
+				sawEventInContext = ctx.messages.some(
+					(message) =>
+						message.role === "user" &&
+						typeof message.content === "string" &&
+						message.content === "worker finished",
+				);
+			}
+
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					mockStream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantMessage(
+							[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+							"toolUse",
+						),
+					});
+				} else {
+					mockStream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "done" }]),
+					});
+				}
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The tool runs before the event is injected.
+		expect(executed).toEqual(["hello"]);
+
+		// The event is injected after the tool result, before the next API call.
+		const eventSequence = events.flatMap((event) => {
+			if (event.type !== "message_start") return [];
+			if (event.message.role === "toolResult") return [`tool:${event.message.toolCallId}`];
+			if (event.message.role === "user" && typeof event.message.content === "string") {
+				return [event.message.content];
+			}
+			return [];
+		});
+		expect(eventSequence).toContain("worker finished");
+		expect(eventSequence.indexOf("tool:tool-1")).toBeLessThan(eventSequence.indexOf("worker finished"));
+		expect(sawEventInContext).toBe(true);
+	});
+
+	it("drains multiple pending events in a single batch before the next API call", async () => {
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [],
+		};
+
+		const eventMessages = [createUserMessage("event 1"), createUserMessage("event 2"), createUserMessage("event 3")];
+		let delivered = false;
+		const seen: string[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getEventMessages: async () => {
+				if (delivered) return [];
+				delivered = true;
+				return eventMessages;
+			},
+		};
+
+		let callIndex = 0;
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, (_model, ctx, _options) => {
+			if (callIndex === 1) {
+				seen.push(
+					...ctx.messages.flatMap((message) => {
+						if (message.role !== "user" || typeof message.content !== "string") return [];
+						return [message.content];
+					}),
+				);
+			}
+
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: `response ${callIndex + 1}` }]),
+				});
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// One extra turn handles all three events.
+		expect(callIndex).toBe(2);
+		expect(seen).toEqual(["start", "event 1", "event 2", "event 3"]);
+
+		// Every event is emitted as a message.
+		const userMessageStarts = events.filter(
+			(event) => event.type === "message_start" && event.message.role === "user",
+		);
+		expect(userMessageStarts).toHaveLength(4);
+	});
+
+	it("forces an additional round when events arrive after the agent would stop", async () => {
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [],
+		};
+
+		const eventMessage = createUserMessage("late event");
+		let followUpPolled = false;
+		let eventDelivered = false;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getFollowUpMessages: async () => {
+				// Runs at the stop point, before the event poll.
+				followUpPolled = true;
+				return [];
+			},
+			getEventMessages: async () => {
+				// Only available once the loop reached the stop point.
+				if (!eventDelivered && followUpPolled) {
+					eventDelivered = true;
+					return [eventMessage];
+				}
+				return [];
+			},
+		};
+
+		let callIndex = 0;
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: `response ${callIndex + 1}` }]),
+				});
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The event forces one extra round even though the model would stop.
+		expect(callIndex).toBe(2);
+		expect(
+			events.some(
+				(event) =>
+					event.type === "message_start" &&
+					event.message.role === "user" &&
+					event.message.content === "late event",
+			),
+		).toBe(true);
+	});
+
+	it("injects steering messages before event messages in the same round", async () => {
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [],
+		};
+
+		const steerMessage = createUserMessage("steer me");
+		const eventMessage = createUserMessage("system event");
+		let steerDelivered = false;
+		let eventDelivered = false;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getSteeringMessages: async () => {
+				// Both lanes are pending at the same turn-end poll: steer first.
+				if (!steerDelivered && callIndex >= 1) {
+					steerDelivered = true;
+					return [steerMessage];
+				}
+				return [];
+			},
+			getEventMessages: async () => {
+				if (steerDelivered && !eventDelivered) {
+					eventDelivered = true;
+					return [eventMessage];
+				}
+				return [];
+			},
+		};
+
+		let callIndex = 0;
+		let contextUserTexts: string[] = [];
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, (_model, ctx, _options) => {
+			callIndex++;
+			if (callIndex === 2) {
+				contextUserTexts = ctx.messages.flatMap((message) => {
+					if (message.role !== "user" || typeof message.content !== "string") return [];
+					return [message.content];
+				});
+			}
+
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: `response ${callIndex}` }]),
+				});
+			});
+			return mockStream;
+		});
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(callIndex).toBe(2);
+		expect(contextUserTexts).toEqual(["start", "steer me", "system event"]);
+
+		// Message emission order matches injection order: steer before event.
+		const userMessages = events.flatMap((event) => {
+			if (event.type !== "message_start" || event.message.role !== "user") return [];
+			return typeof event.message.content === "string" ? [event.message.content] : [];
+		});
+		expect(userMessages).toEqual(["start", "steer me", "system event"]);
+	});
+});
+
 describe("agentLoopContinue with AgentMessage", () => {
 	it("should throw when context has no messages", () => {
 		const context: AgentContext = {

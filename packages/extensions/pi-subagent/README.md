@@ -10,7 +10,7 @@ This package is independent from task-list extensions. It does not import Todo c
 pi install npm:@handy_wote/pi-subagent
 ```
 
-The extension registers `agent_start`, `agent_list`, `agent_output`, `agent_stop`, and `agent_resume`, plus the `/agents` command and `--subagent-concurrency` flag. Concurrency defaults to 4 and is capped at 8. Failed agents are never retried automatically.
+The extension registers `agent_start`, `agent_list`, `agent_output`, `agent_stop`, and `agent_resume`, plus the `/agents` command and `--subagent-concurrency` flag. In TUI mode `/agents` opens an interactive management view (list, live status detail, stop with `x`, resume with `r`); non-TUI modes keep the select-menu flow. Concurrency defaults to 4 and is capped at 8. Failed agents are never retried automatically.
 
 ## Agent Definitions
 
@@ -36,11 +36,19 @@ Definitions are resolved with `built-in < user < project` precedence. Project de
 
 Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification per agent, batched into a single follow-up when several agents finish within a short window. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit. Tool guidance directs the model to use one background batch when two or more independent tasks have clear ownership boundaries.
 
-`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks.
+`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks. Resume is session-scoped: follow-up work belongs to the current session, and the underlying state is removed when the session ends.
 
-State is stored under the pi agent directory in `subagents/`: the registry, JSONL transcripts, child sessions, prompts, and temporary worktrees. On reload, a queued child that may have spawned before its PID was persisted is found by the random `--session-id <agentId>` command-line argument and terminated before the record becomes interrupted. A surviving running child is identified by PID plus process start token, terminated, and confirmed gone before its record becomes interrupted. Process discovery and identity use `/proc` with a `ps` fallback on Unix and PowerShell on Windows. Recovery stops with an explicit error when a live process cannot be identified safely.
+## State Lifecycle
 
-Worktree isolation uses the persistent branch `pi-subagent/<agentId>`. Terminal cleanup removes the worktree checkout but retains the branch, so explicit resume can attach the same commits.
+State lives under the pi agent directory in `subagents/` (registry, JSONL transcripts, child sessions, prompts, and temporary worktrees) and is scoped to the parent session: it is created on session start and deleted on `session_shutdown` (children are terminated, then the session's records, transcripts, child sessions, prompts, and worktree branches are removed). Finished agents leave no history behind — the completion summary is already part of the main conversation.
+
+If the parent crashes, the next `initialize()` finds the leftover registry, terminates any orphan children (queued children are located by their random `--session-id <agentId>` argument; running children by PID plus process start token, with `/proc` and a `ps` fallback on Unix and PowerShell on Windows), and then clears the leftover state instead of resuming it. Recovery stops with an explicit error when a live process cannot be identified safely.
+
+## Worker Pool
+
+`/swarm` configures the worker model pool (an ordered snapshot persisted to `worker-models.json`). Toggle models with space, reorder with Alt+Up/Alt+Down (order is priority), then activate the trailing `[ Save pool ]` row to save and close; Escape cancels. Saving an empty selection clears the pool, after which subagents use the main-session model. Worker model assignment: agent definition `model` > pool order > main-session model. The first pool configuration injects coordinator behavior guidance for the session.
+
+Worktree isolation uses the branch `pi-subagent/<agentId>`, which is removed together with the rest of the session state on shutdown.
 
 ## Lifecycle Protocol
 
@@ -59,6 +67,6 @@ interface AgentLifecycleEvent {
 }
 ```
 
-The stable agent ID identifies the durable child session. A new run ID is generated for every start or resume and shared by that invocation's queued, running, and terminal events. Consumers may emit `{ version: 2, parentSessionId }` on `pi:agent:status-request` to request replay of active status. Replays retain the persisted event and run IDs. Metadata is transported unchanged and has no package-defined meaning.
+The stable agent ID identifies the durable child session within the current session. A new run ID is generated for every start or resume and shared by that invocation's queued, running, and terminal events. Consumers may emit `{ version: 2, parentSessionId }` on `pi:agent:status-request` to request replay of active status. Replays retain the persisted event and run IDs. Metadata is transported unchanged and has no package-defined meaning.
 
 Registry schema version 1 is not migrated. When encountered, its records are discarded and an empty version 2 registry is initialized; those old agents cannot be listed or resumed.

@@ -328,7 +328,7 @@ describe("AgentManager", () => {
 		expect(manager.getActiveCount()).toBe(0);
 	});
 
-	it("marks orphaned running records interrupted without restarting them", async () => {
+	it("clears leftover registry state on initialize without restarting orphaned records", async () => {
 		const root = temporaryDirectory();
 		const stateRoot = path.join(root, "state");
 		const now = new Date().toISOString();
@@ -357,14 +357,21 @@ describe("AgentManager", () => {
 			notified: false,
 			lifecycleEventId: "event-old",
 		};
+		fs.mkdirSync(orphan.childSessionDir, { recursive: true });
+		fs.mkdirSync(path.dirname(orphan.transcriptPath), { recursive: true });
+		fs.writeFileSync(orphan.transcriptPath, "stale\n");
 		const registry = new AgentRegistry(stateRoot, "parent-1");
 		await registry.save(orphan);
 		const manager = createManager(root);
 
 		await manager.initialize();
 
-		expect(manager.get(orphan.agentId)?.status).toBe("interrupted");
+		expect(manager.get(orphan.agentId)).toBeUndefined();
+		expect(manager.list()).toEqual([]);
 		expect(manager.getActiveCount()).toBe(0);
+		expect(fs.existsSync(orphan.transcriptPath)).toBe(false);
+		expect(fs.existsSync(orphan.childSessionDir)).toBe(false);
+		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(false);
 	});
 
 	it("terminates a surviving child before recovering a crashed parent registry", async () => {
@@ -379,7 +386,7 @@ describe("AgentManager", () => {
 		const manager = createManager(root);
 		await manager.initialize();
 
-		expect(manager.get(result.agentId)?.status).toBe("interrupted");
+		expect(manager.get(result.agentId)).toBeUndefined();
 		expect(processIsAlive(result.pid)).toBe(false);
 	});
 
@@ -404,7 +411,7 @@ describe("AgentManager", () => {
 			const manager = createManager(root);
 			await manager.initialize();
 
-			expect(manager.get(result.agentId)?.status).toBe("interrupted");
+			expect(manager.get(result.agentId)).toBeUndefined();
 		} finally {
 			if (processIsAlive(result.pid)) process.kill(result.pid, "SIGKILL");
 			for (let attempt = 0; attempt < 100 && processIsAlive(result.pid); attempt++)
@@ -458,7 +465,7 @@ describe("AgentManager", () => {
 
 		await manager.initialize();
 
-		expect(manager.get(record.agentId)?.status).toBe("interrupted");
+		expect(manager.get(record.agentId)).toBeUndefined();
 		expect(processIsAlive(child.pid)).toBe(false);
 	});
 
@@ -472,6 +479,62 @@ describe("AgentManager", () => {
 		await manager.shutdown();
 
 		expect((await started.completion).status).toBe("interrupted");
+	});
+
+	it("removes session state on destroy after children finish", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const manager = createManager(root);
+		await manager.initialize();
+		const started = await manager.start(definition, { task: "inspect", mode: "foreground" });
+		await started.completion;
+		expect(fs.existsSync(started.record.transcriptPath)).toBe(true);
+		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(true);
+
+		await manager.destroy();
+
+		expect(fs.existsSync(started.record.transcriptPath)).toBe(false);
+		expect(fs.existsSync(started.record.childSessionDir)).toBe(false);
+		expect(fs.existsSync(path.join(stateRoot, "prompts", `${started.record.agentId}.md`))).toBe(false);
+		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(false);
+		expect(manager.list()).toEqual([]);
+	});
+
+	it("removes the worktree branch on destroy", async () => {
+		const root = temporaryDirectory();
+		const repositoryPath = path.join(root, "repository");
+		fs.mkdirSync(repositoryPath);
+		const repository = fs.realpathSync(repositoryPath);
+		execFileSync("git", ["init"], { cwd: repository });
+		fs.writeFileSync(path.join(repository, "README.md"), "test\n");
+		execFileSync("git", ["add", "README.md"], { cwd: repository });
+		execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"], {
+			cwd: repository,
+		});
+		const manager = createManager(root, { defaultCwd: repository });
+		await manager.initialize();
+		const started = await manager.start(
+			{ ...definition, isolation: "worktree" },
+			{
+				task: "inspect",
+				mode: "foreground",
+			},
+		);
+		await started.completion;
+		const branch = `pi-subagent/${started.record.agentId}`;
+		const branchExists = (): boolean => {
+			try {
+				execFileSync("git", ["-C", repository, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		expect(branchExists()).toBe(true);
+
+		await manager.destroy();
+
+		expect(branchExists()).toBe(false);
 	});
 
 	it("re-publishes active status with the persisted event ID for recovery probes", async () => {

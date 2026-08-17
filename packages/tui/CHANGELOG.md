@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `copySelection` option to `TuiAltScreen` for host-injected clipboard copy with verified success; falls back to OSC 52 when omitted.
+
+### Fixed
+
+- Fixed wheel and viewport key input leaking into viewport scrolling while a non-search overlay is focused.
+- Fixed SGR mouse release handling: generic button release codes are now accepted for hyperlink clicks and selection copy instead of being ignored.
+
 ## [0.85.2] - 2026-08-14
 
 ## [0.85.1] - 2026-08-13

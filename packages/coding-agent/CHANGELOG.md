@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### New Features
+
+- **Model-level thinking levels** — Thinking levels are now derived from models.dev verified `effort` reasoning options per model; profile model overrides accept a `thinkingLevelMap`.
+
+### Added
+
+- Extension `sendUserMessage` (and `ReplacedSessionContext`) accepts `expandPromptTemplates` to dispatch extension commands and expand skill commands and prompt templates.
+- Tool output previews are truncated to 10 lines with an expand hint when collapsed.
+
+### Changed
+
+- Trust prompt, invalid-session error, and self-update output now use `APP_NAME` instead of hardcoded "pi".
+
+### Fixed
+
+- Fixed extension event-bus listener leaks: subscriptions are tracked per extension runtime and unsubscribed when the runtime is invalidated after session replacement or reload ([#7193](https://github.com/earendil-works/pi-mono/issues/7193)).
+- Fixed compaction summaries sharing cache and routing state with the main conversation: summarization requests now use a fresh session ID and `cacheRetention: "none"`.
+- Fixed RPC `bash` bypassing extension hooks: commands now emit `user_bash` events and honor extension-provided results and operations.
+- Fixed the system prompt cwd line missing a trailing newline, which could merge with following prompt sections.
+- Fixed fullscreen TUI copy reporting success when the system clipboard was not actually updated: the TUI now uses a host-injected clipboard implementation with verified success and falls back to OSC 52.
+
 ## [0.85.2] - 2026-08-14
 
 ### New Features

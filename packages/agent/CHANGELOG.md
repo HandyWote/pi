@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed proxied assistant streams losing tool-call content: `toolcall_end` proxy events now carry the completed `ToolCall` payload, and proxy request options forward `samplingParams`.
+
 ## [0.85.2] - 2026-08-14
 
 ### Added

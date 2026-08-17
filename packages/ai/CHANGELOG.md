@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Claude Opus 5 model knowledge (adaptive thinking, no temperature support) and a generated image-model catalog used by the OpenRouter images provider.
+- Added `samplingParams` to `StreamOptions` and `Model`: arbitrary sampling parameters (e.g. `top_p`, `top_k`, `min_p`, `repetition_penalty`) merged into the request body after named fields so custom OpenAI-compatible servers can receive parameters pi does not model. Only applied by OpenAI-compatible adapters.
+- Added `supportsFinishReason` compat flag: when a provider omits `finish_reason` from streamed responses, pi infers `stop` or `toolUse` from the streamed content instead of failing.
+- Added per-tool constrained-sampling configuration (`Tool.constrainedSampling`) with strict JSON-schema tool parameters across OpenAI completions/responses, Azure responses, Mistral, Anthropic, and Bedrock, gated by new `supportsStrictMode`/`supportsStrictTools` compat flags and a new `BedrockCompat` compat type.
+- Added a `namespace` field to `ToolCall` so OpenAI Responses namespaced function calls replay correctly.
+
+### Fixed
+
+- Fixed Anthropic streamed content blocks dropping text/thinking content carried on `content_block_start` events.
+- Fixed Bedrock credential precedence: a profile explicitly configured through the `profile` option or scoped `AWS_PROFILE` now wins over ambient `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` ([#6957](https://github.com/earendil-works/pi-mono/issues/6957)).
+- Fixed Bedrock stream failures lacking request metadata: failures now append a structured `bedrock_response_failure` diagnostic with status, error code, and request ID.
+- Fixed tool-call validation rejecting `null` values for optional properties: optional nulls are normalized out before schema validation.
+
 ## [0.85.2] - 2026-08-14
 
 ## [0.85.1] - 2026-08-13

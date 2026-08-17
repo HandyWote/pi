@@ -137,11 +137,20 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 				},
 			},
 		},
+		// 60f6a8034: claude-opus-5 is an adaptive-thinking model with no temperature
+		// support, same anthropic-messages compat as Opus 4.7/4.8.
 		{
 			id: "claude-opus-4.7-4.8",
 			match: {
-				ids: ["claude-opus-4-7", "claude-opus-4-8", "claude-opus-4.7", "claude-opus-4.8"],
-				prefixes: ["claude-opus-4-7-", "claude-opus-4-8-"],
+				ids: [
+					"claude-opus-4-7",
+					"claude-opus-4-8",
+					"claude-opus-4.7",
+					"claude-opus-4.8",
+					"claude-opus-5",
+					"claude-opus.5",
+				],
+				prefixes: ["claude-opus-4-7-", "claude-opus-4-8-", "claude-opus-5-"],
 			},
 			metadata: { reasoning: true },
 			group: CLAUDE_GROUP,

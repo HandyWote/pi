@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@handy_wote/pi-coding-agent";
+import { openAgentView } from "./agent-view.ts";
 import { discoverAgents } from "./agents.ts";
 import { approveProjectAgents } from "./approval.ts";
 import type { AgentManager } from "./manager.ts";
@@ -74,6 +75,17 @@ export function registerAgentsCommand(pi: ExtensionAPI, getManager: () => AgentM
 				);
 				lines.push(...records.map((record) => formatAgentRow(record, 120)));
 				ctx.ui.notify(lines.join("\n"), "info");
+				return;
+			}
+			if (ctx.mode === "tui") {
+				await openAgentView(ctx, {
+					manager,
+					definitions,
+					projectTrusted,
+					prompt: (title, placeholder) => ctx.ui.input(title, placeholder),
+					approve: (defs) => approveProjectAgents(defs, ctx),
+					notify: (message, type) => ctx.ui.notify(message, type),
+				});
 				return;
 			}
 			const definitionChoices = definitions.map(

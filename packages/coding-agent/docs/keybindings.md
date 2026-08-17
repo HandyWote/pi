@@ -163,6 +163,14 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 | `app.models.reorderUp` | `alt+up` | Move the selected model up in the cycle order |
 | `app.models.reorderDown` | `alt+down` | Move the selected model down in the cycle order |
 
+### Agent Management View
+
+Used inside the subagent management view (opened via `/agents`).
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.agent.resume` | `r` | Resume the selected subagent |
+
 ## Custom Configuration
 
 Create `~/.pi/agent/keybindings.json`:

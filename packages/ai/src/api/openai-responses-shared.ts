@@ -33,6 +33,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -84,10 +85,9 @@ export interface ConvertResponsesMessagesOptions {
 
 export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
+	supportsStrictMode?: boolean;
 	deferLoading?: boolean;
 }
-
-type OpenAIFunctionTool = Extract<OpenAITool, { type: "function" }>;
 
 // =============================================================================
 // Message conversion
@@ -170,10 +170,9 @@ export function convertResponsesMessages<TApi extends Api>(
 		} else if (msg.role === "assistant") {
 			const output: ResponseInput = [];
 			const assistantMsg = msg as AssistantMessage;
-			const isDifferentModel =
-				assistantMsg.model !== model.id &&
-				assistantMsg.provider === model.provider &&
-				assistantMsg.api === model.api;
+			const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+			const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
+			const isDifferentModel = isSameProviderAndApi && assistantMsg.model !== model.id;
 			let textBlockIndex = 0;
 
 			for (const block of msg.content) {
@@ -215,12 +214,15 @@ export function convertResponsesMessages<TApi extends Api>(
 						itemId = undefined;
 					}
 
+					const canReplayNamespace = isSameModel || options?.deferredTools?.has(toolCall.name) === true;
+
 					output.push({
 						type: "function_call",
 						id: itemId,
 						call_id: callId,
 						name: toolCall.name,
 						arguments: JSON.stringify(toolCall.arguments),
+						...(canReplayNamespace && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
 					});
 				}
 			}
@@ -304,17 +306,26 @@ export function convertResponsesMessages<TApi extends Api>(
 // =============================================================================
 
 export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
-	const strict = options?.strict === undefined ? false : options.strict;
-	return tools.map(
-		(tool): OpenAIFunctionTool => ({
+	const defaultStrict = options?.strict === undefined ? false : options.strict;
+	const supportsStrictMode = options?.supportsStrictMode ?? true;
+
+	return tools.map((tool) => {
+		const constrainedStrict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode);
+		const strict = constrainedStrict ?? defaultStrict;
+		const functionTool: Omit<Extract<OpenAITool, { type: "function" }>, "strict"> & {
+			strict?: Extract<OpenAITool, { type: "function" }>["strict"];
+		} = {
 			type: "function",
 			name: tool.name,
 			description: tool.description,
-			parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
-			strict,
+			parameters: getJsonSchemaToolParameters(tool, strict === true) as Record<string, unknown>,
 			...(options?.deferLoading ? { defer_loading: true } : {}),
-		}),
-	);
+		};
+		if (supportsStrictMode) {
+			functionTool.strict = strict;
+		}
+		return functionTool as OpenAITool;
+	});
 }
 
 // =============================================================================
@@ -372,6 +383,7 @@ export async function processResponsesStream<TApi extends Api>(
 				id: `${item.call_id}|${item.id}`,
 				name: item.name,
 				arguments: {},
+				...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
 				partialJson: item.arguments || "",
 			};
 			output.content.push(block);
@@ -559,6 +571,7 @@ export async function processResponsesStream<TApi extends Api>(
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall") {
 				slot.block.arguments = parseStreamingJson(item.arguments || slot.block.partialJson || "{}");
+				if (item.namespace !== undefined) slot.block.namespace = item.namespace;
 				// Finalize in-place and strip the scratch buffer so replay only
 				// carries parsed arguments.
 				delete (slot.block as { partialJson?: string }).partialJson;

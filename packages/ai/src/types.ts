@@ -65,6 +65,14 @@ export interface ProviderResponse {
 
 export interface StreamOptions {
 	temperature?: number;
+	/**
+	 * Arbitrary sampling parameters merged into the request body as-is, after the named request
+	 * fields, so keys here override them. Lets custom OpenAI-compatible servers (llama.cpp, vLLM,
+	 * SGLang, ...) receive parameters pi does not model, e.g. `top_p`, `top_k`, `min_p`,
+	 * `repetition_penalty`. Merged over `Model.samplingParams` per key. Only applied by
+	 * OpenAI-compatible adapters (completions, responses, Azure responses); other APIs ignore it.
+	 */
+	samplingParams?: Record<string, unknown>;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
@@ -311,6 +319,8 @@ export interface ToolCall {
 	name: string;
 	arguments: Record<string, any>;
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
+	/** OpenAI Responses namespace for calls to dynamically loaded or namespaced tools. */
+	namespace?: string;
 }
 
 export interface Usage {
@@ -406,6 +416,8 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	name: string;
 	description: string;
 	parameters: TParameters;
+	/** Constrained-sampling configuration for this tool. `false` opts out of any provider default. */
+	constrainedSampling?: false | { type: "json_schema"; strict: "prefer" | "require" };
 }
 
 export interface Context {
@@ -449,6 +461,8 @@ export interface OpenAICompletionsCompat {
 	supportsReasoningEffort?: boolean;
 	/** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
 	supportsUsageInStreaming?: boolean;
+	/** Whether streamed responses include `finish_reason`. When false, pi infers `stop` or `toolUse` when the stream ends. Default: true. */
+	supportsFinishReason?: boolean;
 	/** Which field to use for max tokens. Default: auto-detected from URL. */
 	maxTokensField?: "max_completion_tokens" | "max_tokens";
 	/** Whether tool results require the `name` field. Default: auto-detected from URL. */
@@ -505,6 +519,8 @@ export interface OpenAIResponsesCompat {
 	sessionAffinityFormat?: SessionAffinityFormat;
 	/** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
 	supportsLongCacheRetention?: boolean;
+	/** Whether the provider supports strict JSON-schema function tools. Defaults are API-specific; generated OpenAI models enable it explicitly. */
+	supportsStrictMode?: boolean;
 	/** Whether the model supports client-executed tool search for deferred tools. Default: false. */
 	supportsToolSearch?: boolean;
 }
@@ -555,12 +571,20 @@ export interface AnthropicMessagesCompat {
 	forceAdaptiveThinking?: boolean;
 	/** Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: false. */
 	allowEmptySignature?: boolean;
+	/** Whether the provider supports Anthropic strict tool schemas. Default: false; generated Anthropic models enable it explicitly. */
+	supportsStrictTools?: boolean;
 	/**
 	 * Whether the provider supports deferred tools loaded by `tool_reference`
 	 * blocks in tool results. Default: true for first-party Anthropic models
 	 * except Haiku and models older than Claude 4.5; false for other providers.
 	 */
 	supportsToolReferences?: boolean;
+}
+
+/** Compatibility settings for Amazon Bedrock models. */
+export interface BedrockCompat {
+	/** Whether the model supports Bedrock strict tool schemas. Default: false. */
+	supportsStrictMode?: boolean;
 }
 
 /**
@@ -684,6 +708,8 @@ export interface Model<TApi extends Api> {
 	cost: ModelCost;
 	contextWindow: number;
 	maxTokens: number;
+	/** Default sampling parameters for this model. See {@link StreamOptions.samplingParams}; per-request keys override these. */
+	samplingParams?: Record<string, unknown>;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
@@ -692,7 +718,9 @@ export interface Model<TApi extends Api> {
 			? OpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? AnthropicMessagesCompat
-				: never;
+				: TApi extends "bedrock-converse-stream"
+					? BedrockCompat
+					: never;
 }
 
 export interface ImagesModel<TApi extends ImagesApi>

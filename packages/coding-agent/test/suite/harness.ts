@@ -167,7 +167,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		? await createTestExtensionsResult(options.extensionFactories, tempDir)
 		: undefined;
 	const resourceLoader =
-		options.resourceLoader ?? createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
+		options.resourceLoader ??
+		createTestResourceLoader(
+			extensionsResult ? { extensionsResult, extensionInputs: options.extensionFactories, cwd: tempDir } : undefined,
+		);
 
 	const session = new AgentSession({
 		agent,

@@ -115,10 +115,14 @@ export async function createTestExtensionsResult(
 
 export interface CreateTestResourceLoaderOptions {
 	extensionsResult?: LoadExtensionsResult;
+	/** Extension factories to re-run on reload, mirroring the real resource loader rebuilding extensions. */
+	extensionInputs?: TestExtensionInput[];
+	cwd?: string;
 }
 
 export function createTestResourceLoader(options: CreateTestResourceLoaderOptions = {}): ResourceLoader {
-	const extensionsResult = options.extensionsResult ?? {
+	const cwd = options.cwd ?? process.cwd();
+	let extensionsResult = options.extensionsResult ?? {
 		extensions: [],
 		errors: [],
 		runtime: createExtensionRuntime(),
@@ -133,7 +137,11 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		getSystemPrompt: () => undefined,
 		getAppendSystemPrompt: () => [],
 		extendResources: () => {},
-		reload: async () => {},
+		reload: async () => {
+			if (options.extensionInputs) {
+				extensionsResult = await createTestExtensionsResult(options.extensionInputs, cwd);
+			}
+		},
 	};
 }
 

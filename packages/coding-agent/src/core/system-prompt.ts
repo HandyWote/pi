@@ -66,7 +66,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			prompt += formatSkillsForPrompt(skills);
 		}
 
-		prompt += `\nCurrent working directory: ${promptCwd}`;
+		prompt += `\nCurrent working directory: ${promptCwd}\n`;
 
 		return prompt;
 	}
@@ -156,7 +156,7 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 		prompt += formatSkillsForPrompt(skills);
 	}
 
-	prompt += `\nCurrent working directory: ${promptCwd}`;
+	prompt += `\nCurrent working directory: ${promptCwd}\n`;
 
 	return prompt;
 }

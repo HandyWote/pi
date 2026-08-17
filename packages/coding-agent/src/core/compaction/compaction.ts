@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@handy_wote/pi-agent-core";
-import { contentText, type RetryCallbacks, type RetryPolicy, retryAssistantCall } from "@handy_wote/pi-ai";
+import { contentText, type RetryCallbacks, type RetryPolicy, retryAssistantCall, uuidv7 } from "@handy_wote/pi-ai";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@handy_wote/pi-ai/compat";
 import { completeSimple } from "@handy_wote/pi-ai/compat";
 import { convertToLlm, THRESHOLD_AUTO_COMPACTION_CONTINUATION_TEXT } from "../messages.ts";
@@ -563,6 +563,9 @@ function createSummarizationOptions(
  * `terminated`, socket close) honor the configured retry policy instead of failing
  * the whole compaction on the first attempt. Deterministic errors and aborts return
  * immediately (see {@link retryAssistantCall}).
+ *
+ * Summaries are standalone requests, so isolate routing and avoid cache writes that
+ * cannot be reused.
  */
 export async function completeSummarization(
 	model: Model<any>,
@@ -572,9 +575,16 @@ export async function completeSummarization(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 ): Promise<AssistantMessage> {
+	const requestOptions: SimpleStreamOptions = {
+		...options,
+		cacheRetention: "none",
+		sessionId: uuidv7(),
+	};
 	const produce = async (): Promise<AssistantMessage> =>
-		streamFn ? (await streamFn(model, context, options)).result() : completeSimple(model, context, options);
-	return retryAssistantCall(produce, retry, options.signal, callbacks);
+		streamFn
+			? (await streamFn(model, context, requestOptions)).result()
+			: completeSimple(model, context, requestOptions);
+	return retryAssistantCall(produce, retry, requestOptions.signal, callbacks);
 }
 
 /**

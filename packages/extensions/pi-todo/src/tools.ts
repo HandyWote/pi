@@ -122,7 +122,9 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 		async execute(_toolCallId, params) {
 			const list = await runtime.update(params.id, { ...params });
 			const task = requireTask(list, params.id);
-			return result(`${params.id} is ${task.status} at revision ${task.revision}.`, task);
+			const cleared = list.tasks.length > 0 && list.tasks.every((candidate) => candidate.status === "completed");
+			const note = cleared ? " All tasks completed; list cleared." : "";
+			return result(`${params.id} is ${task.status} at revision ${task.revision}.${note}`, task);
 		},
 	});
 

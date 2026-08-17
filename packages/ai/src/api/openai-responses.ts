@@ -67,6 +67,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 		supportsDeveloperRole: model.compat?.supportsDeveloperRole ?? true,
 		sessionAffinityFormat: model.compat?.sessionAffinityFormat ?? detectSessionAffinityFormat(model),
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		supportsStrictMode: model.compat?.supportsStrictMode ?? false,
 		supportsToolSearch: model.compat?.supportsToolSearch ?? false,
 	};
 }
@@ -262,7 +263,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	}
 
 	if (toolPlacement.immediate.length > 0) {
-		params.tools = convertResponsesTools(toolPlacement.immediate);
+		params.tools = convertResponsesTools(toolPlacement.immediate, {
+			supportsStrictMode: compat.supportsStrictMode,
+		});
 	}
 
 	if (options?.toolChoice !== undefined) {
@@ -290,6 +293,11 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 			};
 		}
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
+	}
+
+	// Last so custom keys override the named request fields.
+	if (options?.samplingParams) {
+		Object.assign(params, options.samplingParams);
 	}
 
 	return params;

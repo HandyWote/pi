@@ -126,4 +126,50 @@ describe("validateToolArguments", () => {
 			expect(() => validateToolArguments(tool, toolCall)).toThrow("Validation failed");
 		}
 	});
+
+	it("treats null as omission for optional non-nullable properties", () => {
+		const tool: Tool = {
+			name: "echo",
+			description: "Echo tool",
+			parameters: Type.Object({
+				path: Type.String(),
+				offset: Type.Optional(Type.Number()),
+				nullable: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+				metadata: Type.Object({ enabled: Type.Optional(Type.Boolean()) }),
+			}),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "tool-1",
+			name: "echo",
+			arguments: { path: "file.txt", offset: null, nullable: null, metadata: { enabled: null } },
+		};
+
+		expect(validateToolArguments(tool, toolCall)).toEqual({
+			path: "file.txt",
+			// The fork's AJV-style coercion converts null to "" for the nullable string union arm.
+			nullable: "",
+			metadata: {},
+		});
+	});
+
+	it("preserves optional nulls whose referenced schema is nullable", () => {
+		const tool: Tool = {
+			name: "echo",
+			description: "Echo tool",
+			parameters: {
+				type: "object",
+				properties: { value: { $ref: "#/$defs/value" } },
+				$defs: { value: { anyOf: [{ type: "number" }, { type: "null" }] } },
+			} as Tool["parameters"],
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "tool-1",
+			name: "echo",
+			arguments: { value: null },
+		};
+
+		expect(validateToolArguments(tool, toolCall)).toEqual({ value: null });
+	});
 });

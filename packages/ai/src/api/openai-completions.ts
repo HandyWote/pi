@@ -41,6 +41,7 @@ import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { buildBaseOptions, clampReasoning, MIN_ANSWER_TOKENS } from "./simple-options.ts";
@@ -482,10 +483,13 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			if (output.stopReason === "aborted") {
 				throw new Error("Request was aborted");
 			}
+			if (!hasFinishReason && !compat.supportsFinishReason) {
+				output.stopReason = output.content.some((block) => block.type === "toolCall") ? "toolUse" : "stop";
+			}
 			if (output.stopReason === "error") {
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
-			if (!hasFinishReason) {
+			if (compat.supportsFinishReason && !hasFinishReason) {
 				throw new Error("Stream ended without finish_reason");
 			}
 
@@ -766,6 +770,11 @@ function buildParams(
 			if (routing.order) gatewayOptions.order = routing.order;
 			(params as any).providerOptions = { gateway: gatewayOptions };
 		}
+	}
+
+	// Last so custom keys override the named request fields.
+	if (options?.samplingParams) {
+		Object.assign(params, options.samplingParams);
 	}
 
 	return params;
@@ -1214,19 +1223,23 @@ function convertTools(
 	compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
 	return tools.map((tool) => {
-		const schema = tool.parameters as Tool["parameters"] & { type?: unknown; required?: unknown };
-		const parameters =
-			compat.requiresToolSchemaRequiredArray && schema.type === "object" && schema.required === undefined
-				? { ...tool.parameters, required: [] }
-				: tool.parameters;
+		const strict = resolveJsonSchemaStrictSampling(tool, compat.supportsStrictMode !== false);
+		const parameters = getJsonSchemaToolParameters(tool, strict) as Tool["parameters"] & {
+			type?: unknown;
+			required?: unknown;
+		};
+		const resolvedParameters =
+			compat.requiresToolSchemaRequiredArray && parameters.type === "object" && parameters.required === undefined
+				? { ...parameters, required: [] }
+				: parameters;
 		return {
 			type: "function",
 			function: {
 				name: tool.name,
 				description: tool.description,
-				parameters: parameters as any, // TypeBox already generates JSON Schema
+				parameters: resolvedParameters as any, // TypeBox already generates JSON Schema
 				// Only include strict if provider supports it. Some reject unknown fields.
-				...(compat.supportsStrictMode !== false && { strict: false }),
+				...(compat.supportsStrictMode !== false && { strict: strict ?? false }),
 			},
 		};
 	});
@@ -1357,6 +1370,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		supportsReasoningEffort:
 			!isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia && !isAntLing,
 		supportsUsageInStreaming: true,
+		supportsFinishReason: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
@@ -1407,6 +1421,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+		supportsFinishReason: model.compat.supportsFinishReason ?? detected.supportsFinishReason,
 		maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
 		requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
 		requiresAssistantAfterToolResult:

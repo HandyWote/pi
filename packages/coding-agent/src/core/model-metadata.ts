@@ -5,6 +5,7 @@ import {
 	type ModelCost,
 	type RegistryDisplayGroup,
 } from "@handy_wote/pi-ai";
+import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
 import type { DiscoveredProfileModel } from "./profile-discovery.ts";
 import {
 	DEFAULT_CONTEXT_WINDOW,
@@ -27,6 +28,7 @@ interface ModelsDevModel {
 	name?: string;
 	limit?: { context?: number; output?: number };
 	reasoning?: boolean;
+	reasoning_options?: ModelsDevReasoningOption[];
 	attachment?: boolean;
 	tool_call?: boolean;
 	cost?: {
@@ -146,6 +148,7 @@ function enrichOne(
 		.filter((value): value is number => typeof value === "number" && value > 0)
 		.sort((a, b) => a - b);
 	const registryGroup = lookupModelCompatOverlay(registrySources, discovered.id)?.group;
+	const thinkingLevelMap = best.reasoning_options ? getEffortThinkingLevelMap(best.reasoning_options) : undefined;
 
 	return {
 		...discovered,
@@ -158,6 +161,7 @@ function enrichOne(
 		supportsToolCall: matches.some((match) => match.model.tool_call === true),
 		metadataSource: matches.some((match) => match.isOfficial) ? "official" : "community",
 		cost: modelsDevCost(best.cost),
+		...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		group: registryGroup ?? inferModelDisplayGroup(discovered.id, best.name ?? discovered.name),
 		available: true,
 	};

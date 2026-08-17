@@ -111,6 +111,47 @@ describe("createProfileProvider", () => {
 		expect(model.thinkingLevelMap).toEqual({ low: null, high: "custom" });
 	});
 
+	it("merges thinkingLevelMap as model base, registry overlay, then manual API override", () => {
+		const registry = compileCompatRegistry({
+			version: 1,
+			families: [
+				{
+					id: "deepseek-v4-pro",
+					match: { ids: ["deepseek-v4-pro"] },
+					apis: {
+						"openai-completions": {
+							thinkingLevelMap: { high: "high", max: "max" },
+						},
+					},
+				},
+			],
+		});
+		const source = userModel("deepseek-v4-pro", {
+			apiPreference: "openai-completions",
+			thinkingLevelMap: { off: null, low: "low", high: "high" },
+			overrides: {
+				apis: {
+					"openai-completions": {
+						thinkingLevelMap: { high: "custom" },
+					},
+				},
+			},
+		});
+		const model = createProfileProvider(profile([source]), [registry]).getModels()[0] as Model<"openai-completions">;
+
+		expect(model.thinkingLevelMap).toEqual({ off: null, low: "low", high: "custom", max: "max" });
+	});
+
+	it("carries the enriched model thinkingLevelMap through when nothing overrides it", () => {
+		const source = userModel("deepseek-v4-pro", {
+			apiPreference: "openai-completions",
+			thinkingLevelMap: { off: null, high: "high", max: "max" },
+		});
+		const model = createProfileProvider(profile([source]), []).getModels()[0] as Model<"openai-completions">;
+
+		expect(model.thinkingLevelMap).toEqual({ off: null, high: "high", max: "max" });
+	});
+
 	it("does not let UI-only fuzzy groups activate registry compat", () => {
 		const registry = compileCompatRegistry({
 			version: 1,

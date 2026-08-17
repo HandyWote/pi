@@ -35,7 +35,11 @@ function profileModelToModel(
 	const manualApi = manual?.apis?.[api];
 	const baseCompat = api === "openai-completions" ? { supportsDeveloperRole: false } : undefined;
 	const compat = { ...baseCompat, ...overlay?.compat, ...manualApi?.compat };
-	const thinkingLevelMap = { ...overlay?.thinkingLevelMap, ...manualApi?.thinkingLevelMap };
+	const thinkingLevelMap = {
+		...userModel.thinkingLevelMap,
+		...overlay?.thinkingLevelMap,
+		...manualApi?.thinkingLevelMap,
+	};
 	const cost: ModelCost = { ...ZERO_COST, ...userModel.cost, ...metadata?.cost, ...manual?.cost };
 
 	return {

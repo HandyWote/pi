@@ -75,6 +75,104 @@ describe("enrichWithModelsDev", () => {
 			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
 		});
 	});
+
+	it("derives thinkingLevelMap from the official provider's effort options", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							deepseek: {
+								models: {
+									"deepseek-v4-pro": {
+										name: "DeepSeek V4 Pro",
+										reasoning: true,
+										reasoning_options: [{ type: "effort", values: ["high", "max"] }],
+									},
+								},
+							},
+							"community-provider": {
+								models: {
+									"deepseek-v4-pro": {
+										name: "DeepSeek V4 Pro",
+										reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+									},
+								},
+							},
+						}),
+						{ status: 200 },
+					),
+			),
+		);
+		const result = await enrichWithModelsDev([{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }]);
+		expect(result[0].thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: null,
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: "max",
+		});
+	});
+
+	it("maps none to off and drops unsupported effort levels", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							openai: {
+								models: {
+									"gpt-test": {
+										name: "GPT Test",
+										reasoning_options: [{ type: "effort", values: ["none", "low", "high"] }],
+									},
+								},
+							},
+						}),
+						{ status: 200 },
+					),
+			),
+		);
+		const result = await enrichWithModelsDev([{ id: "gpt-test", name: "gpt-test" }]);
+		expect(result[0].thinkingLevelMap).toEqual({
+			off: "none",
+			minimal: null,
+			low: "low",
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: null,
+		});
+	});
+
+	it("leaves thinkingLevelMap unset when only toggle reasoning options exist", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							openai: {
+								models: {
+									"gpt-test": {
+										name: "GPT Test",
+										reasoning: true,
+										reasoning_options: [{ type: "toggle" }],
+									},
+								},
+							},
+						}),
+						{ status: 200 },
+					),
+			),
+		);
+		const result = await enrichWithModelsDev([{ id: "gpt-test", name: "gpt-test" }]);
+		expect(result[0].thinkingLevelMap).toBeUndefined();
+	});
 });
 
 describe("mergeProfileModels", () => {

@@ -1,6 +1,12 @@
 /** Profile types for user-defined gateway connections and model preferences. */
 
-import type { ModelCost, RegistryApi, RegistryApiOverlays, RegistryDisplayGroup } from "@handy_wote/pi-ai";
+import type {
+	ModelCost,
+	RegistryApi,
+	RegistryApiOverlays,
+	RegistryDisplayGroup,
+	ThinkingLevelMap,
+} from "@handy_wote/pi-ai";
 
 export type ProfileProtocol = "openai" | "anthropic";
 
@@ -16,6 +22,7 @@ export interface ProfileModelOverrides {
 	supportsVision?: boolean;
 	supportsToolCall?: boolean;
 	cost?: Partial<ModelCost>;
+	thinkingLevelMap?: Partial<ThinkingLevelMap>;
 	apis?: RegistryApiOverlays;
 }
 
@@ -29,6 +36,8 @@ export interface UserModel {
 	supportsVision: boolean;
 	supportsToolCall: boolean;
 	metadataSource: MetadataSource;
+	/** Maps pi thinking levels to provider/model-specific values (from models.dev effort options). */
+	thinkingLevelMap?: Partial<ThinkingLevelMap>;
 	cost?: ModelCost;
 	group?: RegistryDisplayGroup;
 	apiPreference?: ProfileApiPreference;

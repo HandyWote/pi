@@ -6,9 +6,9 @@ import {
 	getAgentDir,
 } from "@handy_wote/pi-coding-agent";
 import { registerAgentsCommand } from "./command.ts";
-import { AgentManager, type AgentManagerOptions } from "./manager.ts";
+import { AgentManager, type AgentManagerOptions, readWorkerModels } from "./manager.ts";
 import { registerAgentPanel, registerNotificationCard } from "./render.ts";
-import { registerSwarmCommand } from "./swarm.ts";
+import { injectCoordinatorGuidance, registerSwarmCommand } from "./swarm.ts";
 import { registerAgentTools } from "./tools.ts";
 import {
 	AGENT_PROTOCOL_CHANNEL,
@@ -98,7 +98,17 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		let currentContext: ExtensionContext | undefined;
 		let notificationBatch: TerminalNotification[] = [];
 		let notificationTimer: ReturnType<typeof setTimeout> | undefined;
+		let coordinatorGuidanceInjected = false;
 		const notificationDebounceMs = Math.max(0, options.notificationDebounceMs ?? NOTIFICATION_DEBOUNCE_MS);
+
+		// The coordinator rules belong to the session: a session that starts with
+		// an existing pool gets them at start, one that configures the pool later
+		// gets them on the first save. Either way exactly once per session.
+		const ensureCoordinatorGuidance = () => {
+			if (coordinatorGuidanceInjected) return;
+			coordinatorGuidanceInjected = true;
+			injectCoordinatorGuidance(pi);
+		};
 
 		const updateStatus = () => {
 			if (!currentContext) return;
@@ -169,6 +179,8 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 				await next.initialize();
 				manager = next;
 				updateStatus();
+				const pool = await readWorkerModels(manager.rootDir);
+				if (pool.length > 0) ensureCoordinatorGuidance();
 			} catch (error: unknown) {
 				manager = undefined;
 				ctx.ui.notify(`Cannot restore subagents: ${error instanceof Error ? error.message : error}`, "error");
@@ -194,7 +206,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		});
 		registerAgentTools(pi, () => manager);
 		registerAgentsCommand(pi, () => manager);
-		registerSwarmCommand(pi, () => manager);
+		registerSwarmCommand(pi, () => manager, ensureCoordinatorGuidance);
 		registerNotificationCard(pi);
 	};
 }

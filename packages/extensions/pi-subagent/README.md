@@ -46,7 +46,7 @@ If the parent crashes, the next `initialize()` finds the leftover registry, term
 
 ## Worker Pool
 
-`/swarm` configures the worker model pool (an ordered snapshot persisted to `worker-models.json`). Toggle models with space, reorder with Alt+Up/Alt+Down (order is priority), then activate the trailing `[ Save pool ]` row to save and close; Escape cancels. Saving an empty selection clears the pool, after which subagents use the main-session model. Worker model assignment: agent definition `model` > pool order > main-session model. The first pool configuration injects coordinator behavior guidance for the session.
+`/swarm` configures the worker model pool (an ordered snapshot persisted to `worker-models.json`). Toggle models with space, reorder with Alt+Up/Alt+Down (order is priority), then activate the trailing `[ Save pool ]` row to save and close; Escape cancels. Saving an empty selection clears the pool, after which subagents use the main-session model. Worker model assignment: agent definition `model` > pool order > main-session model. The pool is shared configuration, not session state: it survives session shutdown and is picked up by future sessions. Each session that has a pool receives the coordinator behavior guidance exactly once — at session start when the pool already exists, otherwise at first save.
 
 Worktree isolation uses the branch `pi-subagent/<agentId>`, which is removed together with the rest of the session state on shutdown.
 

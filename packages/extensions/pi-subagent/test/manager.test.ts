@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentManager } from "../src/manager.ts";
+import { AgentManager, getWorkerModelsPath, writeWorkerModels } from "../src/manager.ts";
 import { AgentRegistry } from "../src/registry.ts";
 import { type AgentDefinition, type AgentLifecycleEvent, type AgentRecord, emptyUsage } from "../src/types.ts";
 import { WorktreeService } from "../src/worktree.ts";
@@ -498,6 +498,20 @@ describe("AgentManager", () => {
 		expect(fs.existsSync(path.join(stateRoot, "prompts", `${started.record.agentId}.md`))).toBe(false);
 		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(false);
 		expect(manager.list()).toEqual([]);
+	});
+
+	it("keeps the worker pool snapshot on destroy", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const manager = createManager(root);
+		await manager.initialize();
+		await writeWorkerModels(stateRoot, [{ provider: "provider", id: "model", label: "Model" }]);
+		expect(fs.existsSync(getWorkerModelsPath(stateRoot))).toBe(true);
+
+		await manager.destroy();
+
+		// The pool is shared configuration, not session state: it survives shutdown.
+		expect(fs.existsSync(getWorkerModelsPath(stateRoot))).toBe(true);
 	});
 
 	it("removes the worktree branch on destroy", async () => {

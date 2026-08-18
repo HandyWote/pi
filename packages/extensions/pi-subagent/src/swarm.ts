@@ -406,8 +406,18 @@ export function registerSwarmCommand(pi: ExtensionAPI, getManager: () => AgentMa
 			}
 			ctx.ui.notify(`Worker pool saved: ${formatPoolSummary(selected)}`, "info");
 			if (existing.length === 0) {
-				// First pool configuration: establish coordinator behavior for the session.
-				pi.sendUserMessage(COORDINATOR_GUIDANCE);
+				// First pool configuration: establish coordinator behavior for the
+				// session. A custom-role message (not a user message) keeps the rules
+				// in model context for every subsequent turn without triggering a
+				// turn or being mistaken for a user execution request.
+				pi.sendMessage(
+					{
+						customType: "pi-subagent-guidance",
+						content: COORDINATOR_GUIDANCE,
+						display: false,
+					},
+					{ deliverAs: "nextTurn" },
+				);
 			}
 		},
 	});

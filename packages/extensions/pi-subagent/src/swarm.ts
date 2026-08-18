@@ -368,7 +368,27 @@ function workerModelCandidates(ctx: ExtensionCommandContext): WorkerModelRef[] {
 	return refs;
 }
 
-export function registerSwarmCommand(pi: ExtensionAPI, getManager: () => AgentManager | undefined): void {
+/**
+ * Deliver the coordinator guidance for this session as a hidden custom-role
+ * message queued for the next explicit prompt (never as a user message, which
+ * would trigger a turn and trip pi-todo's auto-plan heuristic).
+ */
+export function injectCoordinatorGuidance(pi: ExtensionAPI): void {
+	pi.sendMessage(
+		{
+			customType: "pi-subagent-guidance",
+			content: COORDINATOR_GUIDANCE,
+			display: false,
+		},
+		{ deliverAs: "nextTurn" },
+	);
+}
+
+export function registerSwarmCommand(
+	pi: ExtensionAPI,
+	getManager: () => AgentManager | undefined,
+	onFirstPoolSave?: () => void,
+): void {
 	pi.registerCommand("swarm", {
 		description: "Configure the worker model pool and coordinator behavior",
 		handler: async (_args, ctx) => {
@@ -406,18 +426,10 @@ export function registerSwarmCommand(pi: ExtensionAPI, getManager: () => AgentMa
 			}
 			ctx.ui.notify(`Worker pool saved: ${formatPoolSummary(selected)}`, "info");
 			if (existing.length === 0) {
-				// First pool configuration: establish coordinator behavior for the
-				// session. A custom-role message (not a user message) keeps the rules
-				// in model context for every subsequent turn without triggering a
-				// turn or being mistaken for a user execution request.
-				pi.sendMessage(
-					{
-						customType: "pi-subagent-guidance",
-						content: COORDINATOR_GUIDANCE,
-						display: false,
-					},
-					{ deliverAs: "nextTurn" },
-				);
+				// First pool configuration of this session: establish coordinator
+				// behavior. Sessions that start with an existing pool receive the
+				// guidance at session start instead (see index.ts).
+				onFirstPoolSave?.();
 			}
 		},
 	});

@@ -521,8 +521,8 @@ export class AgentManager {
 			await this.deleteBranchBestEffort(record);
 		}
 		await fs.promises.rm(this.registry.registryPath, { force: true });
-		// The pool snapshot is part of the session's swarm configuration.
-		await fs.promises.rm(getWorkerModelsPath(this.rootDir), { force: true });
+		// The worker-pool snapshot is shared configuration, not session state;
+		// it survives shutdown so the pool does not reset on every exit.
 		// Remove now-empty session directories. rmdir only succeeds when a directory
 		// is empty, so parallel sessions sharing the root keep their own state.
 		for (const directory of ["transcripts", "sessions", "prompts", "registries", "worktrees", ""]) {

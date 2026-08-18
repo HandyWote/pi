@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-18
+
+### Fixed
+
+- Fixed the `/swarm` worker pool being deleted on session shutdown: the pool snapshot is shared configuration and now survives exit, and sessions that start with an existing pool receive the coordinator guidance at session start ([#5](https://github.com/HandyWote/pi/pull/5)).
+
 ## [0.4.0] - 2026-08-18
 
 ### Added

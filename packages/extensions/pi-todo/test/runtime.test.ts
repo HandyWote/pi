@@ -177,6 +177,7 @@ describe("TodoRuntime recovery", () => {
 		const runtime = new TodoRuntime(environment.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
 		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
+		const listId = runtime.getListId();
 		await runtime.injectDigest("followUp");
 		const queued = environment.messages[0];
 		const resolver = queued?.options?.queue?.resolve;
@@ -191,7 +192,7 @@ describe("TodoRuntime recovery", () => {
 		await runtime.claim("B");
 		await runtime.update("B", { status: "completed" });
 		expect(await resolver(new AbortController().signal)).toBeUndefined();
-		expect(environment.cancelledMessages).toContain(`pi-todo:session-1:${runtime.getListId()}`);
+		expect(environment.cancelledMessages).toContain(`pi-todo:session-1:${listId}`);
 		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
 		expect(environment.messages).toHaveLength(1);
 	});
@@ -211,6 +212,32 @@ describe("TodoRuntime recovery", () => {
 		await runtime.update("A", { status: "completed" });
 		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
 		expect(environment.messages).toHaveLength(1);
+	});
+
+	it("auto-clears the list once every task is completed and still returns the final document", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Ship", [
+			{ id: "A", subject: "Task A", depends_on: [] },
+			{ id: "B", subject: "Task B", depends_on: [] },
+		]);
+		const listId = runtime.getListId();
+		if (!listId) throw new Error("Missing list id");
+
+		await runtime.claim("A");
+		const partial = await runtime.update("A", { status: "completed" });
+		expect(partial.tasks.some((task) => task.status !== "completed")).toBe(true);
+		expect(runtime.getListId()).toBe(listId);
+
+		await runtime.claim("B");
+		const final = await runtime.update("B", { status: "completed" });
+		expect(final.tasks.map((task) => task.id)).toEqual(["A", "B"]);
+		expect(final.tasks.every((task) => task.status === "completed")).toBe(true);
+		expect(runtime.getListId()).toBeUndefined();
+		expect(await runtime.view()).toBeUndefined();
+		expect(bindingEntry(environment).list_id).toBeNull();
+		await expect(runtime.store.read(listId)).rejects.toThrow("does not exist");
 	});
 
 	it("preserves a live external owner when it re-announces matching claim evidence", async () => {

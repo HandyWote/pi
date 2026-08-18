@@ -46,6 +46,7 @@ export interface AppKeybindings {
 	"app.models.toggleProvider": true;
 	"app.models.reorderUp": true;
 	"app.models.reorderDown": true;
+	"app.agent.resume": true;
 	"app.tree.filter.default": true;
 	"app.tree.filter.noTools": true;
 	"app.tree.filter.userOnly": true;
@@ -175,6 +176,10 @@ export const KEYBINDINGS = {
 	"app.models.reorderDown": {
 		defaultKeys: "alt+down",
 		description: "Move model down in order",
+	},
+	"app.agent.resume": {
+		defaultKeys: "r",
+		description: "Resume selected subagent",
 	},
 	"app.tree.filter.default": {
 		defaultKeys: "ctrl+d",

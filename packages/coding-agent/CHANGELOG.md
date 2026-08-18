@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `app.agent.resume` keybinding (default `r`), used by the pi-subagent agent management view to resume a selected subagent.
+
 ## [0.85.3] - 2026-08-17
 
 ### New Features

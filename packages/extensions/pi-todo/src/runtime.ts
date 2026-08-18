@@ -136,7 +136,11 @@ export class TodoRuntime {
 	}
 
 	async update(taskId: string, patch: Parameters<FileTodoStore["update"]>[2]): Promise<TodoListDocument> {
-		return this.record(await this.store.update(this.requireListId(), taskId, patch));
+		const document = await this.record(await this.store.update(this.requireListId(), taskId, patch));
+		if (document.tasks.length > 0 && document.tasks.every((task) => task.status === "completed")) {
+			await this.clear();
+		}
+		return document;
 	}
 
 	async claim(taskId: string, owner?: string, expectedRevision?: number) {

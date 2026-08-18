@@ -311,16 +311,17 @@ export class AgentManager {
 
 	async initialize(): Promise<void> {
 		await this.registry.load();
-		for (const record of this.registry.list()) {
+		const records = this.registry.list();
+		if (records.length === 0) return;
+		// A leftover registry means the previous parent session crashed. Terminate
+		// any orphan children, then drop all of that session's state instead of
+		// persisting `interrupted` records.
+		for (const record of records) {
 			if (record.status !== "queued" && record.status !== "running") continue;
 			if (record.status === "queued") await this.terminateRecoveredQueuedProcesses(record);
 			else await this.terminateRecoveredProcess(record);
-			await this.finishWithoutProcess(
-				record.agentId,
-				"interrupted",
-				"Parent session stopped while agent was active",
-			);
 		}
+		await this.clearState();
 	}
 
 	list(): AgentRecord[] {
@@ -498,6 +499,57 @@ export class AgentManager {
 			if (run.process) this.terminate(run.process);
 		}
 		await Promise.all(active.map((run) => run.completion));
+	}
+
+	/** Terminate children, then delete this session's persisted state. */
+	async destroy(): Promise<void> {
+		await this.shutdown();
+		await this.clearState();
+	}
+
+	/**
+	 * Delete every file and branch this session owns, scoped to this manager's
+	 * parent session. The shared `rootDir` is never removed because other pi
+	 * sessions store their state alongside this one.
+	 */
+	private async clearState(): Promise<void> {
+		const records = this.registry.list();
+		for (const record of records) {
+			await fs.promises.rm(record.transcriptPath, { force: true });
+			await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
+			await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
+			await this.deleteBranchBestEffort(record);
+		}
+		await fs.promises.rm(this.registry.registryPath, { force: true });
+		// The pool snapshot is part of the session's swarm configuration.
+		await fs.promises.rm(getWorkerModelsPath(this.rootDir), { force: true });
+		// Remove now-empty session directories. rmdir only succeeds when a directory
+		// is empty, so parallel sessions sharing the root keep their own state.
+		for (const directory of ["transcripts", "sessions", "prompts", "registries", "worktrees", ""]) {
+			try {
+				await fs.promises.rmdir(path.join(this.rootDir, directory));
+			} catch {
+				// Not empty or already gone; leave it for the other sessions.
+			}
+		}
+		// Reload so the in-memory records match the now-empty registry; the file
+		// is gone, so load() resets to an empty map and the manager stays usable.
+		await this.registry.load();
+	}
+
+	private async deleteBranchBestEffort(record: AgentRecord): Promise<void> {
+		const branch = `pi-subagent/${record.agentId}`;
+		try {
+			const { stdout } = await execFileAsync("git", ["-C", record.cwd, "rev-parse", "--show-toplevel"], {
+				encoding: "utf8",
+			});
+			const repository = stdout.trim();
+			if (!repository) return;
+			await execFileAsync("git", ["-C", repository, "branch", "-D", branch], { encoding: "utf8" });
+		} catch {
+			// Best effort: the branch may still be checked out in a surviving
+			// worktree or the repository may be gone. Session state is already deleted.
+		}
 	}
 
 	/**

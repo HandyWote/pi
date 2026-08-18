@@ -1,10 +1,3 @@
-// TODO(swarm): wire this command into the extension entry point. index.ts is
-// owned by another worker; the coordinating session must add, next to
-// registerAgentsCommand(pi, () => manager):
-//
-//	import { registerSwarmCommand } from "./swarm.ts";
-//	registerSwarmCommand(pi, () => manager);
-
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
 import {
 	Container,
@@ -20,6 +13,7 @@ import {
 import { type AgentManager, readWorkerModels, type WorkerModelRef, writeWorkerModels } from "./manager.ts";
 
 const MAX_POOL_DISPLAY = 10;
+const SAVE_POOL_ITEM_ID = "__save_pool__";
 
 const CIRCLED_DIGITS = [
 	"①",
@@ -111,9 +105,9 @@ interface WorkerPoolSelectorOptions {
 }
 
 /**
- * Interactive worker pool selector, mirroring the /scoped-models selector UX:
- * toggle models into the pool (space), reorder with Alt+Up/Down (order is
- * priority: the first entry is used first), Ctrl+S saves the snapshot,
+ * Interactive worker pool selector: toggle models into the pool (space),
+ * reorder with Alt+Up/Down (order is priority: the first entry is used
+ * first), activate the trailing [ Save pool ] row to persist the snapshot,
  * Escape cancels. Saving an empty selection clears the pool.
  */
 class WorkerPoolSelectorComponent extends Container implements Focusable {
@@ -148,7 +142,7 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			new Text(
 				options.theme.fg(
 					"muted",
-					`Pool snapshot; ${reorderHint} reorders, ${keyHint(this.keybindings, "app.models.save", "saves")}. Order is priority.`,
+					`Pool snapshot; ${reorderHint} reorders, ${keyHint(this.keybindings, "tui.entity.activate", "[ Save pool ]")} saves, ${keyHint(this.keybindings, "tui.entity.cancel", "cancels")}. Order is priority.`,
 				),
 				1,
 				0,
@@ -166,6 +160,9 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			},
 		});
 		this.list.onToggle = (item) => this.toggleModel(item.id);
+		this.list.onActivate = (item) => {
+			if (item.id === SAVE_POOL_ITEM_ID) this.done([...this.selected]);
+		};
 		this.list.onCancel = () => this.done(undefined);
 		this.list.onSelectionChange = () => this.updateDetails();
 		this.list.onSearchChange = () => this.updateDetails();
@@ -185,13 +182,16 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			...this.selected,
 			...this.candidates.filter((candidate) => !selectedIds.has(referenceOf(candidate))),
 		];
-		return sorted.map((ref) => ({
-			id: referenceOf(ref),
-			label: referenceOf(ref),
-			description: ref.label,
-			toggled: selectedIds.has(referenceOf(ref)),
-			toggleable: true,
-		}));
+		return [
+			...sorted.map((ref) => ({
+				id: referenceOf(ref),
+				label: referenceOf(ref),
+				description: ref.label,
+				toggled: selectedIds.has(referenceOf(ref)),
+				toggleable: true,
+			})),
+			{ id: SAVE_POOL_ITEM_ID, label: "[ Save pool ]" },
+		];
 	}
 
 	private getFooterText(): string {
@@ -201,7 +201,7 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			keyHint(this.keybindings, "app.models.enableAll", "all"),
 			keyHint(this.keybindings, "app.models.clearAll", "clear"),
 			`${keyHint(this.keybindings, "app.models.reorderUp", "")}/${keyHint(this.keybindings, "app.models.reorderDown", "")} reorder`,
-			keyHint(this.keybindings, "app.models.save", "save"),
+			keyHint(this.keybindings, "tui.entity.activate", "save"),
 			`${this.selected.length}/${this.candidates.length} selected`,
 		];
 		return hints.join(" · ");
@@ -298,10 +298,6 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			const targets = this.list.getQuery() ? this.list.getFilteredItems().map((item) => item.id) : undefined;
 			this.setAllSelected(targets ?? this.selected.map(referenceOf), false);
 			this.refresh();
-			return;
-		}
-		if (kb.matches(data, "app.models.save")) {
-			this.done([...this.selected]);
 			return;
 		}
 		this.list.handleInput(data);
@@ -410,8 +406,18 @@ export function registerSwarmCommand(pi: ExtensionAPI, getManager: () => AgentMa
 			}
 			ctx.ui.notify(`Worker pool saved: ${formatPoolSummary(selected)}`, "info");
 			if (existing.length === 0) {
-				// First pool configuration: establish coordinator behavior for the session.
-				pi.sendUserMessage(COORDINATOR_GUIDANCE);
+				// First pool configuration: establish coordinator behavior for the
+				// session. A custom-role message (not a user message) keeps the rules
+				// in model context for every subsequent turn without triggering a
+				// turn or being mistaken for a user execution request.
+				pi.sendMessage(
+					{
+						customType: "pi-subagent-guidance",
+						content: COORDINATOR_GUIDANCE,
+						display: false,
+					},
+					{ deliverAs: "nextTurn" },
+				);
 			}
 		},
 	});

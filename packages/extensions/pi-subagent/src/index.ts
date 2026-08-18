@@ -176,7 +176,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		});
 
 		pi.on("session_shutdown", async () => {
-			await manager?.shutdown();
+			await manager?.destroy();
 			flushTerminalNotifications();
 			manager = undefined;
 			currentContext = undefined;

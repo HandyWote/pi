@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-18
+
 ### Added
 
 - Added an interactive agent management view for `/agents` in TUI mode: active-first list with search, live status detail (task, usage, duration, recent activities), stop (`x`) and resume (`r`, with prompt input via `app.agent.resume`). Non-TUI modes keep the select-menu flow.
@@ -10,6 +12,10 @@
 
 - `/swarm` now saves the worker pool through the trailing `[ Save pool ]` list row instead of Ctrl+S, which browser-based terminals (e.g. VSCode web) swallow. Escape cancels without writing.
 - Subagent state is now scoped to the parent session: on `session_shutdown` children are terminated and the session's records, transcripts, child sessions, prompts, and worktree branches are deleted; a leftover registry from a crash is terminated and cleared on the next start instead of being resumed as `interrupted` records. `agent_resume` remains available within the session.
+
+### Fixed
+
+- Fixed `/swarm` coordinator guidance being injected as a user message, which triggered an immediate model turn and could be misread as a plan execution request; the rules now ride along with the next real prompt as a hidden custom-role message.
 
 ## [0.3.0] - 2026-08-14
 

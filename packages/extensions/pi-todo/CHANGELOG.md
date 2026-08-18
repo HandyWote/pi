@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-18
+
 ### Added
 
 - Auto-cleared the todo list (deleting its directory, unbinding, and clearing the widget) once every task is completed, while the completing update still returns the final document.

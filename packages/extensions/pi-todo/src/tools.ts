@@ -100,7 +100,8 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 	pi.registerTool({
 		name: "todo_update",
 		label: "Update Todo",
-		description: "Update task content, dependencies, or public status",
+		description:
+			"Update task content, dependencies, or public status. A return starting with REJECTED means the operation was rejected, not successful.",
 		promptSnippet: "Update or complete a todo task",
 		promptGuidelines: [
 			"Public task states are pending, in_progress, and completed.",
@@ -131,7 +132,8 @@ export function registerTodoTools(pi: ExtensionAPI, runtime: TodoRuntime): void 
 	pi.registerTool({
 		name: "todo_claim",
 		label: "Claim Todo",
-		description: "Atomically claim one dependency-ready task",
+		description:
+			"Atomically claim one dependency-ready task. A return starting with REJECTED means the operation was rejected, not successful.",
 		promptSnippet: "Claim a ready todo task before starting work",
 		promptGuidelines: [
 			"Pass expected_revision when coordinating concurrent workers to reject stale claims.",

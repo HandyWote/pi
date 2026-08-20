@@ -205,21 +205,26 @@ describe("TodoRuntime recovery", () => {
 		expect(environment.messages).toHaveLength(1);
 	});
 
-	it("only schedules periodic digests while a list is active", async () => {
+	it("injects a turn-end digest on every turn while a list is active", async () => {
 		const environment = fakeEnvironment("session-1");
 		const runtime = new TodoRuntime(environment.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
 		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
 
-		for (let turn = 0; turn < 9; turn++) await runtime.onTurnEnd();
-		expect(environment.messages).toHaveLength(0);
+		// Turn-end assertion: no more 10-turn periodic reminder, queue each turn.
 		await runtime.onTurnEnd();
 		expect(environment.messages).toHaveLength(1);
+		// Queued for the next run (not followUp, which would force a continuation
+		// turn and loop while the list stays active).
+		expect(environment.messages[0]?.options?.deliverAs).toBe("nextTurn");
+		await runtime.onTurnEnd();
+		expect(environment.messages).toHaveLength(2);
 
+		// Checking the task off stops further injections (勾销后不再注入).
 		await runtime.claim("A");
 		await runtime.update("A", { status: "completed" });
 		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
-		expect(environment.messages).toHaveLength(1);
+		expect(environment.messages).toHaveLength(2);
 	});
 
 	it("auto-clears the list once every task is completed and still returns the final document", async () => {
@@ -513,6 +518,145 @@ describe("TodoRuntime recovery", () => {
 				metadata: failedMetadata,
 			});
 			await vi.waitFor(async () => expect((await runtime.getTask("B"))?.status).toBe("pending"), { timeout: 5000 });
+		} finally {
+			dispose();
+			events.clear();
+		}
+	});
+
+	it("surfaces completed workers whose task was not checked off in the digest", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Delegate", [{ id: "A", subject: "Agent task", depends_on: [] }]);
+		await runtime.claim("A");
+		const metadata = {
+			"pi.todo/list-id": runtime.getListId(),
+			"pi.todo/task-id": "A",
+		};
+		const events = environment.eventBus;
+		const dispose = registerAgentLifecycleProtocol(events, runtime);
+		try {
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
+				version: 2,
+				eventId: "queued-1",
+				runId: "run-1",
+				agentId: "agent-1",
+				parentSessionId: "session-1",
+				status: "queued",
+				timestamp: new Date().toISOString(),
+				metadata,
+			});
+			await vi.waitFor(async () => expect(await runtime.getTask("A")).toMatchObject({ owner: "agent-1" }), {
+				timeout: 5000,
+			});
+
+			// Worker reports completion but the task is still in_progress: the
+			// protocol must record it instead of silently swallowing the mismatch.
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
+				version: 2,
+				eventId: "complete-1",
+				runId: "run-1",
+				agentId: "agent-1",
+				parentSessionId: "session-1",
+				status: "completed",
+				timestamp: new Date().toISOString(),
+				metadata,
+			});
+			await vi.waitFor(
+				async () =>
+					expect(await runtime.digest()).toContain(
+						"Needs reconciliation: worker agent-1 completed but task A is not completed",
+					),
+				{ timeout: 5000 },
+			);
+			expect((await runtime.getTask("A"))?.status).toBe("in_progress");
+			expect(await runtime.digest()).toContain("Call todo_update to complete it after verifying.");
+
+			// Duplicate completion events are keyed by task id: still one entry.
+			events.emit(AGENT_LIFECYCLE_CHANNEL, {
+				version: 2,
+				eventId: "complete-1-retry",
+				runId: "run-1",
+				agentId: "agent-1",
+				parentSessionId: "session-1",
+				status: "completed",
+				timestamp: new Date().toISOString(),
+				metadata,
+			});
+			await vi.waitFor(
+				async () => expect((await runtime.digest())?.match(/Needs reconciliation/g) ?? []).toHaveLength(1),
+				{ timeout: 5000 },
+			);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect((await runtime.digest())?.match(/worker agent-1 completed/g) ?? []).toHaveLength(1);
+
+			// Checking the task off clears the pending entry; with all tasks done
+			// the digest disappears entirely.
+			await runtime.update("A", { status: "completed" });
+			expect(await runtime.digest()).toBeUndefined();
+		} finally {
+			dispose();
+			events.clear();
+		}
+	});
+
+	it("clears pending reconciliation when the task is checked off or released", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Delegate", [
+			{ id: "A", subject: "Agent task A", depends_on: [] },
+			{ id: "B", subject: "Agent task B", depends_on: [] },
+		]);
+		await runtime.claim("A");
+		await runtime.claim("B");
+		const events = environment.eventBus;
+		const dispose = registerAgentLifecycleProtocol(events, runtime);
+		try {
+			for (const [taskId, agentId] of [
+				["A", "agent-1"],
+				["B", "agent-2"],
+			] as const) {
+				events.emit(AGENT_LIFECYCLE_CHANNEL, {
+					version: 2,
+					eventId: `queued-${taskId}`,
+					runId: `run-${taskId}`,
+					agentId,
+					parentSessionId: "session-1",
+					status: "queued",
+					timestamp: new Date().toISOString(),
+					metadata: { "pi.todo/list-id": runtime.getListId(), "pi.todo/task-id": taskId },
+				});
+				await vi.waitFor(async () => expect(await runtime.getTask(taskId)).toMatchObject({ owner: agentId }), {
+					timeout: 5000,
+				});
+				events.emit(AGENT_LIFECYCLE_CHANNEL, {
+					version: 2,
+					eventId: `complete-${taskId}`,
+					runId: `run-${taskId}`,
+					agentId,
+					parentSessionId: "session-1",
+					status: "completed",
+					timestamp: new Date().toISOString(),
+					metadata: { "pi.todo/list-id": runtime.getListId(), "pi.todo/task-id": taskId },
+				});
+			}
+			await vi.waitFor(
+				async () =>
+					expect(await runtime.digest()).toContain(
+						"Needs reconciliation: worker agent-1 completed but task A is not completed; worker agent-2 completed but task B is not completed",
+					),
+				{ timeout: 5000 },
+			);
+
+			// Checking off A clears only A; the B entry stays until released.
+			await runtime.update("A", { status: "completed" });
+			expect(await runtime.digest()).toContain("worker agent-2 completed but task B is not completed");
+			expect(await runtime.digest()).not.toContain("task A is not completed");
+
+			await runtime.release("B");
+			expect(await runtime.digest()).not.toContain("Needs reconciliation");
 		} finally {
 			dispose();
 			events.clear();

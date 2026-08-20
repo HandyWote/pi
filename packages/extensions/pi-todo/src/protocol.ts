@@ -40,9 +40,13 @@ export function registerAgentLifecycleProtocol(events: EventBus, runtime: TodoRu
 						if (event.status === "completed") {
 							const task = await runtime.getTask(metadata["pi.todo/task-id"]);
 							if (task?.status !== "completed") {
-								throw new TodoValidationError(`Todo "${metadata["pi.todo/task-id"]}" is not completed`);
+								// Surface the mismatch to the model instead of silently swallowing it:
+								// the pending entry is rendered in the next digest so the coordinator
+								// can check the task off with todo_update after verifying.
+								runtime.recordPendingReconcile(metadata["pi.todo/task-id"], event.agentId);
+							} else {
+								await runtime.syncCurrent();
 							}
-							await runtime.syncCurrent();
 						} else {
 							await runtime.releaseIfOwned(metadata["pi.todo/task-id"], event.agentId);
 						}

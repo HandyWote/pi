@@ -79,7 +79,10 @@ function outputText(record: AgentRecord, transcript: string, ready: boolean): st
 		`Task: ${record.task}`,
 		`Output file: ${record.transcriptPath}`,
 	];
-	if (!ready) lines.push("Result: not_ready");
+	if (!ready) {
+		lines.push("Result: not_ready");
+		lines.push("Agent is still running. Completion notification will arrive automatically - do not poll.");
+	}
 	if (record.lastOutput) lines.push(`Latest output:\n${record.lastOutput}`);
 	if (record.error) lines.push(`Error:\n${record.error.trim()}`);
 	if (transcript) lines.push(`Transcript:\n${transcript}`);
@@ -276,13 +279,14 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 	pi.registerTool({
 		name: "agent_output",
 		label: "Agent Output",
-		description: "Read running or terminal agent output. Optionally block until terminal state or timeout.",
+		description:
+			"Read a snapshot of running or terminal agent output. Never use this to wait for completion; terminal notifications arrive automatically.",
 		parameters: OutputParams,
 		async execute(_toolCallId, params) {
 			try {
 				const output = await requireManager(getManager).output(
 					params.agentId,
-					params.block ?? true,
+					params.block ?? false,
 					Math.min(600, Math.max(0, params.timeoutSeconds ?? 30)) * 1000,
 				);
 				return textResult(outputText(output.record, output.transcript, output.ready), {
@@ -332,20 +336,24 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 				const manager = requireManager(getManager);
 				const current = manager.get(params.agentId);
 				if (!current) throw new Error(`Unknown agent: ${params.agentId}`);
+				const alreadyCompleted = current.status === "completed";
+				const completionNote = alreadyCompleted
+					? `Agent ${params.agentId} is already completed. Resume starts a new run with new instructions - only call it if follow-up work is needed.\n`
+					: "";
 				await approveProjectAgents([current.definition], ctx);
 				throwIfAborted(signal);
 				const started = await manager.resume(params.agentId, params.prompt, params.mode, signal);
 				throwIfAborted(signal);
 				if ((params.mode ?? started.record.mode) === "background") {
 					started.detachAbort();
-					return textResult(`Resumed ${started.record.agentId} in background`, {
+					return textResult(`${completionNote}Resumed ${started.record.agentId} in background`, {
 						operation: "resume",
 						records: [started.record],
 					});
 				}
 				const record = await started.completion;
 				return textResult(
-					outputText(record, "", true),
+					completionNote + outputText(record, "", true),
 					{ operation: "resume", records: [record] },
 					record.status !== "completed",
 				);

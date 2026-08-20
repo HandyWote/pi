@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionStartEvent } from "@handy_wote/pi-coding-agent";
 import { getAgentDir } from "@handy_wote/pi-coding-agent";
-import { FileTodoStore } from "./store.ts";
+import { FileTodoStore, TodoPersistenceError } from "./store.ts";
 import type { TodoBindingEntry, TodoDefinition, TodoListDocument, TodoListView } from "./types.ts";
 import { updateTodoWidget } from "./widget.ts";
 
@@ -62,7 +62,8 @@ export class TodoRuntime {
 		const agentTask = this.getTaskContext();
 		if (agentTask) {
 			if (agentTask.agentId) this.liveOwners.add(agentTask.agentId);
-			const list = await this.store.read(agentTask.listId);
+			const list = await this.withMissingListUnbind(() => this.store.read(agentTask.listId));
+			if (!list) return;
 			this.setBinding(list, true);
 			await this.refresh();
 			return;
@@ -86,12 +87,16 @@ export class TodoRuntime {
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
+		const restoredListId = restored.list_id;
 
 		if (event.reason === "fork") {
-			const cloned = await this.store.clone(restored.list_id, restored.revision);
+			const cloned = await this.withMissingListUnbind(() => this.store.clone(restoredListId, restored.revision));
+			if (!cloned) return;
 			this.setBinding(cloned, true);
 		} else {
-			this.setBinding(await this.store.read(restored.list_id), false);
+			const list = await this.withMissingListUnbind(() => this.store.read(restoredListId));
+			if (!list) return;
+			this.setBinding(list, false);
 			const sessionId = ctx.sessionManager.getSessionId();
 			this.liveOwners.add(sessionId);
 			this.ownerReconciliationPending = true;
@@ -110,9 +115,12 @@ export class TodoRuntime {
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
-		const current = await this.store.read(restored.list_id);
+		const restoredListId = restored.list_id;
+		const current = await this.withMissingListUnbind(() => this.store.read(restoredListId));
+		if (!current) return;
 		if (restored.revision < current.revision) {
-			const cloned = await this.store.clone(restored.list_id, restored.revision);
+			const cloned = await this.withMissingListUnbind(() => this.store.clone(restoredListId, restored.revision));
+			if (!cloned) return;
 			this.setBinding(cloned, true);
 		} else {
 			this.setBinding(current, false);
@@ -209,23 +217,14 @@ export class TodoRuntime {
 
 	async clear(): Promise<void> {
 		const listId = this.binding?.list_id;
-		if (listId) this.cancelDigest(listId);
-		this.binding = undefined;
-		this.digestActive = false;
-		this.turnsSinceReminder = 0;
-		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
-			version: 1,
-			list_id: null,
-			revision: 0,
-			timestamp: new Date().toISOString(),
-		});
+		this.unbind();
 		if (listId) await this.store.removeList(listId);
-		if (this.context) updateTodoWidget(this.context, undefined);
 	}
 
 	async view(): Promise<TodoListView | undefined> {
-		if (!this.binding?.list_id) return undefined;
-		return this.store.view(this.binding.list_id);
+		const listId = this.binding?.list_id;
+		if (!listId) return undefined;
+		return this.withMissingListUnbind(() => this.store.view(listId));
 	}
 
 	async getTask(taskId: string) {
@@ -304,6 +303,34 @@ export class TodoRuntime {
 		updateTodoWidget(this.context, view);
 		const diagnostic = this.store.takeDiagnostic();
 		if (diagnostic) this.context.ui.notify(diagnostic, "warning");
+	}
+
+	private async withMissingListUnbind<T>(operation: () => Promise<T>): Promise<T | undefined> {
+		try {
+			return await operation();
+		} catch (error) {
+			if (!(error instanceof TodoPersistenceError)) throw error;
+			this.unbind(error instanceof Error ? error.message : String(error));
+			return undefined;
+		}
+	}
+
+	private unbind(reason?: string): void {
+		const listId = this.binding?.list_id;
+		if (listId) this.cancelDigest(listId);
+		this.binding = undefined;
+		this.digestActive = false;
+		this.turnsSinceReminder = 0;
+		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
+			version: 1,
+			list_id: null,
+			revision: 0,
+			timestamp: new Date().toISOString(),
+		});
+		if (this.context) {
+			updateTodoWidget(this.context, undefined);
+			if (reason) this.context.ui.notify(reason, "warning");
+		}
 	}
 
 	private async record(document: TodoListDocument): Promise<TodoListDocument> {

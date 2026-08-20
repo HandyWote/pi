@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionStartEvent } from "@handy_wote/pi-coding-agent";
 import { getAgentDir } from "@handy_wote/pi-coding-agent";
-import { FileTodoStore, TodoPersistenceError } from "./store.ts";
+import { FileTodoStore, TODO_LIST_NOT_FOUND, TodoPersistenceError } from "./store.ts";
 import type { TodoBindingEntry, TodoDefinition, TodoListDocument, TodoListView } from "./types.ts";
 import { updateTodoWidget } from "./widget.ts";
 
@@ -28,6 +28,7 @@ export class TodoRuntime {
 	readonly store: FileTodoStore;
 	private readonly pi: ExtensionAPI;
 	private binding: TodoBindingEntry | undefined;
+	private unboundListId: string | undefined;
 	private context: ExtensionContext | undefined;
 	private agentContext: AgentContext | undefined;
 	private readonly liveOwners = new Set<string>();
@@ -309,7 +310,7 @@ export class TodoRuntime {
 		try {
 			return await operation();
 		} catch (error) {
-			if (!(error instanceof TodoPersistenceError)) throw error;
+			if (!(error instanceof TodoPersistenceError) || error.code !== TODO_LIST_NOT_FOUND) throw error;
 			this.unbind(error instanceof Error ? error.message : String(error));
 			return undefined;
 		}
@@ -321,6 +322,8 @@ export class TodoRuntime {
 		this.binding = undefined;
 		this.digestActive = false;
 		this.turnsSinceReminder = 0;
+		if (listId !== undefined && this.unboundListId === listId) return;
+		this.unboundListId = listId ?? undefined;
 		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
 			version: 1,
 			list_id: null,
@@ -340,6 +343,7 @@ export class TodoRuntime {
 	}
 
 	private setBinding(document: TodoListDocument, persist: boolean): void {
+		this.unboundListId = undefined;
 		const previousListId = this.binding?.list_id;
 		if (previousListId && previousListId !== document.id) {
 			this.cancelDigest(previousListId);

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -288,6 +288,47 @@ describe("TodoRuntime recovery", () => {
 		expect(runtime.getListId()).toBeUndefined();
 		expect(bindingEntry(environment)).toMatchObject({ version: 1, list_id: null, revision: 0 });
 		expect(await runtime.view()).toBeUndefined();
+	});
+
+	it("self-heals restoreTree and fork when the bound list no longer exists", async () => {
+		const stale: TodoBindingEntry = {
+			version: 1,
+			list_id: "missing-list",
+			revision: 1,
+			timestamp: new Date().toISOString(),
+		};
+
+		const restoredEnvironment = fakeEnvironment("session-1", branchWithBinding(stale));
+		const restored = new TodoRuntime(restoredEnvironment.pi, { dataDir });
+		await expect(restored.restoreTree(restoredEnvironment.ctx)).resolves.toBeUndefined();
+		expect(restored.getListId()).toBeUndefined();
+		expect(bindingEntry(restoredEnvironment).list_id).toBeNull();
+
+		const forkEnvironment = fakeEnvironment("session-2", branchWithBinding(stale));
+		const fork = new TodoRuntime(forkEnvironment.pi, { dataDir });
+		await expect(
+			fork.initialize(
+				{ type: "session_start", reason: "fork", previousSessionFile: "old.jsonl" },
+				forkEnvironment.ctx,
+			),
+		).resolves.toBeUndefined();
+		expect(fork.getListId()).toBeUndefined();
+		expect(bindingEntry(forkEnvironment).list_id).toBeNull();
+	});
+
+	it("keeps the binding when the list is corrupt but still present", async () => {
+		const environment = fakeEnvironment("session-1");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
+		const listId = runtime.getListId();
+		if (!listId) throw new Error("Missing list id");
+
+		await writeFile(join(dataDir, listId, "tasks.json"), "{ not valid json", "utf8");
+		expect(runtime.getListId()).toBe(listId);
+		await expect(runtime.view()).rejects.toThrow("corrupt");
+		expect(runtime.getListId()).toBe(listId);
+		expect(bindingEntry(environment).list_id).toBe(listId);
 	});
 
 	it("resolves queued digests to undefined when the list disappears", async () => {

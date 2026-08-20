@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-20
+
 ### Fixed
 
 - Unbound a session from a todo list that another session deleted or cleared, instead of surfacing an unhandled "Todo list does not exist" error from digests, reminders, and session restore.

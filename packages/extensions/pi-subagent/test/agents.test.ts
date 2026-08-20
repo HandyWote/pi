@@ -4,6 +4,43 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { discoverAgents, loadAgentPrompt } from "../src/agents.ts";
 import { resolveBuiltInAgentTools } from "../src/built-in-agents.ts";
+import { actionHint, terminalNotificationContent } from "../src/index.ts";
+import type { AgentRecord } from "../src/types.ts";
+
+function notificationRecord(overrides: Partial<AgentRecord> = {}): AgentRecord {
+	return {
+		version: 2,
+		agentId: "agent-1",
+		runId: "run-1",
+		parentSessionId: "session-1",
+		definition: {
+			name: "worker",
+			description: "Worker agent",
+			systemPrompt: "",
+			source: "built-in",
+			filePath: "worker.md",
+			isolation: "none",
+		},
+		task: "Investigate the failure",
+		mode: "background",
+		status: "completed",
+		cwd: "/tmp",
+		isolation: "none",
+		metadata: {},
+		createdAt: "2026-08-20T00:00:00.000Z",
+		updatedAt: "2026-08-20T00:00:00.000Z",
+		childSessionId: "child-1",
+		childSessionDir: "/tmp/child-1",
+		transcriptPath: "/tmp/child-1/transcript.md",
+		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+		toolCount: 0,
+		lastOutput: "",
+		activities: [],
+		notified: false,
+		lifecycleEventId: "event-1",
+		...overrides,
+	};
+}
 
 const tempRoots: string[] = [];
 afterEach(() => {
@@ -132,5 +169,38 @@ describe("discoverAgents", () => {
 				"agent_output",
 			]).tools,
 		).toEqual(["read", "write", "todo_update"]);
+	});
+});
+
+describe("terminal notifications", () => {
+	it("gives a neutral hint for completed agents without a resume directive", () => {
+		const completed = actionHint(notificationRecord({ status: "completed" }));
+		expect(completed).toBe("Result available via agent_list");
+		expect(completed).not.toMatch(/agent_resume|Continue/);
+		expect(actionHint(notificationRecord({ status: "failed" }))).toBe("Stop: do not resume");
+		expect(actionHint(notificationRecord({ status: "stopped" }))).toBe("Stop: do not resume");
+	});
+
+	it("truncates the task to its first line in single-agent notifications", () => {
+		const task = `${"a".repeat(200)}\nsecond line that must not appear`;
+		const content = terminalNotificationContent([notificationRecord({ status: "completed", task })]);
+
+		expect(content).toContain(`Task: ${"a".repeat(157)}...`);
+		expect(content).not.toContain("second line");
+		expect(content).not.toContain("agent_resume");
+	});
+
+	it("summarizes multi-agent batches with per-agent task excerpts", () => {
+		const content = terminalNotificationContent([
+			notificationRecord({ agentId: "agent-1", status: "completed", task: "First task" }),
+			notificationRecord({ agentId: "agent-2", status: "failed", task: "Second task" }),
+		]);
+
+		expect(content).toContain("2 subagents reached terminal state. Before acting, call agent_list.");
+		expect(content).toContain("1. Subagent agent-1 (worker) completed. Task: First task.");
+		expect(content).toContain("Result available via agent_list.");
+		expect(content).toContain("2. Subagent agent-2 (worker) failed. Task: Second task.");
+		expect(content).toContain("Stop: do not resume.");
+		expect(content).not.toContain("agent_resume");
 	});
 });

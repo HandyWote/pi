@@ -10,7 +10,14 @@ export const TODO_DIGEST_MESSAGE = "pi-todo-digest";
 export const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 
 const OWNER_EVIDENCE_WAIT_MS = 50;
-const PERIODIC_REMINDER_TURNS = 10;
+// Turn-end assertion: while a digest is active, queue a fresh digest at every
+// turn end so the model is reminded (e.g. to reconcile completed workers)
+// instead of every 10 turns. Delivery uses "nextTurn" (injected at the start
+// of the next run) rather than "followUp": followUp forces a continuation turn
+// whose turn_end would queue another digest, an injection loop while the list
+// stays active. The digestQueueKey queue keeps at most one pending digest and
+// cancelDigest removes it once every task is completed (勾销后不再注入).
+const PERIODIC_REMINDER_TURNS = 1;
 const DIGEST_TASKS_PER_SECTION = 5;
 const DIGEST_DIRECTION_LIMIT = 500;
 const DIGEST_CHAR_LIMIT = 4000;
@@ -33,6 +40,7 @@ export class TodoRuntime {
 	private agentContext: AgentContext | undefined;
 	private readonly liveOwners = new Set<string>();
 	private readonly pendingOwnerEvidence = new Set<Promise<void>>();
+	private readonly pendingReconcile = new Map<string, string>();
 	private ownerReconciliationPending = false;
 	private digestActive = false;
 	private turnsSinceReminder = 0;
@@ -75,6 +83,7 @@ export class TodoRuntime {
 			this.binding = undefined;
 			this.digestActive = false;
 			this.turnsSinceReminder = 0;
+			this.pendingReconcile.clear();
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -85,6 +94,7 @@ export class TodoRuntime {
 			this.binding = undefined;
 			this.digestActive = false;
 			this.turnsSinceReminder = 0;
+			this.pendingReconcile.clear();
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -113,6 +123,7 @@ export class TodoRuntime {
 			this.binding = undefined;
 			this.digestActive = false;
 			this.turnsSinceReminder = 0;
+			this.pendingReconcile.clear();
 			updateTodoWidget(ctx, undefined);
 			return;
 		}
@@ -233,6 +244,15 @@ export class TodoRuntime {
 		return view?.list.tasks.find((task) => task.id === taskId);
 	}
 
+	/**
+	 * Records that a worker reported completion for a task that is not checked
+	 * off yet. Keyed by task id so duplicate lifecycle events do not repeat the
+	 * entry; surfaced in the next digest as a "Needs reconciliation" section.
+	 */
+	recordPendingReconcile(taskId: string, agentId: string): void {
+		this.pendingReconcile.set(taskId, agentId);
+	}
+
 	async digest(): Promise<string | undefined> {
 		const view = await this.view();
 		if (!view || view.summary.total === view.summary.completed) return undefined;
@@ -245,6 +265,12 @@ export class TodoRuntime {
 		appendDigestSection(lines, "In progress", active, (task) => `${task.id} (${task.owner ?? "owned"})`);
 		appendDigestSection(lines, "Ready", view.ready, (task) => `${task.id}: ${task.subject}`);
 		appendDigestSection(lines, "Blocked", view.blocked, (task) => `${task.id} <- ${task.depends_on.join(",")}`);
+		if (this.pendingReconcile.size > 0) {
+			const entries = [...this.pendingReconcile.entries()]
+				.map(([taskId, agentId]) => `worker ${agentId} completed but task ${taskId} is not completed`)
+				.join("; ");
+			lines.push(`Needs reconciliation: ${entries}. Call todo_update to complete it after verifying.`);
+		}
 		if (view.ready.length > 1 && hasAgentCapability(this.pi.getActiveTools())) {
 			lines.push(
 				"Several independent tasks are ready. Claim them, then use one background agent_start batch with worker and each claim's metadata. Use explore only for unbound read-only investigation.",
@@ -291,7 +317,7 @@ export class TodoRuntime {
 		this.turnsSinceReminder++;
 		if (this.turnsSinceReminder < PERIODIC_REMINDER_TURNS) return;
 		this.turnsSinceReminder = 0;
-		await this.injectDigest("followUp");
+		await this.injectDigest("nextTurn");
 	}
 
 	cancelDigest(listId = this.binding?.list_id): void {
@@ -322,6 +348,7 @@ export class TodoRuntime {
 		this.binding = undefined;
 		this.digestActive = false;
 		this.turnsSinceReminder = 0;
+		this.pendingReconcile.clear();
 		if (listId !== undefined && this.unboundListId === listId) return;
 		this.unboundListId = listId ?? undefined;
 		this.pi.appendEntry<TodoBindingEntry>(TODO_BINDING_ENTRY, {
@@ -338,8 +365,18 @@ export class TodoRuntime {
 
 	private async record(document: TodoListDocument): Promise<TodoListDocument> {
 		this.setBinding(document, true);
+		this.prunePendingReconcile(document);
 		await this.refresh();
 		return document;
+	}
+
+	private prunePendingReconcile(document: TodoListDocument): void {
+		if (this.pendingReconcile.size === 0) return;
+		for (const taskId of [...this.pendingReconcile.keys()]) {
+			const task = document.tasks.find((task) => task.id === taskId);
+			// Checked off (completed), released, or deleted: nothing left to reconcile.
+			if (!task || task.status !== "in_progress") this.pendingReconcile.delete(taskId);
+		}
 	}
 
 	private setBinding(document: TodoListDocument, persist: boolean): void {
@@ -348,6 +385,7 @@ export class TodoRuntime {
 		if (previousListId && previousListId !== document.id) {
 			this.cancelDigest(previousListId);
 			this.turnsSinceReminder = 0;
+			this.pendingReconcile.clear();
 		}
 		this.binding = {
 			version: 1,

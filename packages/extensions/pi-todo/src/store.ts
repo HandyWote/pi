@@ -315,7 +315,7 @@ export class FileTodoStore {
 			const task = requireTask(document, taskId);
 			if (patch.expected_revision !== undefined && patch.expected_revision !== task.revision) {
 				throw new TodoValidationError(
-					`Todo "${taskId}" revision changed from ${patch.expected_revision} to ${task.revision}`,
+					`REJECTED: revision mismatch (expected ${patch.expected_revision}, current ${task.revision}). Call todo_list to get current state, then retry with current revision.`,
 				);
 			}
 			if (patch.status === "in_progress" && task.status !== "in_progress") {
@@ -350,7 +350,7 @@ export class FileTodoStore {
 			const task = requireTask(document, taskId);
 			if (expectedRevision !== undefined && task.revision !== expectedRevision) {
 				throw new TodoValidationError(
-					`Todo "${taskId}" revision changed from ${expectedRevision} to ${task.revision}`,
+					`REJECTED: revision mismatch (expected ${expectedRevision}, current ${task.revision}). Call todo_list to get current state, then retry with current revision.`,
 				);
 			}
 			if (task.status !== "pending")

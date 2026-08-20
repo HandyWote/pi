@@ -19,6 +19,7 @@ import {
 
 const AGENT_STATUS_REQUEST_CHANNEL = "pi:agent:status-request";
 const TERMINAL_SUMMARY_LIMIT = 1200;
+const TASK_SUMMARY_LIMIT = 160;
 const NOTIFICATION_DEBOUNCE_MS = 3000;
 
 interface TerminalNotification {
@@ -42,7 +43,7 @@ function terminalNotificationContent(records: AgentRecord[]): string {
 	if (record === undefined || records.length === 1) return singleTerminalNotificationContent(record);
 	const sections = records.map((entry, index) => {
 		const hint = actionHint(entry);
-		return `${index + 1}. Subagent ${entry.agentId} (${entry.definition.name}) ${entry.status}. Task: ${entry.task}. ${hint}.`;
+		return `${index + 1}. Subagent ${entry.agentId} (${entry.definition.name}) ${entry.status}. Task: ${taskSummary(entry.task)}. ${hint}.`;
 	});
 	return [`${records.length} subagents reached terminal state. Before acting, call agent_list.`, ...sections].join(
 		"\n",
@@ -53,13 +54,17 @@ function singleTerminalNotificationContent(record: AgentRecord | undefined): str
 	if (record === undefined) return "No subagent lifecycle events recorded.";
 	return [
 		`Agent "${record.definition.description}" ${record.status}.`,
-		`Task: ${record.task}`,
+		`Task: ${taskSummary(record.task)}`,
 		`${actionHint(record)}. Before acting, call agent_list.`,
 	].join("\n");
 }
 
 function actionHint(record: AgentRecord): string {
-	return record.status === "completed" ? `Continue: agent_resume ${record.agentId}` : "Stop: do not resume";
+	return record.status === "completed" ? "Result available via agent_list" : "Stop: do not resume";
+}
+
+function taskSummary(task: string): string {
+	return truncate(task.split("\n")[0]!, TASK_SUMMARY_LIMIT);
 }
 
 function terminalEventDetails(record: AgentRecord): AgentTerminalEventDetails {
@@ -223,3 +228,5 @@ export type {
 	AgentTerminalStatus,
 } from "./types.ts";
 export { AGENT_PROTOCOL_CHANNEL, AGENT_PROTOCOL_VERSION } from "./types.ts";
+// Exported for notification format tests.
+export { actionHint, terminalNotificationContent };

@@ -171,6 +171,17 @@ describe("FileTodoStore", () => {
 		expect((await store.read("list-1")).tasks[0]?.status).toBe("completed");
 	});
 
+	it("rejects stale revisions with a REJECTED-prefixed message", async () => {
+		await store.create("Revision lock", [task("A")], "list-1");
+		await store.update("list-1", "A", { subject: "moved" });
+		await expect(store.update("list-1", "A", { subject: "stale", expected_revision: 1 })).rejects.toThrow(
+			"REJECTED: revision mismatch (expected 1, current ",
+		);
+		await expect(store.claim("list-1", "A", "agent-1", 1)).rejects.toThrow(
+			"REJECTED: revision mismatch (expected 1, current ",
+		);
+	});
+
 	it("returns claimed work to pending and deletes in-progress work directly", async () => {
 		await store.create("Recover work", [task("A"), task("B", ["A"])], "list-1");
 		await store.claim("list-1", "A", "agent-1");

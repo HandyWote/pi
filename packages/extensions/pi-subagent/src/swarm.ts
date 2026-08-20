@@ -47,7 +47,9 @@ const COORDINATOR_GUIDANCE = `You are coordinating a swarm of subagents for this
 - Treat subagent completion notifications as internal signals: act on their details; never acknowledge or thank them.
 - Continue workers with agent_resume (context reuse) instead of spawning fresh agents for follow-up work.
 - Synthesize findings before delegating follow-up work; do not delegate "based on your findings" follow-ups.
-- Never poll agent_output to wait for workers; completion arrives as an event.`;
+- Never poll agent_output to wait for workers; completion arrives as an event.
+- A todo_update or todo_claim result starting with REJECTED means the operation was rejected - call todo_list, then retry with the current revision. Never treat a rejection as success.
+- Before delivering a final conclusion to the user, call todo_list and confirm all active tasks are completed. Do not report until the list is fully reconciled.`;
 
 function referenceOf(ref: { provider: string; id: string }): string {
 	return `${ref.provider}/${ref.id}`;

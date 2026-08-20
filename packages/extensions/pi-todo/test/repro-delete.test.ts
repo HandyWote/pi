@@ -117,7 +117,7 @@ describe("repro: deletion after full completion", () => {
 		}
 	}, 15_000);
 
-	it("cancels a periodic digest queued immediately before full completion", async () => {
+	it("cancels queued turn-end digests once everything is complete", async () => {
 		const harness = await createHarness({
 			extensionFactories: [(pi) => piTodo(pi as unknown as TodoExtensionAPI, { dataDir })],
 		});
@@ -131,9 +131,6 @@ describe("repro: deletion after full completion", () => {
 					{ stopReason: "toolUse" },
 				),
 				fauxAssistantMessage(fauxToolCall("todo_claim", { id: "A" }), { stopReason: "toolUse" }),
-				...Array.from({ length: 8 }, () =>
-					fauxAssistantMessage(fauxToolCall("todo_list", {}), { stopReason: "toolUse" }),
-				),
 				fauxAssistantMessage(fauxToolCall("todo_update", { id: "A", status: "completed" }), {
 					stopReason: "toolUse",
 				}),
@@ -144,7 +141,19 @@ describe("repro: deletion after full completion", () => {
 			await harness.session.waitForIdle();
 
 			expect(getToolResults(harness.session.messages, "todo_update")).toHaveLength(1);
+			// Turn-end assertion queues digests while the task is active; they are
+			// delivered only at the next run start and must not force extra turns.
+			expect(harness.getPendingResponseCount()).toBe(0);
 			expect(getCustomMessages(harness.session.messages, "pi-todo-digest")).toHaveLength(0);
+
+			// 继续 with everything complete: the queued digest was cancelled on
+			// completion, so nothing is injected and no tools are triggered.
+			harness.setResponses([fauxAssistantMessage("Nothing to do.")]);
+			await harness.session.prompt("继续");
+			await harness.session.waitForIdle();
+			expect(getCustomMessages(harness.session.messages, "pi-todo-digest")).toHaveLength(0);
+			expect(getToolResults(harness.session.messages, "todo_claim")).toHaveLength(1);
+			expect(getToolResults(harness.session.messages, "todo_update")).toHaveLength(1);
 			expect(harness.getPendingResponseCount()).toBe(0);
 		} finally {
 			harness.cleanup();

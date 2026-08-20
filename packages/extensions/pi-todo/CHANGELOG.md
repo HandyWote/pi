@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-20
+
 ### Added
 
 - "Needs reconciliation" digest section listing workers that completed without their task being checked off, prompting `todo_update` after verification ([#7](https://github.com/HandyWote/pi/pull/7)).

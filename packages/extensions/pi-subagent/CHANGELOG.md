@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-20
+
 ### Added
 
 - Coordinator guidance to treat `REJECTED`-prefixed todo results as rejected operations and to call `todo_list` and confirm every task is completed before reporting a final conclusion ([#7](https://github.com/HandyWote/pi/pull/7)).

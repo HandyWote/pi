@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- "Needs reconciliation" digest section listing workers that completed without their task being checked off, prompting `todo_update` after verification ([#7](https://github.com/HandyWote/pi/pull/7)).
+
+### Changed
+
+- Turn-end digest reminders now queue at every turn end and are delivered at the next run start (`nextTurn`) instead of every 10 turns via `followUp`, avoiding injection loops while a list stays active.
+- Revision mismatch errors are now `REJECTED:`-prefixed with retry guidance, and `todo_update`/`todo_claim` descriptions document the REJECTED semantics.
+
 ## [0.4.2] - 2026-08-20
 
 ### Fixed

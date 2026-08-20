@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Coordinator guidance to treat `REJECTED`-prefixed todo results as rejected operations and to call `todo_list` and confirm every task is completed before reporting a final conclusion ([#7](https://github.com/HandyWote/pi/pull/7)).
+
+### Changed
+
+- Terminal completion notifications no longer direct `agent_resume`; they show a neutral "Result available via agent_list" hint and summarize the task to its first line ([#7](https://github.com/HandyWote/pi/pull/7)).
+- `agent_output` now returns a snapshot by default instead of blocking until completion, and warns against polling for terminal events.
+- `agent_resume` on an already-completed agent states that it starts a new run with new instructions.
+
 ## [0.4.1] - 2026-08-18
 
 ### Fixed

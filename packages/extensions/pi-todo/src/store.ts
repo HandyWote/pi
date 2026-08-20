@@ -75,10 +75,14 @@ interface LockHeartbeat {
 	timestamp: number;
 }
 
+export const TODO_LIST_NOT_FOUND = "todo-list-not-found";
+
 export class TodoPersistenceError extends Error {
-	constructor(message: string, options?: ErrorOptions) {
+	readonly code: string;
+	constructor(message: string, options?: ErrorOptions & { code?: string }) {
 		super(message, options);
 		this.name = "TodoPersistenceError";
+		this.code = options?.code ?? "todo-persistence";
 	}
 }
 
@@ -497,7 +501,11 @@ export class FileTodoStore {
 			validateDefinitions(definitions(value.tasks), true);
 			return value;
 		} catch (error) {
-			if (isNotFound(error)) throw new TodoPersistenceError(`Todo list "${id}" does not exist`, { cause: error });
+			if (isNotFound(error))
+				throw new TodoPersistenceError(`Todo list "${id}" does not exist`, {
+					cause: error,
+					code: TODO_LIST_NOT_FOUND,
+				});
 			const backupPath = this.backupPath(id);
 			try {
 				const backup = await readFile(backupPath, "utf8");

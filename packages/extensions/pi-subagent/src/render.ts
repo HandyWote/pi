@@ -336,10 +336,24 @@ function comparePanelRecords(a: AgentRecord, b: AgentRecord): number {
 	return timeB - timeA;
 }
 
+/**
+ * Live row text for the panel: latest assistant output, else the most recent
+ * activity (tool call or text), else the launch task before anything happens.
+ * Multi-line text is flattened to a single line for the one-row-per-record
+ * line model.
+ */
+function panelRowText(record: AgentRecord): string {
+	const lastOutput = record.lastOutput.trim();
+	if (lastOutput) return truncateText(lastOutput, PANEL_TASK_LIMIT);
+	const lastActivity = record.activities.at(-1);
+	if (lastActivity) return truncateText(lastActivity.text, PANEL_TASK_LIMIT);
+	return truncateText(record.task, PANEL_TASK_LIMIT);
+}
+
 function formatPanelRow(record: AgentRecord, theme: Theme, width: number): string {
 	const label = record.definition.displayName ?? record.definition.name;
 	const tokens = record.usage.input + record.usage.output;
-	const row = ` ${theme.fg(statusGlyphColor(record.status), statusGlyph(record.status))} ${theme.fg("accent", label)} ${theme.fg("dim", truncateText(record.task, PANEL_TASK_LIMIT))} | ${record.toolCount} tools | ${formatTokens(tokens)} tok | ${formatDuration(record)}`;
+	const row = ` ${theme.fg(statusGlyphColor(record.status), statusGlyph(record.status))} ${theme.fg("accent", label)} ${theme.fg("dim", panelRowText(record))} | ${record.toolCount} tools | ${formatTokens(tokens)} tok | ${formatDuration(record)}`;
 	return truncateToWidth(row, Math.max(1, width));
 }
 
@@ -365,11 +379,15 @@ export class AgentPanel implements Component {
 		const records = this.manager.list();
 		if (records.length === 0) return [];
 		const safeWidth = Math.max(1, width);
-		const ordered = [...records].sort(comparePanelRecords);
-		const active = ordered.filter((record) => isActiveStatus(record.status)).length;
+		// The panel tracks queued/running agents only; terminal rows drop out
+		// immediately ("use and go"). Records stay in the registry for `/agents`
+		// and resume, but the widget renders nothing once no active agent remains.
+		const active = records.filter((record) => isActiveStatus(record.status));
+		if (active.length === 0) return [];
+		const ordered = [...active].sort(comparePanelRecords);
 		const lines = [
 			truncateToWidth(
-				`${this.theme.fg("accent", "pi-subagent")} ${this.theme.fg("dim", `· ${active} active · ${records.length} total`)}`,
+				`${this.theme.fg("accent", "pi-subagent")} ${this.theme.fg("dim", `· ${ordered.length} active`)}`,
 				safeWidth,
 			),
 		];
@@ -386,13 +404,12 @@ export class AgentPanel implements Component {
 /**
  * Show or hide the persistent agent panel above the editor.
  *
- * Integration point (TODO for the T6 session coordinator): call from
- * `session_start` after the manager is initialized, and again wherever the
- * record set transitions between empty and non-empty (e.g. alongside the
- * existing `updateStatus()` calls in the `onLifecycle` / `onTerminal`
- * callbacks in `index.ts`). The panel component reads live manager state on
+ * Called from `updateStatus()` in `index.ts` on `session_start` and on every
+ * lifecycle/terminal event. The panel component reads live manager state on
  * every render, so repeat calls are cheap and no activity subscription is
- * needed inside this module.
+ * needed inside this module. The widget stays registered while any record
+ * exists so terminal rows never flash back; `AgentPanel.render` filters to
+ * active records, so the widget renders nothing once no active agent remains.
  */
 export function registerAgentPanel(ctx: ExtensionContext, manager: AgentManager | undefined): void {
 	if (!ctx.hasUI) return;

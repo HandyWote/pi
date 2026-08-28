@@ -84,6 +84,9 @@ describe("renderAgentResult", () => {
 describe("AgentPanel", () => {
 	it("flattens multi-line tasks so each record renders as one line", () => {
 		const multiLine = record();
+		multiLine.status = "running";
+		multiLine.lastOutput = "";
+		multiLine.activities = [];
 		multiLine.task = "Step one: read /a/b/c\n1. read /home/handy/projects/pi/README.md\n2. run a command";
 		const manager = { list: () => [multiLine] } as unknown as AgentManager;
 		const lines = new AgentPanel(manager, theme).render(120);
@@ -92,5 +95,59 @@ describe("AgentPanel", () => {
 		expect(lines.some((line) => line.includes("Step one: read"))).toBe(true);
 		expect(lines.every((line) => !line.includes("\n"))).toBe(true);
 		expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
+	});
+
+	it("prefers live lastOutput over the launch task in the row text", () => {
+		const live = record();
+		live.status = "running";
+		live.lastOutput = "Now patching the render pipeline";
+		live.activities = [
+			{ type: "tool", text: "read", timestamp: Date.now() },
+			{ type: "text", text: "Now patching the render pipeline", timestamp: Date.now() },
+		];
+		const manager = { list: () => [live] } as unknown as AgentManager;
+		const lines = new AgentPanel(manager, theme).render(120);
+
+		expect(lines.some((line) => line.includes("Now patching the render pipeline"))).toBe(true);
+		expect(lines.some((line) => line.includes("a very long task"))).toBe(false);
+	});
+
+	it("falls back to the latest tool activity when there is no assistant output yet", () => {
+		const toolOnly = record();
+		toolOnly.status = "running";
+		toolOnly.lastOutput = "";
+		toolOnly.activities = [{ type: "tool", text: "edit", timestamp: Date.now() }];
+		toolOnly.task = "Original launch task";
+		const manager = { list: () => [toolOnly] } as unknown as AgentManager;
+		const lines = new AgentPanel(manager, theme).render(120);
+
+		expect(lines.some((line) => line.includes("edit"))).toBe(true);
+		expect(lines.some((line) => line.includes("Original launch task"))).toBe(false);
+	});
+
+	it("shows only active records and reports only the active count", () => {
+		const running = record();
+		running.status = "running";
+		running.lastOutput = "Running worker output";
+		const terminal = record();
+		terminal.status = "completed";
+		terminal.lastOutput = "Terminal worker output";
+		terminal.definition = { ...terminal.definition, name: "terminal-worker" };
+		const manager = { list: () => [terminal, running] } as unknown as AgentManager;
+		const lines = new AgentPanel(manager, theme).render(120);
+
+		expect(lines.some((line) => line.includes("Running worker output"))).toBe(true);
+		expect(lines.some((line) => line.includes("Terminal worker output"))).toBe(false);
+		expect(lines[0]!.includes("1 active")).toBe(true);
+		expect(lines[0]!.includes("total")).toBe(false);
+	});
+
+	it("renders nothing when no active records remain", () => {
+		const terminal = record();
+		terminal.status = "completed";
+		const manager = { list: () => [terminal] } as unknown as AgentManager;
+		const lines = new AgentPanel(manager, theme).render(120);
+
+		expect(lines).toEqual([]);
 	});
 });

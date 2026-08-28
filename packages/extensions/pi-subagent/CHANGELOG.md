@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-28
+
+### Added
+
+- The persistent agent panel now shows live status rows: each row displays the subagent's latest assistant text (falling back to the most recent activity, then the launch task) and terminal agents drop out of the panel immediately while their records stay in the registry for the whole session.
+- The `/agents` detail view is now a live, scrollable transcript: assistant text renders through the main-session Markdown theme, tool calls render as compact rows, and running agents auto-follow the tail with line/page scrolling, `G`/`g` jump, and `Esc` back. Transcripts are parsed incrementally from the child transcript file and polled off the render path ([#8](https://github.com/HandyWote/pi/pull/8)).
+
 ## [0.4.2] - 2026-08-20
 
 ### Added

@@ -613,6 +613,110 @@ export default function(pi) {
 		});
 	});
 
+	describe("ui prompt events", () => {
+		it("emits ui_prompt_start/end around select/confirm/input", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("ui_prompt_start", (event) => {
+						globalThis.__promptEvents.push({ type: "start", kind: event.kind, title: event.title });
+					});
+					pi.on("ui_prompt_end", (event) => {
+						globalThis.__promptEvents.push({ type: "end", kind: event.kind, title: event.title });
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "ui-prompt.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, extensionContextActions);
+
+			const events: Array<{ type: string; kind: string; title?: string }> = [];
+			// @ts-expect-error test global
+			globalThis.__promptEvents = events;
+			try {
+				runner.setUIContext(
+					{
+						select: async () => "chosen",
+						confirm: async () => true,
+						input: async () => "typed",
+					} as unknown as ExtensionUIContext,
+					"tui",
+				);
+
+				const ui = runner.createContext().ui;
+				await ui.select("Pick one", ["a", "b"]);
+				await vi.waitFor(() => expect(events.length).toBe(2));
+				expect(events).toEqual([
+					{ type: "start", kind: "select", title: "Pick one" },
+					{ type: "end", kind: "select", title: "Pick one" },
+				]);
+
+				events.length = 0;
+				await ui.confirm("Sure?", "Proceed");
+				await vi.waitFor(() => expect(events.length).toBe(2));
+				expect(events).toEqual([
+					{ type: "start", kind: "confirm", title: "Sure?" },
+					{ type: "end", kind: "confirm", title: "Sure?" },
+				]);
+
+				events.length = 0;
+				await ui.input("Name");
+				await vi.waitFor(() => expect(events.length).toBe(2));
+				expect(events).toEqual([
+					{ type: "start", kind: "input", title: "Name" },
+					{ type: "end", kind: "input", title: "Name" },
+				]);
+			} finally {
+				// @ts-expect-error test global
+				delete globalThis.__promptEvents;
+			}
+		});
+
+		it("coalesces nested prompts into one start/end pair", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("ui_prompt_start", () => {
+						globalThis.__nestedEvents.push("start");
+					});
+					pi.on("ui_prompt_end", () => {
+						globalThis.__nestedEvents.push("end");
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "ui-prompt-nested.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, extensionContextActions);
+
+			const events: string[] = [];
+			// @ts-expect-error test global
+			globalThis.__nestedEvents = events;
+			try {
+				runner.setUIContext(
+					{
+						select: async () => {
+							// Nested prompt while an outer prompt is active.
+							return undefined;
+						},
+						confirm: async () => true,
+						input: async () => undefined,
+					} as unknown as ExtensionUIContext,
+					"tui",
+				);
+
+				const ui = runner.createContext().ui;
+				await ui.select("Outer", ["a"]);
+				await vi.waitFor(() => expect(events.length).toBe(2));
+				expect(events).toEqual(["start", "end"]);
+			} finally {
+				// @ts-expect-error test global
+				delete globalThis.__nestedEvents;
+			}
+		});
+	});
+
 	describe("message and entry renderers", () => {
 		it("gets Markdown transformers in extension load order", async () => {
 			const extCode = `

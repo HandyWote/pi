@@ -258,9 +258,13 @@ export interface ImagesOptions {
 
 export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
+export type AnthropicRefusalFallback = "default" | readonly { model: string }[];
+
 // Unified options with reasoning passed to streamSimple() and completeSimple()
 export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
+	/** Anthropic server-side fallback for eligible refusal stop reasons. Anthropic providers only. */
+	refusalFallbacks?: AnthropicRefusalFallback;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
 }
@@ -573,6 +577,12 @@ export interface AnthropicMessagesCompat {
 	allowEmptySignature?: boolean;
 	/** Whether the provider supports Anthropic strict tool schemas. Default: false; generated Anthropic models enable it explicitly. */
 	supportsStrictTools?: boolean;
+	/**
+	 * Model ids Anthropic accepts in `fallbacks` for server-side refusal fallback.
+	 * When absent or empty, callers must omit `fallbacks`; Anthropic rejects the
+	 * field for models with no permitted fallback targets.
+	 */
+	allowedFallbackModels?: string[];
 	/**
 	 * Whether the provider supports deferred tools loaded by `tool_reference`
 	 * blocks in tool results. Default: true for first-party Anthropic models

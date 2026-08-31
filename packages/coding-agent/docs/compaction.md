@@ -37,6 +37,8 @@ By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settin
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
+During a multi-turn agent run, Pi checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks the threshold before a new user prompt and after a low-level agent run ends.
+
 Threshold auto-compaction is transparent to the active task: after pi writes the summary and reloads the session context, the current agent run resumes by default.
 
 Manual compact keeps its explicit command semantics. Pre-prompt checks, aborted or error turns, and overflow retry keep their separate safety behavior; overflow retry may rerun the aborted request after compacting.

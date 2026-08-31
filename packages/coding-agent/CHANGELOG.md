@@ -5,10 +5,34 @@
 ### Added
 
 - Added `app.agent.resume` keybinding (default `r`), used by the pi-subagent agent management view to resume a selected subagent.
+- Added `session_compact_failed` extension events exposing compaction failures and aborts with reason, retry state, source, and error message ([#8241](https://github.com/earendil-works/pi/issues/8241)).
+- Added `ui_prompt_start` / `ui_prompt_end` extension events fired around blocking `select` / `confirm` / `input` prompts ([#8355](https://github.com/earendil-works/pi/issues/8355)).
+- Added RPC `clear_queue` support so RPC clients can drop queued requests.
+- Added an exported image MIME detector helper ([#8600](https://github.com/earendil-works/pi/issues/8600)).
+- Added OpenRouter reasoning metadata discovery: profiles discovered from OpenRouter derive thinking level maps from the gateway's `reasoning` metadata, taking precedence over models.dev ([#8614](https://github.com/earendil-works/pi/issues/8614)).
+- Added fullscreen copy-on-select setting and an `app.message.copy` editor action that copies the active selection ([#8731](https://github.com/earendil-works/pi/issues/8731)).
+- Added terminal capability override settings wired from `TerminalSettings` and `PI_HYPERLINKS` / `PI_IMAGE_PROTOCOL` environment variables ([#8665](https://github.com/earendil-works/pi/issues/8665)).
 
 ### Fixed
 
+- Fixed run-time custom messages (e.g. from `agent_end` handlers) interleaving between a tool call and its result; they now queue until the turn's tool results are in ([#8537](https://github.com/earendil-works/pi/issues/8537)).
 - Fixed large tool results crossing the auto-compaction threshold being sent to the provider before compaction. Pi now compacts between tool execution and the next assistant response in the same run, and restores interactive progress when that run resumes.
+- Fixed unterminated session files failing to load; the trailing line is completed before parsing.
+- Fixed Windows `taskkill` spawn crashes on absolute paths and unhandled async errors ([#6596](https://github.com/earendil-works/pi/issues/6596)).
+- Fixed `--` end-of-options handling so prompt text after `--` is never parsed as a flag ([#7269](https://github.com/earendil-works/pi/issues/7269)).
+- Fixed UTF-8 BOM handling across text inputs (auth storage, frontmatter, resource loading) ([#8337](https://github.com/earendil-works/pi/issues/8337)).
+- Fixed nested markdown skills not being discovered ([#8255](https://github.com/earendil-works/pi/issues/8255)) and root markdown files in settings dirs being loaded as skills ([#8012](https://github.com/earendil-works/pi/issues/8012)).
+- Fixed the edit tool accepting a single-object `edits` input ([#8011](https://github.com/earendil-works/pi/issues/8011)).
+- Fixed npm update checks downgrading newer installed packages by using `semver.gt` for version comparison ([#8239](https://github.com/earendil-works/pi/issues/8239)).
+- Fixed `/tree` slash command ordering so it groups with model commands.
+- Fixed compaction proceeding without provider usage by falling back to message-size estimation ([#8328](https://github.com/earendil-works/pi/issues/8328)).
+- Fixed branch summaries losing the navigation-away leaf in session trees.
+- Fixed failed extension factories leaking registrations and subscriptions; failed extensions are now fully discarded ([#8424](https://github.com/earendil-works/pi/issues/8424)).
+- Fixed the pi-subagent extension prompting for project-local agents in trusted projects ([#8261](https://github.com/earendil-works/pi/issues/8261)).
+
+### Changed
+
+- Changed runtime custom messages queued without a lane and with `triggerTurn: false` to append after the turn's tool results instead of steering mid-run.
 
 ## [0.85.3] - 2026-08-17
 

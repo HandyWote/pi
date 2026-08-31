@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added built-in model knowledge for GLM-5.3 (with Z.AI thinking format and reasoning effort support), Grok 4.6 (Responses API routing), and deepseek-v4-flash-vision-exp (per-model `vision: true` overriding the family default) with API reference costs.
+- Added a `pi/<version>` user-agent header to the OpenAI-compatible, Anthropic, Azure, Mistral, and Responses API adapters ([#8361](https://github.com/earendil-works/pi/issues/8361)).
+- Generalized OpenAI-completions thinking token budget fields so reasoning budget keys follow each model's dialect ([#8275](https://github.com/earendil-works/pi/issues/8275)).
+- Refreshed the generated image model catalog (meta/muse-image and recraft v4 styles).
+
+### Fixed
+
+- Fixed `tool_choice` being sent to OpenAI-compatible endpoints when a request carries no tools ([#8607](https://github.com/earendil-works/pi/issues/8607)).
+- Fixed fragmented indexed Mistral tool call chunks not merging (upstream `fix(ai): merge indexed Mistral tool call chunks`).
+- Fixed Azure Responses requests dropping `tool_choice`.
+- Fixed Anthropic refusal errors aborting the stream instead of surfacing as a refusal message with fallback handling ([#8258](https://github.com/earendil-works/pi/issues/8258)).
+- Ported the OpenAI-completions reasoning details chain: reasoning details now ride inside the thinking signature instead of parallel tool-call-scoped buffers, deltas concatenate correctly, and the thinking signature serializes once per message ([#8246](https://github.com/earendil-works/pi/issues/8246), [#8605](https://github.com/earendil-works/pi/issues/8605), [#8671](https://github.com/earendil-works/pi/issues/8671)).
+
 ## [0.85.3] - 2026-08-17
 
 ### Added

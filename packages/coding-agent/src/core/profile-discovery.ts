@@ -1,4 +1,5 @@
 import type { RegistryApi } from "@handy_wote/pi-ai";
+import { getOpenRouterThinkingLevelMap, type OpenRouterReasoningMetadata } from "./openrouter-reasoning-options.ts";
 import { buildProtocolRoutes, type ProfileAuthStyle, type ProfileProtocolRoute } from "./profile-endpoints.ts";
 import type { Profile } from "./profiles-types.ts";
 
@@ -7,6 +8,8 @@ export interface DiscoveredProfileModel {
 	name: string;
 	availableApis?: RegistryApi[];
 	gatewayPreferredApi?: RegistryApi;
+	/** Derived from OpenRouter-style reasoning metadata on the catalog entry; takes precedence over models.dev enrich. */
+	thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface ProfileDiscoveryCandidate {
@@ -60,6 +63,8 @@ type CatalogAttempt = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+/** Bounded retries for catalog requests that hang past the per-attempt timeout (df018b602). */
+const CATALOG_TIMEOUT_RETRIES = 2;
 
 const API_ALIASES: Readonly<Record<string, RegistryApi>> = {
 	"openai-completions": "openai-completions",
@@ -98,6 +103,20 @@ function readPreferredApi(record: Record<string, unknown>): RegistryApi | undefi
 	return normalizeApi(record.preferred_api ?? record.preferredApi ?? record.api ?? record.protocol);
 }
 
+function readReasoning(record: Record<string, unknown>): OpenRouterReasoningMetadata | undefined {
+	if (!isRecord(record.reasoning)) return undefined;
+	const { mandatory, default_enabled, supported_efforts, default_effort } = record.reasoning;
+	const isEffort = (value: unknown): value is NonNullable<OpenRouterReasoningMetadata["supported_efforts"]>[number] =>
+		typeof value === "string" && ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value);
+	const efforts = Array.isArray(supported_efforts) ? supported_efforts.filter(isEffort) : undefined;
+	return {
+		...(typeof mandatory === "boolean" ? { mandatory } : {}),
+		...(typeof default_enabled === "boolean" ? { default_enabled } : {}),
+		...(efforts && efforts.length > 0 ? { supported_efforts: efforts } : {}),
+		...(isEffort(default_effort) ? { default_effort } : {}),
+	};
+}
+
 function parseCatalog(value: unknown): Catalog {
 	if (!isRecord(value)) throw new Error("model catalog must be a JSON object");
 	const rawModels = value.data ?? value.models;
@@ -108,12 +127,15 @@ function parseCatalog(value: unknown): Catalog {
 		const availableApis = readApis(raw);
 		const gatewayPreferredApi = readPreferredApi(raw);
 		const nameValue = raw.name ?? raw.display_name ?? raw.displayName;
+		const reasoning = readReasoning(raw);
+		const thinkingLevelMap = getOpenRouterThinkingLevelMap(reasoning);
 		return [
 			{
 				id: raw.id,
 				name: typeof nameValue === "string" && nameValue.length > 0 ? nameValue : raw.id,
 				...(availableApis.length > 0 ? { availableApis } : {}),
 				...(gatewayPreferredApi ? { gatewayPreferredApi } : {}),
+				...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 			},
 		];
 	});
@@ -169,6 +191,7 @@ function modelsKey(models: DiscoveredProfileModel[]): string {
 				name: model.name,
 				availableApis: model.availableApis,
 				gatewayPreferredApi: model.gatewayPreferredApi,
+				thinkingLevelMap: model.thinkingLevelMap,
 			}))
 			.sort((left, right) => left.id.localeCompare(right.id)),
 	);
@@ -187,6 +210,28 @@ function withTimeout(init: RequestInit, timeoutMs: number): { init: RequestInit;
 	};
 }
 
+/** Fetch once with a fresh per-attempt timeout, retrying hung (timed-out) requests. */
+async function fetchWithTimeoutRetry(
+	fetchImpl: typeof fetch,
+	url: string,
+	init: RequestInit,
+	timeoutMs: number,
+	retriesOnTimeout: number,
+): Promise<Response> {
+	for (let attempt = 0; ; attempt += 1) {
+		const timed = withTimeout(init, timeoutMs);
+		try {
+			return await fetchImpl(url, timed.init);
+		} catch (error) {
+			const isTimeout = error instanceof Error && error.name === "AbortError";
+			if (!isTimeout || attempt >= retriesOnTimeout) throw error;
+			// Hung request: retry with a fresh per-attempt timeout.
+		} finally {
+			timed.cancel();
+		}
+	}
+}
+
 /** Fetch a URL while allowing at most one same-origin redirect. */
 async function fetchSameOrigin(
 	fetchImpl: typeof fetch,
@@ -194,16 +239,17 @@ async function fetchSameOrigin(
 	init: RequestInit,
 	timeoutMs: number,
 	followSameOriginRedirect = true,
+	retriesOnTimeout = 0,
 ): Promise<Response> {
 	let currentUrl = url;
 	for (let redirectCount = 0; redirectCount <= 1; redirectCount += 1) {
-		const timed = withTimeout({ ...init, redirect: "manual" }, timeoutMs);
-		let response: Response;
-		try {
-			response = await fetchImpl(currentUrl, timed.init);
-		} finally {
-			timed.cancel();
-		}
+		const response = await fetchWithTimeoutRetry(
+			fetchImpl,
+			currentUrl,
+			{ ...init, redirect: "manual" },
+			timeoutMs,
+			retriesOnTimeout,
+		);
 		if (response.status < 300 || response.status >= 400) return response;
 		if (!followSameOriginRedirect) return response;
 		const location = response.headers.get("location");
@@ -229,6 +275,8 @@ async function fetchCatalog(
 		request.url,
 		{ method: "GET", headers: authHeaders(profile, request.authStyle) },
 		timeoutMs,
+		true,
+		CATALOG_TIMEOUT_RETRIES,
 	);
 	if (!response.ok) throw new Error(`HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`);
 	return parseCatalog(await response.json());

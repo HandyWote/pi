@@ -149,6 +149,52 @@ describe("enrichWithModelsDev", () => {
 		});
 	});
 
+	it("prefers a discovery-derived thinkingLevelMap over models.dev effort options", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							deepseek: {
+								models: {
+									"deepseek-v4-pro": {
+										name: "DeepSeek V4 Pro",
+										reasoning_options: [{ type: "effort", values: ["high", "max"] }],
+									},
+								},
+							},
+						}),
+						{ status: 200 },
+					),
+			),
+		);
+		const result = await enrichWithModelsDev([
+			{
+				id: "deepseek-v4-pro",
+				name: "DeepSeek V4 Pro",
+				thinkingLevelMap: {
+					off: null,
+					minimal: null,
+					low: "low",
+					medium: null,
+					high: "high",
+					xhigh: null,
+					max: null,
+				},
+			},
+		]);
+		expect(result[0].thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: null,
+		});
+	});
+
 	it("leaves thinkingLevelMap unset when only toggle reasoning options exist", async () => {
 		vi.stubGlobal(
 			"fetch",

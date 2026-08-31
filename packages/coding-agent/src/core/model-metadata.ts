@@ -148,7 +148,9 @@ function enrichOne(
 		.filter((value): value is number => typeof value === "number" && value > 0)
 		.sort((a, b) => a - b);
 	const registryGroup = lookupModelCompatOverlay(registrySources, discovered.id)?.group;
-	const thinkingLevelMap = best.reasoning_options ? getEffortThinkingLevelMap(best.reasoning_options) : undefined;
+	const thinkingLevelMap =
+		discovered.thinkingLevelMap ??
+		(best.reasoning_options ? getEffortThinkingLevelMap(best.reasoning_options) : undefined);
 
 	return {
 		...discovered,

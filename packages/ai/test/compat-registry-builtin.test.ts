@@ -30,9 +30,11 @@ const expectedFamilyIds = [
 ];
 
 const expectedModelIds = [
+	"deepseek-v4-flash-vision-exp",
 	"deepseek-v4-flash",
 	"deepseek-v4-pro",
 	"glm-5.2",
+	"glm-5.3",
 	"kimi-k3",
 	"kimi-k2.7-code",
 	"kimi-k2.7-code-highspeed",
@@ -49,6 +51,7 @@ const expectedModelIds = [
 	"gpt-5.6-luna",
 	"gpt-5-pro",
 	"grok-4.5",
+	"grok-4.6",
 	"mistral-medium-3.5",
 	"Ling-2.6-flash",
 	"Ling-2.6-1T",
@@ -63,6 +66,37 @@ interface RuleCase {
 }
 
 const ruleCases: RuleCase[] = [
+	{
+		name: "DeepSeek V4 Flash Vision Exp overrides family vision",
+		modelId: "deepseek-v4-flash-vision-exp",
+		api: "openai-completions",
+		expected: {
+			metadata: {
+				vision: true,
+				cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+			},
+		},
+	},
+	{
+		name: "GLM 5.3 mirrors GLM 5.2 z.ai thinking and pricing",
+		modelId: "glm-5.3",
+		api: "openai-completions",
+		expected: {
+			group: { id: "glm", label: "GLM" },
+			compat: { supportsReasoningEffort: true, thinkingFormat: "zai" },
+			thinkingLevelMap: { minimal: null, low: "high", medium: "high", high: "high", max: "max" },
+			metadata: { cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 } },
+		},
+	},
+	{
+		name: "Grok 4.6 Responses restrictions",
+		modelId: "grok-4.6",
+		api: "openai-responses",
+		expected: {
+			compat: { supportsLongCacheRetention: false },
+			thinkingLevelMap: { off: null, minimal: null },
+		},
+	},
 	{
 		name: "DeepSeek V4 native completions",
 		modelId: "deepseek-v4-pro",

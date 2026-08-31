@@ -135,6 +135,73 @@ describe("discoverProfile", () => {
 		);
 	});
 
+	it("derives thinkingLevelMap from OpenRouter-style reasoning metadata", async () => {
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			if (init?.method !== "POST") {
+				return catalogResponse({
+					data: [
+						{
+							id: "model-or",
+							name: "OpenRouter Model",
+							reasoning: { mandatory: true, supported_efforts: ["high", "low"] },
+						},
+						{
+							id: "model-plain",
+							name: "Plain Model",
+							reasoning: { mandatory: false },
+						},
+					],
+				});
+			}
+			return protocolError();
+		});
+
+		const result = await discoverProfile(profile(), { fetch: fetchMock as typeof fetch, probeApis: false });
+		expect(result.candidates[0]?.models).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "model-or",
+					thinkingLevelMap: {
+						off: null,
+						minimal: null,
+						low: "low",
+						medium: null,
+						high: "high",
+						xhigh: null,
+						max: null,
+					},
+				}),
+				expect.objectContaining({ id: "model-plain" }),
+			]),
+		);
+		expect(
+			result.candidates[0]?.models.find((model) => model.id === "model-plain")?.thinkingLevelMap,
+		).toBeUndefined();
+	});
+
+	it("retries hung catalog requests past the per-attempt timeout", async () => {
+		const attemptsByUrl = new Map<string, number>();
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (init?.method !== "POST") {
+				const attempt = (attemptsByUrl.get(url) ?? 0) + 1;
+				attemptsByUrl.set(url, attempt);
+				if (attempt === 1) {
+					// Simulate the per-attempt timeout aborting the hung request.
+					init?.signal?.dispatchEvent(new Event("abort"));
+					throw new DOMException("The operation was aborted.", "AbortError");
+				}
+				return catalogResponse({ data: [{ id: "model-a", name: "Model A" }] });
+			}
+			return protocolError();
+		});
+
+		const result = await discoverProfile(profile(), { fetch: fetchMock as typeof fetch });
+		expect(result.failures).toEqual([]);
+		expect(result.candidates[0]?.models[0]).toMatchObject({ id: "model-a" });
+		for (const attempts of attemptsByUrl.values()) expect(attempts).toBeGreaterThan(1);
+	});
+
 	it("supports catalog-only diagnostics when explicitly requested", async () => {
 		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			expect(init?.method ?? "GET").toBe("GET");

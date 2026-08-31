@@ -303,6 +303,16 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 	],
 	models: [
 		// cd00a0d9^: generate-models.ts deepseekV4Models.
+		// 587be985a: deepseek-v4-flash-vision-exp carries model-level vision so the
+		// family prefix (deepseek-v4- has vision: false) does not inherit the wrong value.
+		{
+			id: "deepseek-v4-flash-vision-exp",
+			metadata: {
+				name: "DeepSeek V4 Flash Vision Exp",
+				vision: true,
+				cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+			},
+		},
 		{
 			id: "deepseek-v4-flash",
 			metadata: {
@@ -326,6 +336,26 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 		{
 			id: "glm-5.2",
 			metadata: { reasoning: true, toolCall: true },
+			apis: {
+				"openai-completions": {
+					compat: {
+						supportsStore: false,
+						supportsDeveloperRole: false,
+						supportsReasoningEffort: true,
+						thinkingFormat: "zai",
+					},
+					thinkingLevelMap: { minimal: null, low: "high", medium: "high", high: "high", max: "max" },
+				},
+			},
+		},
+		// 5cd6a2a50: glm-5.3 pricing, mirroring the glm-5.2 z.ai entry.
+		{
+			id: "glm-5.3",
+			metadata: {
+				reasoning: true,
+				toolCall: true,
+				cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+			},
 			apis: {
 				"openai-completions": {
 					compat: {
@@ -562,8 +592,21 @@ const builtinCompatRegistryData: ModelCompatRegistry = {
 			metadata: { maxTokens: 128_000 },
 		},
 		// cd00a0d9^: XAI_RESPONSES_* for the official Grok 4.5 Responses endpoint.
+		// 70e878d4c: grok-4.6 mirrors grok-4.5 (Responses-only, no long cache retention).
 		{
 			id: "grok-4.5",
+			metadata: { reasoning: true, toolCall: true },
+			group: { id: "grok", label: "Grok" },
+			preferredApis: ["openai-responses"],
+			apis: {
+				"openai-responses": {
+					compat: { supportsLongCacheRetention: false },
+					thinkingLevelMap: { off: null, minimal: null },
+				},
+			},
+		},
+		{
+			id: "grok-4.6",
 			metadata: { reasoning: true, toolCall: true },
 			group: { id: "grok", label: "Grok" },
 			preferredApis: ["openai-responses"],

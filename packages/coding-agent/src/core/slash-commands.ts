@@ -19,6 +19,7 @@ export interface BuiltinSlashCommand {
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "settings", description: "Open settings menu" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
+	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
 	{ name: "import", description: "Import and resume a session from a JSONL file" },
@@ -30,7 +31,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
-	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },
 	{ name: "profile", description: "Manage connection profiles" },
 	{ name: "new", description: "Start a new session" },

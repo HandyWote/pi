@@ -88,6 +88,7 @@ import {
 	type SendMessageOptions,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
+	type SessionCompactFailedEvent,
 	type SessionStartEvent,
 	type ShutdownHandler,
 	type ToolDefinition,
@@ -590,6 +591,12 @@ export class AgentSession {
 			});
 		}
 		return this._idleWaitPromise;
+	}
+
+	private async _emitSessionCompactFailed(event: Omit<SessionCompactFailedEvent, "type">): Promise<void> {
+		if (this._extensionRunner.hasHandlers("session_compact_failed")) {
+			await this._extensionRunner.emit({ type: "session_compact_failed", ...event });
+		}
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
@@ -1879,6 +1886,7 @@ export class AgentSession {
 		await this.abort();
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
+		let fromExtension = false;
 
 		try {
 			if (!this.model) {
@@ -1901,7 +1909,6 @@ export class AgentSession {
 			}
 
 			let extensionCompaction: CompactionResult | undefined;
-			let fromExtension = false;
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const result = (await this._extensionRunner.emit({
@@ -2003,13 +2010,21 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+			const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
 				result: undefined,
 				aborted,
 				willRetry: false,
-				errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
+				errorMessage,
+			});
+			await this._emitSessionCompactFailed({
+				reason: "manual",
+				errorMessage,
+				aborted,
+				willRetry: false,
+				fromExtension,
 			});
 			throw error;
 		} finally {
@@ -2081,14 +2096,22 @@ export class AgentSession {
 			}
 
 			if (this._overflowRecoveryAttempted) {
+				const errorMessage =
+					"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.";
 				this._emit({
 					type: "compaction_end",
 					reason: "overflow",
 					result: undefined,
 					aborted: false,
 					willRetry: false,
-					errorMessage:
-						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+					errorMessage,
+				});
+				await this._emitSessionCompactFailed({
+					reason: "overflow",
+					errorMessage,
+					aborted: false,
+					willRetry: false,
+					fromExtension: false,
 				});
 				return false;
 			}
@@ -2112,17 +2135,20 @@ export class AgentSession {
 		if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
 			const messages = this.agent.state.messages;
 			const estimate = estimateContextTokens(messages);
-			if (estimate.lastUsageIndex === null) return false; // No usage data at all
-			// Verify the usage source is post-compaction. Kept pre-compaction messages
-			// have stale usage reflecting the old (larger) context and would falsely
-			// trigger compaction right after one just finished.
-			const usageMsg = messages[estimate.lastUsageIndex];
-			if (
-				compactionEntry &&
-				usageMsg.role === "assistant" &&
-				this._messageIsBeforeCompaction(usageMsg, compactionEntry, branch)
-			) {
-				return false;
+			// Without provider usage, estimate.tokens is the pure message-size estimate.
+			// Only usage-backed estimates need the stale pre-compaction check.
+			if (estimate.lastUsageIndex !== null) {
+				// Verify the usage source is post-compaction. Kept pre-compaction messages
+				// have stale usage reflecting the old (larger) context and would falsely
+				// trigger compaction right after one just finished.
+				const usageMsg = messages[estimate.lastUsageIndex];
+				if (
+					compactionEntry &&
+					usageMsg.role === "assistant" &&
+					this._messageIsBeforeCompaction(usageMsg, compactionEntry, branch)
+				) {
+					return false;
+				}
 			}
 			contextTokens = estimate.tokens;
 		} else {
@@ -2161,6 +2187,7 @@ export class AgentSession {
 	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
+		let fromExtension = false;
 
 		try {
 			if (!this.model) {
@@ -2192,7 +2219,6 @@ export class AgentSession {
 			started = true;
 
 			let extensionCompaction: CompactionResult | undefined;
-			let fromExtension = false;
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const extensionResult = (await this._extensionRunner.emit({
@@ -2212,6 +2238,12 @@ export class AgentSession {
 						result: undefined,
 						aborted: true,
 						willRetry: false,
+					});
+					await this._emitSessionCompactFailed({
+						reason,
+						aborted: true,
+						willRetry: false,
+						fromExtension: false,
 					});
 					return false;
 				}
@@ -2264,6 +2296,12 @@ export class AgentSession {
 					result: undefined,
 					aborted: true,
 					willRetry: false,
+				});
+				await this._emitSessionCompactFailed({
+					reason,
+					aborted: true,
+					willRetry: false,
+					fromExtension,
 				});
 				return false;
 			}
@@ -2342,16 +2380,24 @@ export class AgentSession {
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
+				const formattedErrorMessage =
+					reason === "overflow"
+						? `Context overflow recovery failed: ${errorMessage}`
+						: `Auto-compaction failed: ${errorMessage}`;
 				this._emit({
 					type: "compaction_end",
 					reason,
 					result: undefined,
 					aborted: false,
 					willRetry: false,
-					errorMessage:
-						reason === "overflow"
-							? `Context overflow recovery failed: ${errorMessage}`
-							: `Auto-compaction failed: ${errorMessage}`,
+					errorMessage: formattedErrorMessage,
+				});
+				await this._emitSessionCompactFailed({
+					reason,
+					errorMessage: formattedErrorMessage,
+					aborted: false,
+					willRetry: false,
+					fromExtension,
 				});
 			}
 			return false;

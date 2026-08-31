@@ -235,6 +235,11 @@ async function loadSkillFromFile(
 	filePath: string,
 ): Promise<{ skill: Skill | null; diagnostics: SkillDiagnostic[] }> {
 	const diagnostics: SkillDiagnostic[] = [];
+	const isDeclaredSkill =
+		filePath
+			.replace(/[\\/]+$/, "")
+			.split(/[\\/]/)
+			.pop() === "SKILL.md";
 	const rawContent = await env.readTextFile(filePath);
 	if (!rawContent.ok) {
 		diagnostics.push({ type: "warning", code: "read_failed", message: rawContent.error.message, path: filePath });
@@ -243,7 +248,9 @@ async function loadSkillFromFile(
 
 	const parsed = parseFrontmatter<SkillFrontmatter>(rawContent.value);
 	if (!parsed.ok) {
-		diagnostics.push({ type: "warning", code: "parse_failed", message: parsed.error.message, path: filePath });
+		if (isDeclaredSkill) {
+			diagnostics.push({ type: "warning", code: "parse_failed", message: parsed.error.message, path: filePath });
+		}
 		return { skill: null, diagnostics };
 	}
 
@@ -251,6 +258,9 @@ async function loadSkillFromFile(
 	const skillDir = dirnameEnvPath(filePath);
 	const parentDirName = basenameEnvPath(skillDir);
 	const description = typeof frontmatter.description === "string" ? frontmatter.description : undefined;
+	if (!isDeclaredSkill && (!description || description.trim() === "")) {
+		return { skill: null, diagnostics };
+	}
 
 	for (const error of validateDescription(description)) {
 		diagnostics.push({ type: "warning", code: "invalid_metadata", message: error, path: filePath });

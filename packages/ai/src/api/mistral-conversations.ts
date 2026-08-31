@@ -25,6 +25,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -65,6 +66,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			const mistral = new Mistral({
 				apiKey,
 				serverURL: model.baseUrl,
+				userAgent: getPiUserAgent(),
 				...(options?.fetch ? { httpClient: new HTTPClient({ fetcher: options.fetch }) } : {}),
 			});
 

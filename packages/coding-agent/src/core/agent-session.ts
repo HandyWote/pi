@@ -347,6 +347,8 @@ export class AgentSession {
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
+	private _pendingCustomMessages: CustomMessage[] = [];
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -715,6 +717,15 @@ export class AgentSession {
 					this._retryAttempt = 0;
 				}
 			}
+		}
+
+		// A turn ends after its assistant message and every tool result has been appended,
+		// so this is the first point in the run where a context-only custom message can be
+		// inserted without landing between a tool call and its result. Flushing after the
+		// extension and listener dispatch above also picks up messages that turn_end
+		// handlers queued.
+		if (event.type === "turn_end") {
+			this._flushPendingCustomMessages();
 		}
 	};
 
@@ -1129,6 +1140,7 @@ export class AgentSession {
 		} finally {
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
+			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();
 		}
 	}
@@ -1238,8 +1250,9 @@ export class AgentSession {
 				return;
 			}
 
-			// Flush any pending bash messages before the new prompt
+			// Flush any pending bash and custom messages before the new prompt
 			this._flushPendingBashMessages();
+			this._flushPendingCustomMessages();
 
 			// Validate model
 			if (!this.model) {
@@ -1490,8 +1503,9 @@ export class AgentSession {
 	/**
 	 * Send a custom message to the session. Creates a CustomMessageEntry.
 	 *
-	 * Handles three cases:
+	 * Handles four cases:
 	 * - Streaming: queues message, processed when loop pulls from queue
+	 * - Streaming + triggerTurn false (no explicit lane): appended to state/session once the current turn ends
 	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
 	 * - Not streaming + no trigger: appends to state/session, no turn
 	 *
@@ -1544,8 +1558,15 @@ export class AgentSession {
 				this.agent.event(appMessage, queueOptions);
 			} else if (options?.deliverAs === "followUp") {
 				this.agent.followUp(appMessage, queueOptions);
-			} else {
+			} else if (options?.deliverAs === "steer" || options?.triggerTurn !== false) {
 				this.agent.steer(appMessage, queueOptions);
+			} else {
+				// Context-only custom message while the agent is running. Appending now would put
+				// the message between an assistant tool call and its result, which providers that
+				// validate message order reject on replay. Defer to the end of the turn. Nothing
+				// is emitted yet: message events must not describe messages the session tree does
+				// not contain. Queued messages are appended once the turn's tool results are in.
+				this._pendingCustomMessages.push(appMessage);
 			}
 		} else if (options?.triggerTurn) {
 			const resolved = queueOptions ? await this.agent.resolveQueuedMessage(appMessage, queueOptions) : appMessage;
@@ -1553,15 +1574,33 @@ export class AgentSession {
 		} else {
 			const resolved = queueOptions ? await this.agent.resolveQueuedMessage(appMessage, queueOptions) : appMessage;
 			if (resolved?.role !== "custom") return;
-			this.agent.state.messages.push(resolved);
-			this.sessionManager.appendCustomMessageEntry(
-				resolved.customType,
-				resolved.content,
-				resolved.display,
-				resolved.details,
-			);
-			this._emit({ type: "message_start", message: resolved });
-			this._emit({ type: "message_end", message: resolved });
+			this._appendCustomMessage(resolved);
+		}
+	}
+
+	private _appendCustomMessage(appMessage: CustomMessage): void {
+		this.agent.state.messages.push(appMessage);
+		this.sessionManager.appendCustomMessageEntry(
+			appMessage.customType,
+			appMessage.content,
+			appMessage.display,
+			appMessage.details,
+		);
+		this._emit({ type: "message_start", message: appMessage });
+		this._emit({ type: "message_end", message: appMessage });
+	}
+
+	/**
+	 * Append custom messages queued while the agent was running.
+	 * Called once the current turn's tool results are in agent state and session history.
+	 */
+	private _flushPendingCustomMessages(): void {
+		if (this._pendingCustomMessages.length === 0) return;
+
+		const pending = this._pendingCustomMessages;
+		this._pendingCustomMessages = [];
+		for (const appMessage of pending) {
+			this._appendCustomMessage(appMessage);
 		}
 	}
 

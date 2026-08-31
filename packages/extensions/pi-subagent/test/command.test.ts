@@ -85,17 +85,6 @@ function setup(options: { trusted: boolean; hasUI: boolean; approved: boolean })
 }
 
 describe("/agents", () => {
-	it.each([
-		{ name: "no UI", trusted: true, hasUI: false, approved: true, error: "interactive confirmation" },
-		{ name: "declined approval", trusted: true, hasUI: true, approved: false, error: "not approved" },
-	])("blocks project resume with $name", async ({ trusted, hasUI, approved, error }) => {
-		const setupResult = setup({ trusted, hasUI, approved });
-
-		await expect(setupResult.handler(setupResult.record.agentId, setupResult.context)).rejects.toThrow(error);
-		expect(setupResult.resume).not.toHaveBeenCalled();
-		expect(setupResult.input).not.toHaveBeenCalled();
-	});
-
 	it("hides a persisted project agent after trust is revoked", async () => {
 		const setupResult = setup({ trusted: false, hasUI: true, approved: true });
 
@@ -111,12 +100,12 @@ describe("/agents", () => {
 		expect(setupResult.notify.mock.calls[0]?.[1]).toBe("error");
 	});
 
-	it("resumes a project agent only after approval", async () => {
+	it("resumes a project agent in a trusted project without confirmation", async () => {
 		const setupResult = setup({ trusted: true, hasUI: true, approved: true });
 
 		await setupResult.handler(setupResult.record.agentId, setupResult.context);
 
-		expect(setupResult.confirm).toHaveBeenCalledOnce();
+		expect(setupResult.confirm).not.toHaveBeenCalled();
 		expect(setupResult.input).toHaveBeenCalledOnce();
 		expect(setupResult.resume).toHaveBeenCalledWith(setupResult.record.agentId, "continue", "background");
 	});

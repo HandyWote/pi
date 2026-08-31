@@ -30,13 +30,13 @@ Review the delegated change and report concrete findings.
 
 `name` and `description` are required. `tools`, `model`, `isolation`, `displayName`, and `color` are optional. Isolation is `none` by default or `worktree`.
 
-Definitions are resolved with `built-in < user < project` precedence. Project definitions require a trusted project and explicit interactive confirmation on every start. Discovery reads only frontmatter; the prompt body is read after confirmation and its metadata is revalidated before launch. Built-in agents never require project approval.
+Definitions are resolved with `built-in < user < project` precedence. Project definitions require a trusted project; trusted projects skip the per-call confirmation prompt. Discovery reads only frontmatter; the prompt body is read after the trust check and its metadata is revalidated before launch. Built-in agents never require project approval.
 
 ## Operation
 
 Foreground starts block until all requested agents finish. Background starts return stable IDs immediately and post one completion notification per agent, batched into a single follow-up when several agents finish within a short window. Completion follow-ups are bounded historical snapshots; the parent is instructed to query `agent_list`, optional `todo_list`, and `agent_output` before acting on one. A batch may contain up to eight items and runs under the same concurrency limit. Tool guidance directs the model to use one background batch when two or more independent tasks have clear ownership boundaries.
 
-`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust and interactive confirmation checks. Resume is session-scoped: follow-up work belongs to the current session, and the underlying state is removed when the session ends.
+`agent_output` can poll or block with a timeout. `agent_stop` preserves partial output. `agent_resume` reuses the stable agent ID and child session; it fails instead of silently starting fresh when the durable child session is missing or invalid. Resuming a project agent repeats the current trust check. Resume is session-scoped: follow-up work belongs to the current session, and the underlying state is removed when the session ends.
 
 ## State Lifecycle
 

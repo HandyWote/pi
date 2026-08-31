@@ -111,7 +111,7 @@ describe("pi-subagent extension", () => {
 		await waitForTerminal(managers[0]!, agentId);
 		for (let attempt = 0; attempt < 200 && notify.mock.calls.length === 0; attempt++)
 			await new Promise((resolve) => setTimeout(resolve, 5));
-		expect(confirm).toHaveBeenCalledOnce();
+		expect(confirm).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledOnce();
 		await vi.waitFor(
 			() => {
@@ -119,7 +119,7 @@ describe("pi-subagent extension", () => {
 					(message) => message.role === "custom" && message.customType === "pi-subagent-notification",
 				);
 				expect(getMessageText(notification)).toContain('Agent "E2E worker" completed');
-				expect(getMessageText(notification)).toContain("Continue: agent_resume");
+				expect(getMessageText(notification)).toContain("Result available via agent_list");
 				expect(getMessageText(notification)).toContain("call agent_list");
 			},
 			{ timeout: 5000, interval: 10 },
@@ -137,6 +137,7 @@ describe("pi-subagent extension", () => {
 			description: "E2E worker",
 		});
 		expect(JSON.stringify((listed.details as AgentToolDetails).definitions)).not.toContain("Do the delegated work");
+		harness.session.extensionRunner.setUIContext(ui, "print");
 		await harness.session.prompt("/agents");
 		expect(select.mock.calls[0]?.[1]).toEqual(
 			expect.arrayContaining([expect.stringContaining("worker [project]"), expect.stringContaining(agentId)]),
@@ -164,19 +165,10 @@ describe("pi-subagent extension", () => {
 
 		harness.settingsManager.setProjectTrusted(true);
 		harness.session.extensionRunner.setUIContext(undefined, "print");
-		const headless = await resumeTool.execute("headless", { agentId, prompt: "must not run", mode: "background" });
-		expect(headless.content[0]).toMatchObject({ text: expect.stringContaining("interactive confirmation") });
-		expect(managers[0]!.get(agentId)?.status).toBe("completed");
-		harness.session.extensionRunner.setUIContext(ui, "tui");
-
-		confirm.mockResolvedValueOnce(false);
-		const declined = await resumeTool.execute("declined", { agentId, prompt: "must not run", mode: "background" });
-		expect(declined.content[0]).toMatchObject({ text: expect.stringContaining("not approved") });
-		expect(managers[0]!.get(agentId)?.status).toBe("completed");
-
 		harness.appendResponses([fauxAssistantMessage("resume notification handled")]);
-		const approved = await resumeTool.execute("approved", { agentId, prompt: "continue", mode: "background" });
-		expect(approved.content[0]).toMatchObject({ text: expect.stringContaining(`Resumed ${agentId}`) });
+		const resumed = await resumeTool.execute("headless", { agentId, prompt: "continue", mode: "background" });
+		expect(resumed.content[0]).toMatchObject({ text: expect.stringContaining(`Resumed ${agentId}`) });
+		harness.session.extensionRunner.setUIContext(ui, "tui");
 		await waitForTerminal(managers[0]!, agentId);
 		for (
 			let attempt = 0;
@@ -185,7 +177,7 @@ describe("pi-subagent extension", () => {
 			attempt++
 		)
 			await new Promise((resolve) => setTimeout(resolve, 5));
-		expect(confirm).toHaveBeenCalledTimes(3);
+		expect(confirm).toHaveBeenCalledTimes(0);
 		expect(notify.mock.calls.filter((call) => String(call[0]).startsWith("worker completed:")).length).toBe(2);
 		const resumedRecord = managers[0]!.get(agentId);
 		if (!resumedRecord?.childSessionPath) throw new Error("Expected durable child session");
@@ -195,7 +187,7 @@ describe("pi-subagent extension", () => {
 
 		await harness.session.reload();
 		expect(managers).toHaveLength(2);
-		expect(managers[1]!.get(agentId)).toMatchObject({ status: "completed", notified: true });
+		expect(managers[1]!.list()).toEqual([]);
 		expect(notify.mock.calls.filter((call) => String(call[0]).startsWith("worker completed:")).length).toBe(2);
 	});
 

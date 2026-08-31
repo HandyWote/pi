@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
 import type { AgentDefinition } from "./types.ts";
 
-type ProjectApprovalContext = Pick<ExtensionContext, "hasUI" | "isProjectTrusted" | "ui">;
+type ProjectApprovalContext = Pick<ExtensionContext, "isProjectTrusted">;
 
 export async function approveProjectAgents(
 	definitions: readonly AgentDefinition[],
@@ -13,12 +13,8 @@ export async function approveProjectAgents(
 		),
 	];
 	if (projectAgentNames.length === 0) return;
+	// Trusted projects skip the per-call confirmation prompt; the trust gate below
+	// rejects untrusted projects outright.
 	if (!ctx.isProjectTrusted())
 		throw new Error("Project-local agents are disabled because this project is not trusted");
-	if (!ctx.hasUI) throw new Error("Project-local agents require interactive confirmation");
-	const approved = await ctx.ui.confirm(
-		"Run project-local agents?",
-		`Agents: ${projectAgentNames.join(", ")}\n\nProject agents are repository-controlled.`,
-	);
-	if (!approved) throw new Error("Project-local agents were not approved");
 }

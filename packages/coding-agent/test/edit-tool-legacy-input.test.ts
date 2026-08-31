@@ -64,6 +64,30 @@ describe("edit tool prepareArguments", () => {
 		expect(prepared).toBe(input);
 	});
 
+	it("accepts a single edit object instead of a one-element edits array", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edits: { oldText: "before", newText: "after" },
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+	});
+
+	it("accepts a single edit object serialized as JSON in the edits string", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edits: JSON.stringify({ oldText: "before", newText: "after" }),
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "before", newText: "after" }],
+		});
+	});
+
 	it("passes through non-object input unchanged", () => {
 		const definition = createEditToolDefinition(process.cwd());
 		expect(definition.prepareArguments!(null)).toBe(null);

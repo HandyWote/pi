@@ -6,6 +6,10 @@
 
 - Added `app.agent.resume` keybinding (default `r`), used by the pi-subagent agent management view to resume a selected subagent.
 
+### Fixed
+
+- Fixed large tool results crossing the auto-compaction threshold being sent to the provider before compaction. Pi now compacts between tool execution and the next assistant response in the same run, and restores interactive progress when that run resumes.
+
 ## [0.85.3] - 2026-08-17
 
 ### New Features

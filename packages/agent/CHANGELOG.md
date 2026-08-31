@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed `prepareNextTurn` to run only when the agent loop will start another assistant turn, after `shouldStopAfterTurn` and queued-message checks. It no longer runs after final or terminating turns; move end-of-run work to `agent_end` handling.
+
 ## [0.85.3] - 2026-08-17
 
 ### Fixed

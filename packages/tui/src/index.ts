@@ -117,6 +117,7 @@ export {
 	renderImage,
 	resetCapabilitiesCache,
 	setCapabilities,
+	setCapabilityOverrides,
 	setCellDimensions,
 	type TerminalCapabilities,
 } from "./terminal-image.ts";

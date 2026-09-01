@@ -12,7 +12,7 @@
 ### Fixed
 
 - Fixed `tool_choice` being sent to OpenAI-compatible endpoints when a request carries no tools ([#8607](https://github.com/earendil-works/pi/issues/8607)).
-- Fixed fragmented indexed Mistral tool call chunks not merging (upstream `fix(ai): merge indexed Mistral tool call chunks`).
+- Fixed fragmented indexed Mistral tool call chunks not merging when continuation chunks omit the tool-call ID ([#8387](https://github.com/earendil-works/pi/issues/8387)).
 - Fixed Azure Responses requests dropping `tool_choice`.
 - Fixed Anthropic refusal errors aborting the stream instead of surfacing as a refusal message with fallback handling ([#8258](https://github.com/earendil-works/pi/issues/8258)).
 - Ported the OpenAI-completions reasoning details chain: reasoning details now ride inside the thinking signature instead of parallel tool-call-scoped buffers, deltas concatenate correctly, and the thinking signature serializes once per message ([#8246](https://github.com/earendil-works/pi/issues/8246), [#8605](https://github.com/earendil-works/pi/issues/8605), [#8671](https://github.com/earendil-works/pi/issues/8671)).

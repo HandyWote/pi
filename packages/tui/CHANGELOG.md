@@ -5,15 +5,15 @@
 ### Added
 
 - Added terminal capability overrides via `PI_HYPERLINKS` / `PI_IMAGE_PROTOCOL` / `PI_TRUE_COLOR` environment variables and a `setCapabilityOverrides` API ([#8665](https://github.com/earendil-works/pi/issues/8665)).
-- Added fullscreen `copyOnSelect` option and an `app.message.copy` editor action (ctrl+x by default) that copies the active selection when one exists ([#8731](https://github.com/earendil-works/pi/issues/8731)).
+- Added fullscreen `copyOnSelect` option and an `app.message.copy` editor action (ctrl+x by default) that copies the active selection when one exists ([#7720](https://github.com/earendil-works/pi/issues/7720)).
 
 ### Fixed
 
 - Fixed main-screen renders larger than 1 MiB failing on V8 string length limits by chunking writes ([#8028](https://github.com/earendil-works/pi/issues/8028)).
 - Fixed alt-screen double-click word selection segmenting on `-` and `/` ([#8676](https://github.com/earendil-works/pi/issues/8676)).
 - Fixed autocomplete ordering for nested paths ([#8669](https://github.com/earendil-works/pi/issues/8669)).
-- Fixed wrapped table link colors leaking across lines ([#8363](https://github.com/earendil-works/pi/issues/8363)).
-- Fixed duplicate paste in VS Code's integrated terminal right-click ([#8363](https://github.com/earendil-works/pi/issues/8363)).
+- Fixed wrapped Markdown table links leaking color into borders and neighboring cells, including tables inside blockquotes ([#8335](https://github.com/earendil-works/pi/issues/8335)).
+- Fixed duplicate fullscreen right-click paste in VS Code-based terminals on Windows ([#8186](https://github.com/earendil-works/pi/issues/8186)).
 - Fixed text padding overflowing at narrow widths ([#8252](https://github.com/earendil-works/pi/issues/8252)).
 
 ## [0.85.3] - 2026-08-17

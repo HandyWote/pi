@@ -1,5 +1,5 @@
 {
-	"version": "0.85.3",
+	"version": "0.86.0",
 	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Model-level thinking levels"
+	"note": "The `/agents` panel now shows live subagent status rows, and its detail view is a live, scrollable transcript with Markdown rendering, tool-call rows, and auto-follow for running agents (pi-subagent v0.4.3)."
 }

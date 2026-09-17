@@ -91,4 +91,20 @@ export class WorktreeService {
 		}
 		return undefined;
 	}
+
+	/**
+	 * Best-effort `git worktree prune` resolved from the given directory, used
+	 * after the startup sweep deletes orphaned worktree directories whose git
+	 * metadata may linger. A non-repository cwd or a git failure is ignored: the
+	 * directory removal already happened.
+	 */
+	async pruneOrphaned(cwd: string): Promise<void> {
+		try {
+			const repository = await this.resolveRepository(cwd);
+			if (!repository) return;
+			await execFileAsync("git", ["-C", repository, "worktree", "prune"], { encoding: "utf8" });
+		} catch {
+			// Nothing to prune or git is unavailable.
+		}
+	}
 }

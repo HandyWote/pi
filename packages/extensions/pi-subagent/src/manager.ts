@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import type { Message } from "@handy_wote/pi-ai";
 import { AgentRegistry } from "./registry.ts";
+import { SUPERVISOR_FD_ENV, SUPERVISOR_STDIO_SLOT } from "./supervisor-watchdog.ts";
 import {
 	AGENT_PROTOCOL_VERSION,
 	type AgentDefinition,
@@ -161,6 +162,42 @@ function abortError(): Error {
 	const error = new Error("Subagent start was aborted");
 	error.name = "AbortError";
 	return error;
+}
+
+export interface ChildSpawnOptions {
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+	shell: false;
+	stdio: ["ignore", "pipe", "pipe", "pipe"];
+}
+
+/**
+ * Build the spawn options for a child pi process. Pure aside from
+ * `process.env`, so tests can assert the supervisor wiring without spawning a
+ * real pi.
+ *
+ * The fourth stdio slot is a pipe whose write end the parent keeps open for the
+ * child's lifetime without ever writing to or closing it explicitly (Node closes
+ * it after 'close'). The child gets the fd number via
+ * `PI_SUBAGENT_SUPERVISOR_FD` and watches the read end for EOF: when the parent
+ * dies, the kernel closes its fds and the child sees EOF immediately (see
+ * `supervisor-watchdog.ts`). This is fully event-driven - no timers, no
+ * polling.
+ */
+export function buildChildSpawnOptions(
+	env: NodeJS.ProcessEnv,
+	runCwd: string,
+	supervisorFdEnv: number,
+): ChildSpawnOptions {
+	return {
+		cwd: runCwd,
+		env: {
+			...env,
+			[SUPERVISOR_FD_ENV]: String(supervisorFdEnv),
+		},
+		shell: false,
+		stdio: ["ignore", "pipe", "pipe", "pipe"],
+	};
 }
 
 async function defaultProcessIdentityProbe(pid: number): Promise<string | undefined> {
@@ -644,24 +681,29 @@ export class AgentManager {
 		if (record.definition.tools?.length) args.push("--tools", record.definition.tools.join(","));
 		if (record.definition.systemPrompt) args.push("--append-system-prompt", promptPath);
 		args.push(`Task: ${pending.prompt}`);
-		const child = spawn(this.invocation.command, args, {
-			cwd: runCwd,
-			env: {
-				...process.env,
-				PI_AGENT_CONTEXT: JSON.stringify({
-					version: AGENT_PROTOCOL_VERSION,
-					agentId: record.agentId,
-					runId: record.runId,
-					parentSessionId: record.parentSessionId,
-					metadata: record.metadata,
-				}),
-			},
-			shell: false,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
+		const childEnv: NodeJS.ProcessEnv = {
+			...process.env,
+			PI_AGENT_CONTEXT: JSON.stringify({
+				version: AGENT_PROTOCOL_VERSION,
+				agentId: record.agentId,
+				runId: record.runId,
+				parentSessionId: record.parentSessionId,
+				metadata: record.metadata,
+			}),
+		};
+		const child = spawn(
+			this.invocation.command,
+			args,
+			buildChildSpawnOptions(childEnv, runCwd, SUPERVISOR_STDIO_SLOT),
+		);
 		const agentId = record.agentId;
 		const active = this.active.get(agentId);
 		if (active) active.process = child;
+		const childStdout = child.stdout;
+		const childStderr = child.stderr;
+		if (!childStdout || !childStderr) throw new Error("Child stdio pipes are unavailable");
+		const supervisorWriteEnd = child.stdio[SUPERVISOR_STDIO_SLOT];
+		if (!supervisorWriteEnd) throw new Error("Supervisor pipe write end is unavailable");
 		let stdoutBuffer = "";
 		let stderrBuffer = "";
 		let processing = Promise.resolve();
@@ -669,7 +711,7 @@ export class AgentManager {
 		const settledPromise = new Promise<void>((resolve) => {
 			resolveSettled = resolve;
 		});
-		child.stdout.on("data", (chunk: Buffer) => {
+		childStdout.on("data", (chunk: Buffer) => {
 			stdoutBuffer += chunk.toString("utf8");
 			const lines = stdoutBuffer.split("\n");
 			stdoutBuffer = lines.pop() ?? "";
@@ -679,18 +721,23 @@ export class AgentManager {
 				});
 			}
 		});
-		const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", resolve));
-		child.stderr.on("data", (chunk: Buffer) => {
+		const stdoutEnded = new Promise<void>((resolve) => childStdout.once("end", resolve));
+		childStderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			stderrBuffer += text;
 			processing = processing.then(() => {
 				this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
 			});
 		});
-		const stderrEnded = new Promise<void>((resolve) => child.stderr.once("end", resolve));
+		const stderrEnded = new Promise<void>((resolve) => childStderr.once("end", resolve));
 		const exitPromise = new Promise<
 			{ ok: true; code: number | null; signal: NodeJS.Signals | null } | { ok: false; error: Error }
 		>((resolve) => {
+			// Destroy the supervisor pipe's write end once the child is gone; the
+			// read end died with it, so holding the fd would leak it until this
+			// process exits. Normal terminate/stop/shutdown paths kill the child
+			// first and flow through the same 'close'.
+			child.once("close", () => supervisorWriteEnd.destroy());
 			child.once("close", (code, signal) => resolve({ ok: true, code, signal }));
 			child.once("error", (error) => resolve({ ok: false, error }));
 		});

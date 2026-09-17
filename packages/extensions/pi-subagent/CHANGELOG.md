@@ -6,6 +6,10 @@
 
 - Removed `transcriptPath` from `AgentRecord` and `AgentTerminalEventDetails`: subagent transcripts are no longer written to disk and now live in a bounded in-memory buffer (200KB per agent, oldest lines evicted first). Legacy persisted records that still carry the field load successfully and are migrated on the next save.
 
+### Added
+
+- Subagent children now watch a supervisor pipe for parent death: the parent spawns each child with an extra stdio pipe and injects `PI_SUBAGENT_SUPERVISOR_FD`; when the parent crashes, the child sees EOF and shuts down gracefully (session persisted, grandchildren terminated) within milliseconds instead of burning tokens as an orphan. Fully event-driven, no polling; behavior is unchanged when the env var is absent.
+
 ## [0.4.3] - 2026-08-28
 
 ### Added

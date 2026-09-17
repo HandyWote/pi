@@ -43,15 +43,52 @@ export class WorktreeService {
 		return { path: destination, cwd: worktreeCwd, branch };
 	}
 
+	private async resolveRepository(cwd: string): Promise<string> {
+		const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+			encoding: "utf8",
+		});
+		return stdout.trim();
+	}
+
 	async cleanup(worktreePath: string, cwd: string): Promise<string | undefined> {
 		try {
-			const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-				encoding: "utf8",
-			});
-			await execFileAsync("git", ["-C", stdout.trim(), "worktree", "remove", worktreePath], { encoding: "utf8" });
+			const repository = await this.resolveRepository(cwd);
+			await execFileAsync("git", ["-C", repository, "worktree", "remove", worktreePath], { encoding: "utf8" });
 			return undefined;
 		} catch (error: unknown) {
 			return error instanceof Error ? error.message : String(error);
 		}
+	}
+
+	/**
+	 * Remove a worktree during session teardown: normal removal first, then
+	 * `--force` for dirty worktrees, then a bare directory deletion plus prune.
+	 * Unlike cleanup() this never retains the worktree: teardown time is not
+	 * the moment to preserve uncommitted changes.
+	 */
+	async cleanupForced(worktreePath: string, cwd: string): Promise<string | undefined> {
+		const removeError = await this.cleanup(worktreePath, cwd);
+		if (removeError === undefined) return undefined;
+		try {
+			const repository = await this.resolveRepository(cwd);
+			await execFileAsync("git", ["-C", repository, "worktree", "remove", "--force", worktreePath], {
+				encoding: "utf8",
+			});
+			return undefined;
+		} catch {
+			// Fall through to hard removal below.
+		}
+		try {
+			await fs.promises.rm(worktreePath, { recursive: true, force: true });
+		} catch (error: unknown) {
+			return error instanceof Error ? error.message : String(error);
+		}
+		try {
+			const repository = await this.resolveRepository(cwd);
+			await execFileAsync("git", ["-C", repository, "worktree", "prune"], { encoding: "utf8" });
+		} catch {
+			// The repository may be gone; the directory removal already happened.
+		}
+		return undefined;
 	}
 }

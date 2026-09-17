@@ -551,6 +551,66 @@ describe("AgentManager", () => {
 		expect(branchExists()).toBe(false);
 	});
 
+	it("force-removes a retained dirty worktree on destroy so the branch deletion succeeds", async () => {
+		const root = temporaryDirectory();
+		const repositoryPath = path.join(root, "repository");
+		fs.mkdirSync(repositoryPath);
+		const repository = fs.realpathSync(repositoryPath);
+		execFileSync("git", ["init"], { cwd: repository });
+		fs.writeFileSync(path.join(repository, "README.md"), "test\n");
+		execFileSync("git", ["add", "README.md"], { cwd: repository });
+		execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"], {
+			cwd: repository,
+		});
+		const manager = createManager(root, { defaultCwd: repository });
+		await manager.initialize();
+		const worktrees = new WorktreeService(path.join(root, "state"));
+		const worktree = await worktrees.create("agent-retained", repository);
+		// An untracked file makes the worktree dirty, so plain cleanup retains it.
+		fs.writeFileSync(path.join(worktree.path, "scratch.txt"), "untracked\n");
+		expect(await worktrees.cleanup(worktree.path, repository)).toBeDefined();
+		const now = new Date().toISOString();
+		await manager.registry.save({
+			version: 2,
+			agentId: "agent-retained",
+			runId: "run-retained",
+			parentSessionId: "parent-1",
+			definition,
+			task: "retained",
+			mode: "background",
+			status: "completed",
+			cwd: repository,
+			isolation: "worktree",
+			metadata: {},
+			createdAt: now,
+			updatedAt: now,
+			childSessionId: "agent-retained",
+			childSessionDir: path.join(root, "state", "sessions", "agent-retained"),
+			transcriptPath: path.join(root, "state", "transcripts", "agent-retained.jsonl"),
+			worktreePath: worktree.path,
+			worktreeBranch: worktree.branch,
+			usage: emptyUsage(),
+			toolCount: 0,
+			lastOutput: "",
+			activities: [],
+			notified: false,
+			lifecycleEventId: "event-retained",
+		});
+
+		await manager.destroy();
+
+		expect(fs.existsSync(worktree.path)).toBe(false);
+		const branchExists = (): boolean => {
+			try {
+				execFileSync("git", ["-C", repository, "show-ref", "--verify", "--quiet", `refs/heads/${worktree.branch}`]);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		expect(branchExists()).toBe(false);
+	});
+
 	it("re-publishes active status with the persisted event ID for recovery probes", async () => {
 		const root = temporaryDirectory();
 		const events: AgentLifecycleEvent[] = [];

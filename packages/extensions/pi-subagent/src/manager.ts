@@ -518,6 +518,7 @@ export class AgentManager {
 			await fs.promises.rm(record.transcriptPath, { force: true });
 			await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
 			await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
+			await this.removeWorktreeBestEffort(record);
 			await this.deleteBranchBestEffort(record);
 		}
 		await fs.promises.rm(this.registry.registryPath, { force: true });
@@ -535,6 +536,17 @@ export class AgentManager {
 		// Reload so the in-memory records match the now-empty registry; the file
 		// is gone, so load() resets to an empty map and the manager stays usable.
 		await this.registry.load();
+	}
+
+	/**
+	 * Force-remove a retained worktree before branch deletion. Branch deletion
+	 * fails while the branch is checked out in a surviving worktree, so the
+	 * worktree must go first. Teardown must not retain state: the startup sweep
+	 * is the only further chance to reclaim it.
+	 */
+	private async removeWorktreeBestEffort(record: AgentRecord): Promise<void> {
+		if (!record.worktreePath) return;
+		await this.worktrees.cleanupForced(record.worktreePath, record.cwd);
 	}
 
 	private async deleteBranchBestEffort(record: AgentRecord): Promise<void> {

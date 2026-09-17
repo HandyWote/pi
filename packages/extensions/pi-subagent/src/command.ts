@@ -13,7 +13,6 @@ function describe(record: AgentRecord): string {
 		`Status: ${record.status}`,
 		`Tools: ${record.toolCount}`,
 		`Tokens: ${record.usage.input + record.usage.output}`,
-		`Output: ${record.transcriptPath}`,
 	];
 	if (record.lastOutput) lines.push(`Latest:\n${record.lastOutput}`);
 	if (record.error) lines.push(`Error:\n${record.error.trim()}`);

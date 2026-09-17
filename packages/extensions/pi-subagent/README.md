@@ -40,7 +40,7 @@ Foreground starts block until all requested agents finish. Background starts ret
 
 ## State Lifecycle
 
-State lives under the pi agent directory in `subagents/` (registry, JSONL transcripts, child sessions, prompts, and temporary worktrees) and is scoped to the parent session: it is created on session start and deleted on `session_shutdown` (children are terminated, then the session's records, transcripts, child sessions, prompts, and worktree branches are removed). Finished agents leave no history behind — the completion summary is already part of the main conversation.
+State lives under the pi agent directory in `subagents/` (registry, child sessions, prompts, and temporary worktrees) and is scoped to the parent session: it is created on session start and deleted on `session_shutdown` (children are terminated, then the session's records, child sessions, prompts, and worktree branches are removed). Agent transcripts are not written to disk; each agent keeps a bounded in-memory buffer (200KB per agent, oldest lines evicted first) that lives for the parent process lifetime. Finished agents leave no history behind — the completion summary is already part of the main conversation.
 
 If the parent crashes, the next `initialize()` finds the leftover registry, terminates any orphan children (queued children are located by their random `--session-id <agentId>` argument; running children by PID plus process start token, with `/proc` and a `ps` fallback on Unix and PowerShell on Windows), and then clears the leftover state instead of resuming it. Recovery stops with an explicit error when a live process cannot be identified safely.
 

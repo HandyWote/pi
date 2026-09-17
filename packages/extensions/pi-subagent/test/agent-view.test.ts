@@ -1,9 +1,7 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AgentViewComponent } from "../src/agent-view.ts";
 import type { AgentManager } from "../src/manager.ts";
+import { TranscriptBuffer } from "../src/transcript-buffer.ts";
 import { type AgentRecord, emptyUsage } from "../src/types.ts";
 
 const theme = {
@@ -16,11 +14,11 @@ const keybindings = {
 	getKeys: (_binding: string) => ["up"],
 } as unknown as ConstructorParameters<typeof AgentViewComponent>[0]["keybindings"];
 
-function makeRecord(transcriptPath: string, status: AgentRecord["status"] = "running"): AgentRecord {
+function makeRecord(agentId: string, status: AgentRecord["status"] = "running"): AgentRecord {
 	const now = new Date().toISOString();
 	return {
 		version: 2,
-		agentId: "agent-detail-test",
+		agentId,
 		runId: "run-detail-test",
 		parentSessionId: "parent-detail",
 		definition: {
@@ -40,9 +38,8 @@ function makeRecord(transcriptPath: string, status: AgentRecord["status"] = "run
 		createdAt: now,
 		startedAt: now,
 		updatedAt: now,
-		childSessionId: "agent-detail-test",
+		childSessionId: agentId,
 		childSessionDir: "/tmp/pi-subagent/sessions/agent-detail-test",
-		transcriptPath,
 		usage: { ...emptyUsage(), input: 1000, output: 500 },
 		toolCount: 3,
 		lastOutput: "",
@@ -52,10 +49,11 @@ function makeRecord(transcriptPath: string, status: AgentRecord["status"] = "run
 	};
 }
 
-function makeComponent(records: AgentRecord[], rows = 10): AgentViewComponent {
+function makeComponent(records: AgentRecord[], buffer: TranscriptBuffer, rows = 10): AgentViewComponent {
 	const manager = {
 		list: () => records,
 		get: (id: string) => records.find((r) => r.agentId === id),
+		registry: { transcripts: buffer },
 	} as unknown as AgentManager;
 	const tui = {
 		terminal: { rows, columns: 80 },
@@ -83,26 +81,23 @@ function assistantText(text: string): string {
 }
 
 describe("AgentViewComponent detail layer", () => {
-	let root: string;
+	let buffer: TranscriptBuffer;
 
-	beforeAll(() => {
-		root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-view-"));
-	});
-
-	afterAll(() => {
-		fs.rmSync(root, { recursive: true, force: true });
+	afterEach(() => {
+		buffer = undefined as unknown as TranscriptBuffer;
 	});
 
 	it("renders the list layer by default", () => {
-		const view = makeComponent([makeRecord(path.join(root, "t.jsonl"))]);
+		buffer = new TranscriptBuffer();
+		const view = makeComponent([makeRecord("agent-a")], buffer);
 		const lines = view.render(80);
 		expect(lines.some((line) => line.includes("Agents"))).toBe(true);
 	});
 
 	it("renders the detail header with live status and usage once opened", async () => {
-		const transcriptPath = path.join(root, "header.jsonl");
-		fs.writeFileSync(transcriptPath, `${assistantText("working on it")}\n`);
-		const view = makeComponent([makeRecord(transcriptPath)]);
+		buffer = new TranscriptBuffer();
+		buffer.append("agent-detail-test", assistantText("working on it"));
+		const view = makeComponent([makeRecord("agent-detail-test")], buffer);
 		view.handleInput("\r"); // tui.entity.activate default Enter opens detail? (list activate)
 		// Directly open detail through the public path: activate on selected item.
 		// EntityList double-check: fall back to internal state via handleInput.
@@ -113,10 +108,10 @@ describe("AgentViewComponent detail layer", () => {
 	});
 
 	it("shows transcript body lines and scrolls within the viewport", async () => {
-		const transcriptPath = path.join(root, "body.jsonl");
-		const events = [assistantText("first message"), assistantText("second message")];
-		fs.writeFileSync(transcriptPath, `${events.join("\n")}\n`);
-		const view = makeComponent([makeRecord(transcriptPath)], 10);
+		buffer = new TranscriptBuffer();
+		buffer.append("agent-detail-test", assistantText("first message"));
+		buffer.append("agent-detail-test", assistantText("second message"));
+		const view = makeComponent([makeRecord("agent-detail-test")], buffer, 10);
 		// @ts-expect-error test reaches into internals to force the detail layer
 		view.openDetail("agent-detail-test");
 		await new Promise((resolve) => setTimeout(resolve, 50));

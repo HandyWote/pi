@@ -66,7 +66,6 @@ export interface AgentRecord {
 	childSessionId: string;
 	childSessionDir: string;
 	childSessionPath?: string;
-	transcriptPath: string;
 	worktreePath?: string;
 	worktreeBranch?: string;
 	cleanupError?: string;
@@ -109,7 +108,6 @@ export interface AgentTerminalEventDetails {
 	/** lastOutput, truncated to TERMINAL_SUMMARY_LIMIT */
 	result?: string;
 	usage: { input: number; output: number; cost: number; toolCount: number };
-	transcriptPath: string;
 	worktreePath?: string;
 }
 

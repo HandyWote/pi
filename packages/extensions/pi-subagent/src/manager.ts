@@ -313,9 +313,11 @@ export class AgentManager {
 		await this.registry.load();
 		const records = this.registry.list();
 		if (records.length === 0) return;
-		// A leftover registry means the previous parent session crashed. Terminate
-		// any orphan children, then drop all of that session's state instead of
-		// persisting `interrupted` records.
+		// Interrupted records left by a graceful `shutdown()` (e.g. extension reload)
+		// are kept for `/agents` history and resume; only live leftovers mean the
+		// previous parent session crashed. Terminate any orphan children, then
+		// drop all of that session's state instead of resuming it.
+		if (!records.some((record) => record.status === "queued" || record.status === "running")) return;
 		for (const record of records) {
 			if (record.status !== "queued" && record.status !== "running") continue;
 			if (record.status === "queued") await this.terminateRecoveredQueuedProcesses(record);
@@ -378,7 +380,6 @@ export class AgentManager {
 			updatedAt: now,
 			childSessionId: agentId,
 			childSessionDir: path.join(this.options.rootDir, "sessions", agentId),
-			transcriptPath: path.join(this.options.rootDir, "transcripts", `${agentId}.jsonl`),
 			model: await this.resolveWorkerModel(definition),
 			usage: emptyUsage(),
 			toolCount: 0,
@@ -480,7 +481,7 @@ export class AgentManager {
 		}
 		return {
 			record,
-			transcript: await this.registry.readTranscript(agentId),
+			transcript: this.registry.readTranscript(agentId),
 			ready: isTerminalStatus(record.status),
 		};
 	}
@@ -515,7 +516,8 @@ export class AgentManager {
 	private async clearState(): Promise<void> {
 		const records = this.registry.list();
 		for (const record of records) {
-			await fs.promises.rm(record.transcriptPath, { force: true });
+			// Transcripts are process-local memory owned by the buffer; drop them here.
+			this.registry.transcripts.clear(record.agentId);
 			await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
 			await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
 			await this.removeWorktreeBestEffort(record);
@@ -526,7 +528,7 @@ export class AgentManager {
 		// it survives shutdown so the pool does not reset on every exit.
 		// Remove now-empty session directories. rmdir only succeeds when a directory
 		// is empty, so parallel sessions sharing the root keep their own state.
-		for (const directory of ["transcripts", "sessions", "prompts", "registries", "worktrees", ""]) {
+		for (const directory of ["sessions", "prompts", "registries", "worktrees", ""]) {
 			try {
 				await fs.promises.rmdir(path.join(this.rootDir, directory));
 			} catch {
@@ -681,8 +683,8 @@ export class AgentManager {
 		child.stderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			stderrBuffer += text;
-			processing = processing.then(async () => {
-				await this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
+			processing = processing.then(() => {
+				this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
 			});
 		});
 		const stderrEnded = new Promise<void>((resolve) => child.stderr.once("end", resolve));
@@ -752,7 +754,7 @@ export class AgentManager {
 		} catch {
 			event = { type: "stdout", text: line, timestamp: Date.now() };
 		}
-		await this.registry.appendTranscript(agentId, event);
+		this.registry.appendTranscript(agentId, event);
 		if (!isRecord(event)) return false;
 		if (event.type === "agent_settled") return true;
 		if (event.type !== "message_end" && event.type !== "tool_result_end") return false;

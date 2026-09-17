@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { TranscriptBuffer } from "./transcript-buffer.ts";
 import type { AgentActivity, AgentDefinition, AgentRecord, AgentStatus, AgentUsage } from "./types.ts";
 
 interface RegistryFile {
@@ -97,6 +98,12 @@ async function atomicCommit(filePath: string, data: string): Promise<void> {
 	}
 }
 
+/** Normalize legacy persisted records: strip retired fields such as `transcriptPath`. */
+function stripLegacyFields(record: Record<string, unknown>): Record<string, unknown> {
+	const { transcriptPath: _legacyTranscriptPath, ...rest } = record;
+	return rest;
+}
+
 export class AgentRegistry {
 	private records = new Map<string, AgentRecord>();
 	private operationQueue: Promise<void> = Promise.resolve();
@@ -104,6 +111,7 @@ export class AgentRegistry {
 	readonly parentSessionId: string;
 	readonly rootDir: string;
 	readonly registryPath: string;
+	readonly transcripts = new TranscriptBuffer();
 
 	constructor(rootDir: string, parentSessionId: string, committer: RegistryCommitter = atomicCommit) {
 		if (!isIdentifier(parentSessionId)) throw new Error(`Invalid parent session ID: ${parentSessionId}`);
@@ -138,7 +146,9 @@ export class AgentRegistry {
 			if (!Array.isArray(parsed.records)) throw new Error(`Invalid subagent records: ${this.registryPath}`);
 			const restored = new Map<string, AgentRecord>();
 			for (const value of parsed.records) {
-				const record = this.validateRecord(value);
+				// Legacy v2 records may still carry a `transcriptPath`; ignore it instead
+				// of rejecting the whole registry during the upgrade window.
+				const record = this.validateRecord(stripLegacyFields(value));
 				if (restored.has(record.agentId)) throw new Error(`Duplicate agent ID in registry: ${record.agentId}`);
 				restored.set(record.agentId, structuredClone(record));
 			}
@@ -183,29 +193,14 @@ export class AgentRegistry {
 		});
 	}
 
-	appendTranscript(agentId: string, event: unknown): Promise<void> {
-		return this.enqueue(async () => {
-			if (!this.records.has(agentId)) throw new Error(`Unknown agent: ${agentId}`);
-			const transcriptPath = this.transcriptPath(agentId);
-			await fs.promises.mkdir(path.dirname(transcriptPath), { recursive: true });
-			await fs.promises.appendFile(transcriptPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
-		});
+	/** Append one complete event line to an agent's bounded in-memory transcript. */
+	appendTranscript(agentId: string, event: unknown): void {
+		this.transcripts.append(agentId, JSON.stringify(event));
 	}
 
-	readTranscript(agentId: string, maxBytes = 200 * 1024): Promise<string> {
-		return this.enqueue(async () => {
-			if (!this.records.has(agentId)) throw new Error(`Unknown agent: ${agentId}`);
-			try {
-				const data = await fs.promises.readFile(this.transcriptPath(agentId));
-				const start = Math.max(0, data.length - maxBytes);
-				if (start === 0) return data.toString("utf8");
-				const newline = data.indexOf(0x0a, start);
-				return newline < 0 ? "" : data.subarray(newline + 1).toString("utf8");
-			} catch (error: unknown) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-				throw error;
-			}
-		});
+	/** Tail window of complete transcript lines (old trailing-window semantics). */
+	readTranscript(agentId: string, maxBytes = 200 * 1024): string {
+		return this.transcripts.read(agentId, maxBytes);
 	}
 
 	private validateRecord(value: unknown): AgentRecord {
@@ -233,11 +228,8 @@ export class AgentRegistry {
 		if (value.childSessionId !== value.agentId)
 			throw new Error(`Invalid child session ID for agent ${value.agentId}`);
 		const expectedSessionDir = path.join(this.rootDir, "sessions", value.agentId);
-		const expectedTranscript = this.transcriptPath(value.agentId);
 		if (path.resolve(String(value.childSessionDir)) !== expectedSessionDir)
 			throw new Error(`Invalid session path for agent ${value.agentId}`);
-		if (path.resolve(String(value.transcriptPath)) !== expectedTranscript)
-			throw new Error(`Invalid transcript path for agent ${value.agentId}`);
 		if (
 			value.childSessionPath !== undefined &&
 			(typeof value.childSessionPath !== "string" || !isContained(expectedSessionDir, value.childSessionPath))
@@ -280,11 +272,6 @@ export class AgentRegistry {
 			throw new Error(`Invalid exit code for agent ${value.agentId}`);
 		}
 		return value as unknown as AgentRecord;
-	}
-
-	private transcriptPath(agentId: string): string {
-		if (!isIdentifier(agentId)) throw new Error(`Invalid agent ID: ${agentId}`);
-		return path.join(this.rootDir, "transcripts", `${agentId}.jsonl`);
 	}
 
 	private async flush(records: Map<string, AgentRecord>): Promise<void> {

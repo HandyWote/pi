@@ -140,9 +140,9 @@ interface ComponentOptions extends AgentViewOptions {
  * session. The header (status glyph, usage, duration) re-reads
  * `manager.get(agentId)` every frame; the body renders transcript items
  * (assistant text via Markdown, compact tool-call rows, dim result rows)
- * incrementally parsed from the child transcript file, polled on a timer
- * while the layer is open. Running agents auto-follow the tail; scrolling up
- * pauses the follow and `G` re-enables it.
+ * incrementally parsed from the agent's in-memory transcript buffer, polled
+ * on a timer while the layer is open. Running agents auto-follow the tail;
+ * scrolling up pauses the follow and `G` re-enables it.
  *
  * Operations: `x` (`tui.entity.delete`) stops queued/running agents; `r`
  * (`app.agent.resume`) resumes terminal agents, closing the view first so the
@@ -161,7 +161,7 @@ export class AgentViewComponent implements Component, Focusable {
 	private readonly notify: AgentViewCallbacks["notify"];
 	private readonly done: (result: undefined) => void;
 	private readonly list: EntityList;
-	private readonly transcriptCache = new TranscriptCache();
+	private readonly transcriptCache: TranscriptCache;
 	private readonly markdownTheme: MarkdownTheme;
 	private recordsById = new Map<string, AgentRecord>();
 	private listSignature = "";
@@ -194,6 +194,7 @@ export class AgentViewComponent implements Component, Focusable {
 		this.notify = options.notify;
 		this.done = options.done;
 		this.markdownTheme = getMarkdownTheme();
+		this.transcriptCache = new TranscriptCache(options.manager.registry.transcripts);
 
 		this.list = new EntityList([], {
 			theme: entityListTheme(options.theme),
@@ -364,7 +365,7 @@ export class AgentViewComponent implements Component, Focusable {
 		const record = this.detailRecord();
 		if (!record || !this.detailAgentId) return;
 		try {
-			const items = await this.transcriptCache.getItems(record);
+			const items = this.transcriptCache.getItems(record.agentId);
 			if (this.layer !== "detail" || this.detailAgentId !== record.agentId) return;
 			this.detailItems = items.slice(-MAX_DETAIL_ITEMS);
 			this.tui.requestRender();

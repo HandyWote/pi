@@ -82,7 +82,6 @@ function terminalEventDetails(record: AgentRecord): AgentTerminalEventDetails {
 			cost: record.usage.cost,
 			toolCount: record.toolCount,
 		},
-		transcriptPath: record.transcriptPath,
 		worktreePath: record.worktreePath,
 	};
 }
@@ -192,8 +191,11 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			}
 		});
 
-		pi.on("session_shutdown", async () => {
-			await manager?.destroy();
+		pi.on("session_shutdown", async (event) => {
+			// A reload replaces the runtime within the same parent session; keep the
+			// durable state so the replacement manager restores the records.
+			if (event.reason === "reload") await manager?.shutdown();
+			else await manager?.destroy();
 			flushTerminalNotifications();
 			manager = undefined;
 			currentContext = undefined;

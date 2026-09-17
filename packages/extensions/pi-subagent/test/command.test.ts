@@ -41,7 +41,6 @@ function projectRecord(root: string): AgentRecord {
 		childSessionId: "agent-project",
 		childSessionDir: path.join(root, "sessions", "agent-project"),
 		childSessionPath: path.join(root, "sessions", "agent-project", "session.jsonl"),
-		transcriptPath: path.join(root, "transcripts", "agent-project.jsonl"),
 		usage: emptyUsage(),
 		toolCount: 0,
 		lastOutput: "done",

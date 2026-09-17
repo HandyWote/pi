@@ -92,7 +92,7 @@ describe("AgentManager", () => {
 		expect(completed.agentId).toBe(started.record.agentId);
 		expect(completed.toolCount).toBe(1);
 		expect(completed.usage.turns).toBe(2);
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain("external/correlation");
+		expect(manager.registry.readTranscript(completed.agentId)).toContain("external/correlation");
 		expect(events.map((event) => event.status)).toEqual(["queued", "running", "completed"]);
 		expect(new Set(events.map((event) => event.eventId)).size).toBe(3);
 		expect(new Set(events.map((event) => event.runId))).toEqual(new Set([started.record.runId]));
@@ -146,7 +146,7 @@ describe("AgentManager", () => {
 		expect(completed.cwd).toBe(nested);
 		// The child process reports its real cwd (macOS resolves the /var symlink
 		// in the temporary directory), so normalize the expectation the same way.
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${fs.realpathSync(nested)}`);
+		expect(manager.registry.readTranscript(completed.agentId)).toContain(`cwd:${fs.realpathSync(nested)}`);
 	});
 
 	it("uses an environment launcher override for local source execution", async () => {
@@ -258,7 +258,7 @@ describe("AgentManager", () => {
 		expect(completed.status).toBe("completed");
 		expect(completed.usage.turns).toBe(3);
 		expect(completed.lastOutput).toContain("finished Task: resumed");
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain("prior-context:true");
+		expect(manager.registry.readTranscript(completed.agentId)).toContain("prior-context:true");
 		expect(fs.readFileSync(completed.childSessionPath!, "utf8")).toContain("Task: resumed");
 		expect(events.filter((event) => event.status === "running")).toHaveLength(2);
 		expect(new Set(events.map((event) => event.runId))).toEqual(new Set([firstRunId, completed.runId]));
@@ -306,7 +306,7 @@ describe("AgentManager", () => {
 
 		expect(completed.status).toBe("completed");
 		expect(completed.error).toBeUndefined();
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain("Created new session");
+		expect(manager.registry.readTranscript(completed.agentId)).toContain("Created new session");
 	});
 
 	it("completes a settled agent whose process does not exit", async () => {
@@ -323,7 +323,7 @@ describe("AgentManager", () => {
 
 		expect(completed.status).toBe("completed");
 		expect(completed.lastOutput).toContain("finished");
-		expect(await manager.registry.readTranscript(completed.agentId)).toContain('"type":"agent_settled"');
+		expect(manager.registry.readTranscript(completed.agentId)).toContain('"type":"agent_settled"');
 		expect(notifications).toHaveLength(1);
 		expect(manager.getActiveCount()).toBe(0);
 	});
@@ -349,7 +349,6 @@ describe("AgentManager", () => {
 			updatedAt: now,
 			childSessionId: "agent-orphan",
 			childSessionDir: path.join(stateRoot, "sessions", "agent-orphan"),
-			transcriptPath: path.join(stateRoot, "transcripts", "agent-orphan.jsonl"),
 			usage: emptyUsage(),
 			toolCount: 0,
 			lastOutput: "",
@@ -358,8 +357,6 @@ describe("AgentManager", () => {
 			lifecycleEventId: "event-old",
 		};
 		fs.mkdirSync(orphan.childSessionDir, { recursive: true });
-		fs.mkdirSync(path.dirname(orphan.transcriptPath), { recursive: true });
-		fs.writeFileSync(orphan.transcriptPath, "stale\n");
 		const registry = new AgentRegistry(stateRoot, "parent-1");
 		await registry.save(orphan);
 		const manager = createManager(root);
@@ -369,8 +366,9 @@ describe("AgentManager", () => {
 		expect(manager.get(orphan.agentId)).toBeUndefined();
 		expect(manager.list()).toEqual([]);
 		expect(manager.getActiveCount()).toBe(0);
-		expect(fs.existsSync(orphan.transcriptPath)).toBe(false);
 		expect(fs.existsSync(orphan.childSessionDir)).toBe(false);
+		// Recovery buffers nothing for the orphan: transcripts live in memory only.
+		expect(manager.registry.readTranscript("agent-orphan")).toBe("");
 		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(false);
 	});
 
@@ -444,7 +442,6 @@ describe("AgentManager", () => {
 			updatedAt: now,
 			childSessionId: "agent-windows-recovery",
 			childSessionDir: path.join(stateRoot, "sessions", "agent-windows-recovery"),
-			transcriptPath: path.join(stateRoot, "transcripts", "agent-windows-recovery.jsonl"),
 			pid: child.pid,
 			processStartToken: token,
 			usage: emptyUsage(),
@@ -488,12 +485,13 @@ describe("AgentManager", () => {
 		await manager.initialize();
 		const started = await manager.start(definition, { task: "inspect", mode: "foreground" });
 		await started.completion;
-		expect(fs.existsSync(started.record.transcriptPath)).toBe(true);
+		// The transcript lives only in the process buffer while the session runs.
+		expect(manager.registry.readTranscript(started.record.agentId)).toContain("finished Task: inspect");
 		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(true);
 
 		await manager.destroy();
 
-		expect(fs.existsSync(started.record.transcriptPath)).toBe(false);
+		expect(manager.registry.readTranscript(started.record.agentId)).toBe("");
 		expect(fs.existsSync(started.record.childSessionDir)).toBe(false);
 		expect(fs.existsSync(path.join(stateRoot, "prompts", `${started.record.agentId}.md`))).toBe(false);
 		expect(fs.existsSync(path.join(stateRoot, "registries", "parent-1.json"))).toBe(false);
@@ -586,7 +584,6 @@ describe("AgentManager", () => {
 			updatedAt: now,
 			childSessionId: "agent-retained",
 			childSessionDir: path.join(root, "state", "sessions", "agent-retained"),
-			transcriptPath: path.join(root, "state", "transcripts", "agent-retained.jsonl"),
 			worktreePath: worktree.path,
 			worktreeBranch: worktree.branch,
 			usage: emptyUsage(),
@@ -633,7 +630,6 @@ describe("AgentManager", () => {
 			updatedAt: now,
 			childSessionId: "agent-probe",
 			childSessionDir: path.join(root, "state", "sessions", "agent-probe"),
-			transcriptPath: path.join(root, "state", "transcripts", "agent-probe.jsonl"),
 			usage: emptyUsage(),
 			toolCount: 0,
 			lastOutput: "",

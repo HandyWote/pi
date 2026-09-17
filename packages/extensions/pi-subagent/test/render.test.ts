@@ -38,7 +38,6 @@ function record(): AgentRecord {
 		updatedAt: now,
 		childSessionId: "agent-render-width-test",
 		childSessionDir: path.join(root, "sessions", "agent-render-width-test"),
-		transcriptPath: path.join(root, "transcripts", "agent-render-width-test.jsonl"),
 		usage: { ...emptyUsage(), input: 12345, output: 6789 },
 		toolCount: 12,
 		lastOutput: "long output",

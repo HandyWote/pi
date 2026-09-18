@@ -81,8 +81,10 @@ async function writeForeignRegistry(
 	stateRoot: string,
 	parentSessionId: string,
 	records: AgentRecord[],
+	parentProcess?: { pid: number; processStartToken: string },
 ): Promise<string> {
 	const registry = new AgentRegistry(stateRoot, parentSessionId);
+	if (parentProcess) await registry.setParentProcessIdentity(parentProcess);
 	for (const record of records) await registry.save(record);
 	return registry.registryPath;
 }
@@ -161,6 +163,77 @@ describe("startup sweep", () => {
 		expect(processIsAlive(child.pid!)).toBe(true);
 	});
 
+	it("leaves a stale foreign registry alone while its recorded parent process is alive", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const child = spawnIdleChild();
+		const record = foreignRecord(stateRoot, "parent-idle", "agent-idle", {
+			status: "running",
+			pid: child.pid,
+			processStartToken: "proc:idle",
+		});
+		const registryPath = await writeForeignRegistry(stateRoot, "parent-idle", [record], {
+			pid: 424242,
+			processStartToken: "proc:idle-parent",
+		});
+		fs.mkdirSync(record.childSessionDir, { recursive: true });
+		await agePath(registryPath, 8);
+
+		const manager = createManager(root, {
+			processIdentityProbe: async (pid) => {
+				if (pid === 424242) return "proc:idle-parent";
+				if (pid === child.pid && child.exitCode === null) return "proc:idle";
+				return undefined;
+			},
+		});
+		await manager.initialize();
+
+		// The parent is verifiably alive: nothing is swept despite the stale mtime.
+		expect(fs.existsSync(registryPath)).toBe(true);
+		expect(fs.existsSync(record.childSessionDir)).toBe(true);
+		expect(processIsAlive(child.pid!)).toBe(true);
+	});
+
+	it("sweeps a stale foreign registry whose recorded parent process is dead", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const record = foreignRecord(stateRoot, "parent-dead", "agent-dead");
+		const registryPath = await writeForeignRegistry(stateRoot, "parent-dead", [record], {
+			pid: 424242,
+			processStartToken: "proc:dead-parent",
+		});
+		fs.mkdirSync(record.childSessionDir, { recursive: true });
+		await agePath(registryPath, 8);
+
+		const manager = createManager(root, {
+			processIdentityProbe: async (pid) => (pid === 424242 ? undefined : undefined),
+		});
+		await manager.initialize();
+
+		expect(fs.existsSync(registryPath)).toBe(false);
+		expect(fs.existsSync(record.childSessionDir)).toBe(false);
+	});
+
+	it("sweeps a stale foreign registry whose recorded parent identity was reused by another process", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		const record = foreignRecord(stateRoot, "parent-reused", "agent-reused");
+		const registryPath = await writeForeignRegistry(stateRoot, "parent-reused", [record], {
+			pid: 424242,
+			processStartToken: "proc:original-parent",
+		});
+		fs.mkdirSync(record.childSessionDir, { recursive: true });
+		await agePath(registryPath, 8);
+
+		const manager = createManager(root, {
+			processIdentityProbe: async (pid) => (pid === 424242 ? "proc:reused-parent" : undefined),
+		});
+		await manager.initialize();
+
+		expect(fs.existsSync(registryPath)).toBe(false);
+		expect(fs.existsSync(record.childSessionDir)).toBe(false);
+	});
+
 	it("sweeps a stale foreign registry: terminates orphans, deletes the registry, reclaims files", async () => {
 		const root = temporaryDirectory();
 		const stateRoot = path.join(root, "state");
@@ -181,6 +254,8 @@ describe("startup sweep", () => {
 		});
 		const worktrees = new WorktreeService(stateRoot);
 		const worktree = await worktrees.create(runningRecord.agentId, repository);
+		// An untracked file makes the worktree dirty: its contents belong to the user.
+		fs.writeFileSync(path.join(worktree.path, "user-scratch.txt"), "precious\n");
 		const registryPath = await writeForeignRegistry(stateRoot, "parent-stale", [runningRecord, queuedRecord]);
 		for (const record of [runningRecord, queuedRecord]) {
 			const transcriptFilePath = path.join(stateRoot, "transcripts", `${record.agentId}.jsonl`);
@@ -221,15 +296,24 @@ describe("startup sweep", () => {
 		for (const record of [runningRecord, queuedRecord]) {
 			expect(fs.existsSync(path.join(stateRoot, "transcripts", `${record.agentId}.jsonl`))).toBe(false);
 		}
-		// The retained worktree is force-removed and its branch deleted.
-		expect(fs.existsSync(worktree.path)).toBe(false);
+		// The dirty worktree survives the sweep: its contents belong to the user.
+		expect(fs.existsSync(worktree.path)).toBe(true);
+		// Its branch also survives because the retained worktree still holds it
+		// checked out.
 		let branchExists = true;
 		try {
-			execFileSync("git", ["-C", repository, "show-ref", "--verify", "--quiet", runningRecord.worktreeBranch!]);
+			execFileSync("git", [
+				"-C",
+				repository,
+				"show-ref",
+				"--verify",
+				"--quiet",
+				`refs/heads/${runningRecord.worktreeBranch}`,
+			]);
 		} catch {
 			branchExists = false;
 		}
-		expect(branchExists).toBe(false);
+		expect(branchExists).toBe(true);
 	});
 
 	it("does not kill a running child when its identity cannot be verified but still reclaims files", async () => {
@@ -305,6 +389,9 @@ describe("startup sweep", () => {
 		const worktrees = new WorktreeService(stateRoot);
 		const orphanedWorktree = await worktrees.create("agent-orphan-worktree", repository);
 		const freshWorktree = await worktrees.create("agent-fresh-worktree", repository);
+		// A dirty orphaned worktree (uncommitted user work) must survive the sweep.
+		fs.writeFileSync(path.join(orphanedWorktree.path, "user-scratch.txt"), "precious\n");
+		const cleanOrphanedWorktree = await worktrees.create("agent-orphan-clean-worktree", repository);
 
 		await agePath(staleSessionDir, 8);
 		await agePath(referencedSessionDir, 8);
@@ -313,6 +400,7 @@ describe("startup sweep", () => {
 		await agePath(path.join(stateRoot, "transcripts", "agent-stale.jsonl"), 8);
 		await agePath(path.join(stateRoot, "transcripts", `${freshReferencedRecord.agentId}.jsonl`), 8);
 		await agePath(orphanedWorktree.path, 8);
+		await agePath(cleanOrphanedWorktree.path, 8);
 
 		await fs.promises.writeFile(getWorkerModelsPath(stateRoot), "[]\n");
 
@@ -322,7 +410,11 @@ describe("startup sweep", () => {
 		expect(fs.existsSync(staleSessionDir)).toBe(false);
 		expect(fs.existsSync(path.join(stateRoot, "prompts", "agent-stale.md"))).toBe(false);
 		expect(fs.existsSync(path.join(stateRoot, "transcripts", "agent-stale.jsonl"))).toBe(false);
-		expect(fs.existsSync(orphanedWorktree.path)).toBe(false);
+		// A clean orphaned worktree is reclaimed; a dirty one (uncommitted user
+		// work) survives with a stderr notice.
+		expect(fs.existsSync(cleanOrphanedWorktree.path)).toBe(false);
+		expect(fs.existsSync(orphanedWorktree.path)).toBe(true);
+		expect(fs.existsSync(path.join(orphanedWorktree.path, "user-scratch.txt"))).toBe(true);
 
 		expect(fs.existsSync(freshSessionDir)).toBe(true);
 		expect(fs.existsSync(path.join(stateRoot, "prompts", "agent-fresh.md"))).toBe(true);

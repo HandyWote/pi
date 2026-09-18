@@ -61,38 +61,6 @@ export class WorktreeService {
 	}
 
 	/**
-	 * Remove a worktree during session teardown: normal removal first, then
-	 * `--force` for dirty worktrees, then a bare directory deletion plus prune.
-	 * Unlike cleanup() this never retains the worktree: teardown time is not
-	 * the moment to preserve uncommitted changes.
-	 */
-	async cleanupForced(worktreePath: string, cwd: string): Promise<string | undefined> {
-		const removeError = await this.cleanup(worktreePath, cwd);
-		if (removeError === undefined) return undefined;
-		try {
-			const repository = await this.resolveRepository(cwd);
-			await execFileAsync("git", ["-C", repository, "worktree", "remove", "--force", worktreePath], {
-				encoding: "utf8",
-			});
-			return undefined;
-		} catch {
-			// Fall through to hard removal below.
-		}
-		try {
-			await fs.promises.rm(worktreePath, { recursive: true, force: true });
-		} catch (error: unknown) {
-			return error instanceof Error ? error.message : String(error);
-		}
-		try {
-			const repository = await this.resolveRepository(cwd);
-			await execFileAsync("git", ["-C", repository, "worktree", "prune"], { encoding: "utf8" });
-		} catch {
-			// The repository may be gone; the directory removal already happened.
-		}
-		return undefined;
-	}
-
-	/**
 	 * Best-effort `git worktree prune` resolved from the given directory, used
 	 * after the startup sweep deletes orphaned worktree directories whose git
 	 * metadata may linger. A non-repository cwd or a git failure is ignored: the

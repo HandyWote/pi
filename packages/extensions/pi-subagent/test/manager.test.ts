@@ -549,7 +549,7 @@ describe("AgentManager", () => {
 		expect(branchExists()).toBe(false);
 	});
 
-	it("force-removes a retained dirty worktree on destroy so the branch deletion succeeds", async () => {
+	it("retains a dirty worktree on destroy, keeps its branch, and notifies on stderr", async () => {
 		const root = temporaryDirectory();
 		const repositoryPath = path.join(root, "repository");
 		fs.mkdirSync(repositoryPath);
@@ -596,7 +596,11 @@ describe("AgentManager", () => {
 
 		await manager.destroy();
 
-		expect(fs.existsSync(worktree.path)).toBe(false);
+		// The worktree contents belong to the user: dirty worktrees are never
+		// force-removed, and the branch survives because the worktree still
+		// holds it checked out.
+		expect(fs.existsSync(worktree.path)).toBe(true);
+		expect(fs.readFileSync(path.join(worktree.path, "scratch.txt"), "utf8")).toContain("untracked");
 		const branchExists = (): boolean => {
 			try {
 				execFileSync("git", ["-C", repository, "show-ref", "--verify", "--quiet", `refs/heads/${worktree.branch}`]);
@@ -605,7 +609,7 @@ describe("AgentManager", () => {
 				return false;
 			}
 		};
-		expect(branchExists()).toBe(false);
+		expect(branchExists()).toBe(true);
 	});
 
 	it("re-publishes active status with the persisted event ID for recovery probes", async () => {

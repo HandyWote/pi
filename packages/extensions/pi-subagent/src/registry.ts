@@ -7,6 +7,18 @@ import type { AgentActivity, AgentDefinition, AgentRecord, AgentStatus, AgentUsa
 interface RegistryFile {
 	version: 2;
 	parentSessionId: string;
+	/**
+	 * Process identity of the parent pi process that owns this registry, used
+	 * by the startup sweep of foreign registries: a live parent means the
+	 * session (and its residue) belongs to a concurrent session and must not
+	 * be swept, regardless of the mtime staleness window. Optional so legacy
+	 * registries without the field still load; the sweep falls back to the
+	 * mtime window for them.
+	 */
+	parentProcess?: {
+		pid: number;
+		processStartToken: string;
+	};
 	records: AgentRecord[];
 }
 
@@ -104,6 +116,26 @@ function stripLegacyFields(record: Record<string, unknown>): Record<string, unkn
 	return rest;
 }
 
+/** Identity of the parent process that owns a registry, used for liveness checks during sweeping. */
+export interface ParentProcessIdentity {
+	pid: number;
+	processStartToken: string;
+}
+
+/**
+ * Read the optional `parentProcess` block from a loaded registry file.
+ * Malformed or absent blocks yield `undefined`, so legacy registries still
+ * load and sweeping falls back to the mtime window for them.
+ */
+function readParentProcessIdentity(value: unknown): ParentProcessIdentity | undefined {
+	if (!isObject(value)) return undefined;
+	const pid = value.pid;
+	const token = value.processStartToken;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
+	if (typeof token !== "string" || !token) return undefined;
+	return { pid, processStartToken: token };
+}
+
 export class AgentRegistry {
 	private records = new Map<string, AgentRecord>();
 	private operationQueue: Promise<void> = Promise.resolve();
@@ -112,6 +144,8 @@ export class AgentRegistry {
 	readonly rootDir: string;
 	readonly registryPath: string;
 	readonly transcripts = new TranscriptBuffer();
+	/** Parent process identity read from the last `load()`; `undefined` for legacy registries. */
+	private parentProcessIdentity: ParentProcessIdentity | undefined;
 
 	constructor(rootDir: string, parentSessionId: string, committer: RegistryCommitter = atomicCommit) {
 		if (!isIdentifier(parentSessionId)) throw new Error(`Invalid parent session ID: ${parentSessionId}`);
@@ -143,6 +177,7 @@ export class AgentRegistry {
 			if (!isObject(parsed) || parsed.version !== 2 || parsed.parentSessionId !== this.parentSessionId) {
 				throw new Error(`Invalid subagent registry: ${this.registryPath}`);
 			}
+			this.parentProcessIdentity = readParentProcessIdentity(parsed.parentProcess);
 			if (!Array.isArray(parsed.records)) throw new Error(`Invalid subagent records: ${this.registryPath}`);
 			const restored = new Map<string, AgentRecord>();
 			for (const value of parsed.records) {
@@ -274,10 +309,29 @@ export class AgentRegistry {
 		return value as unknown as AgentRecord;
 	}
 
+	/** Liveness-checkable identity of this registry's parent process, if it has been set. */
+	getParentProcessIdentity(): ParentProcessIdentity | undefined {
+		return this.parentProcessIdentity ? structuredClone(this.parentProcessIdentity) : undefined;
+	}
+
+	/**
+	 * Record the parent process identity once per registry lifetime, persisting
+	 * it immediately (even for an empty registry) so foreign sessions can
+	 * fact-check our liveness from the moment this session exists.
+	 */
+	setParentProcessIdentity(identity: ParentProcessIdentity): Promise<void> {
+		return this.enqueue(async () => {
+			if (this.parentProcessIdentity) return;
+			this.parentProcessIdentity = structuredClone(identity);
+			await this.flush(this.records);
+		});
+	}
+
 	private async flush(records: Map<string, AgentRecord>): Promise<void> {
 		const data: RegistryFile = {
 			version: 2,
 			parentSessionId: this.parentSessionId,
+			...(this.parentProcessIdentity ? { parentProcess: this.parentProcessIdentity } : {}),
 			records: [...records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
 		};
 		await this.committer(this.registryPath, `${JSON.stringify(data, null, 2)}\n`);

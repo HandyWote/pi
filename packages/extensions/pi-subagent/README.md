@@ -44,11 +44,13 @@ State lives under the pi agent directory in `subagents/` (registry, child sessio
 
 If the parent crashes, the next `initialize()` finds the leftover registry, terminates any orphan children (queued children are located by their random `--session-id <agentId>` argument; running children by PID plus process start token, with `/proc` and a `ps` fallback on Unix and PowerShell on Windows), and then clears the leftover state instead of resuming it. Recovery stops with an explicit error when a live process cannot be identified safely.
 
+On startup the manager also sweeps residue from other (foreign) sessions whose registry file is older than 7 days: registries written by this version record the owning pi process (pid plus process start token), and a foreign session whose recorded parent process is still alive is never swept no matter how idle it is; registries from older versions without the recorded identity fall back to the mtime window alone. Sweeping terminates still-verifiable orphan children and reclaims session directories, prompts, and clean worktrees.
+
 ## Worker Pool
 
 `/swarm` configures the worker model pool (an ordered snapshot persisted to `worker-models.json`). Toggle models with space, reorder with Alt+Up/Alt+Down (order is priority), then activate the trailing `[ Save pool ]` row to save and close; Escape cancels. Saving an empty selection clears the pool, after which subagents use the main-session model. Worker model assignment: agent definition `model` > pool order > main-session model. The pool is shared configuration, not session state: it survives session shutdown and is picked up by future sessions. Each session that has a pool receives the coordinator behavior guidance exactly once — at session start when the pool already exists, otherwise at first save.
 
-Worktree isolation uses the branch `pi-subagent/<agentId>`, which is removed together with the rest of the session state on shutdown.
+Worktree isolation uses the branch `pi-subagent/<agentId>`. The worktree directory is created by the agent, but its contents belong to the user and git: a worktree with uncommitted changes is never force-removed. At teardown and in the startup sweep it is retained with a stderr notice pointing at its path (uncommitted changes are yours to keep or discard), and its branch stays alive because the worktree still holds it checked out — so committed-but-unmerged work remains recoverable too. Clean worktrees are removed together with the rest of the session state on shutdown.
 
 ## Lifecycle Protocol
 

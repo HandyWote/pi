@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import type { Message } from "@handy_wote/pi-ai";
-import { AgentRegistry } from "./registry.ts";
+import { AgentRegistry, type ParentProcessIdentity } from "./registry.ts";
 import { SUPERVISOR_FD_ENV, SUPERVISOR_STDIO_SLOT } from "./supervisor-watchdog.ts";
 import {
 	AGENT_PROTOCOL_VERSION,
@@ -375,6 +375,14 @@ export class AgentManager {
 
 	async initialize(): Promise<void> {
 		await this.registry.load();
+		// Record this process as the registry's owner so foreign sessions can
+		// fact-check our liveness instead of guessing from file mtimes. Uses the
+		// real system probe (not the injectable one): reading our own start time
+		// cannot fail or hang, and test probes must not block initialization.
+		const parentToken = await defaultProcessIdentityProbe(process.pid);
+		if (parentToken !== undefined) {
+			await this.registry.setParentProcessIdentity({ pid: process.pid, processStartToken: parentToken });
+		}
 		const records = this.registry.list();
 		// Interrupted records left by a graceful `shutdown()` (e.g. extension reload)
 		// are kept for `/agents` history and resume; only live leftovers mean the
@@ -387,6 +395,7 @@ export class AgentManager {
 				else await this.terminateRecoveredProcess(record);
 			}
 			await this.clearState();
+			return;
 		}
 		await this.sweepStaleState();
 	}
@@ -568,19 +577,23 @@ export class AgentManager {
 	}
 
 	/**
-	 * Reclaim residue from foreign sessions past the staleness window: crashed
-	 * sessions leave registries behind once their mtime ages out, and their
-	 * children plus any unreferenced residue are removed. Fresh state belongs
-	 * to concurrent live sessions and is never touched.
+	 * Sweep foreign sessions whose state is past the staleness window. A
+	 * registry is only swept when its owning parent process is verifiably not
+	 * alive (or its identity cannot be checked, e.g. legacy registries without
+	 * a recorded parent process), so concurrent live sessions are never touched
+	 * no matter how long they have been idle. Unreferenced residue files with
+	 * no surviving registry are reclaimed once their mtime ages out of the
+	 * window, which also recovers legacy `transcripts/` directories.
 	 */
 	private async sweepStaleState(): Promise<void> {
 		const now = Date.now();
-		await this.sweepStaleRegistries(now);
-		await this.sweepOrphanedEntries(now);
+		const retainedWorktrees = new Set<string>();
+		await this.sweepStaleRegistries(now, retainedWorktrees);
+		await this.sweepOrphanedEntries(now, retainedWorktrees);
 	}
 
-	/** Sweep foreign registries older than the staleness window. */
-	private async sweepStaleRegistries(now: number): Promise<void> {
+	/** Sweep foreign registries whose owning parent process is verifiably dead. */
+	private async sweepStaleRegistries(now: number, retainedWorktrees: Set<string>): Promise<void> {
 		let sweptRegistries = 0;
 		for (const entry of await this.listDirectoryEntries("registries")) {
 			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
@@ -588,7 +601,22 @@ export class AgentManager {
 			if (parentSessionId === this.registry.parentSessionId) continue;
 			const registryPath = path.join(this.rootDir, "registries", entry.name);
 			if (!(await isStalePath(registryPath, now))) continue;
-			for (const record of await this.loadSweptRecords(parentSessionId)) {
+			const foreign = new AgentRegistry(this.rootDir, parentSessionId);
+			let records: AgentRecord[] = [];
+			let parentIdentity: ParentProcessIdentity | undefined;
+			try {
+				await foreign.load();
+				records = foreign.list();
+				parentIdentity = foreign.getParentProcessIdentity();
+			} catch {
+				// Corrupt or structurally invalid file: stale residue with nothing
+				// killable; the caller still deletes the file.
+			}
+			// A recorded parent that is still running protects its session no
+			// matter how idle it is; registries without a recorded identity
+			// (legacy) fall back to the mtime-window judgment above.
+			if (await this.recordedParentIsAlive(parentIdentity)) continue;
+			for (const record of records) {
 				if (record.status === "queued" || record.status === "running") {
 					let terminated = false;
 					try {
@@ -603,7 +631,7 @@ export class AgentManager {
 					if (terminated)
 						console.error(`[pi-subagent] terminated orphaned ${record.status} subagent ${record.agentId}`);
 				}
-				await this.clearRecordState(record);
+				await this.clearRecordState(record, retainedWorktrees);
 			}
 			await fs.promises.rm(registryPath, { force: true });
 			sweptRegistries++;
@@ -615,19 +643,22 @@ export class AgentManager {
 	}
 
 	/**
-	 * Load a stale foreign registry's records for sweeping, validated through
-	 * the regular registry path checks. Corrupt or structurally invalid files
-	 * are stale residue: nothing is recoverable or killable, and the caller
-	 * still deletes the file.
+	 * Whether a recorded parent-process identity still corresponds to a living
+	 * pi process. Registries written by this extension version record their
+	 * parent's pid plus process start token, so liveness is a fact check: a
+	 * live parent (even an idle one) protects its session from the sweep.
+	 * `undefined` (legacy registries without the recorded identity) yields
+	 * `false`, falling back to the pre-existing mtime-only judgment.
 	 */
-	private async loadSweptRecords(foreignParentSessionId: string): Promise<AgentRecord[]> {
-		const registry = new AgentRegistry(this.rootDir, foreignParentSessionId);
-		try {
-			await registry.load();
-		} catch {
-			return [];
+	private async recordedParentIsAlive(identity: ParentProcessIdentity | undefined): Promise<boolean> {
+		if (!identity) return false;
+		if (identity.pid === process.pid) return true;
+		const current = await this.processIdentityProbe(identity.pid);
+		if (current === undefined) {
+			// Unreadable probe: only treat the parent as dead when the pid is gone.
+			return processIsAlive(identity.pid);
 		}
-		return registry.list();
+		return current === identity.processStartToken;
 	}
 
 	/**
@@ -636,7 +667,7 @@ export class AgentManager {
 	 * staleness window. Residue of just-swept registries is unreferenced by
 	 * construction, so it is reclaimed here subject to the mtime gate.
 	 */
-	private async sweepOrphanedEntries(now: number): Promise<void> {
+	private async sweepOrphanedEntries(now: number, retainedWorktrees: Set<string>): Promise<void> {
 		const referencedAgentIds = new Set<string>();
 		for (const record of this.registry.list()) referencedAgentIds.add(record.agentId);
 		for (const entry of await this.listDirectoryEntries("registries")) {
@@ -662,6 +693,19 @@ export class AgentManager {
 				if (referencedAgentIds.has(entryAgentId(entry.name))) continue;
 				const entryPath = path.join(this.rootDir, directory, entry.name);
 				if (!(await isStalePath(entryPath, now))) continue;
+				// The entry is unreferenced by any registry, but a worktree may
+				// still hold uncommitted user work even after the staleness window:
+				// dirty worktrees are never destroyed, only reported. Clean ones
+				// (and every other directory) are reclaimed.
+				if (directory === "worktrees" && (await this.worktreeHasUserChanges(entryPath))) {
+					if (!retainedWorktrees.has(entryPath)) {
+						retainedWorktrees.add(entryPath);
+						console.error(
+							`[pi-subagent] retained unclaimed worktree with uncommitted changes: ${entryPath} (uncommitted changes are yours to keep or discard)`,
+						);
+					}
+					continue;
+				}
 				await fs.promises.rm(entryPath, { recursive: true, force: true });
 				removedEntries++;
 				if (directory === "worktrees") prunedWorktrees = true;
@@ -696,11 +740,50 @@ export class AgentManager {
 	 * transcript is deliberately untouched here; the orphan sweep reclaims
 	 * transcript files once no registry references them.
 	 */
-	private async clearRecordState(record: AgentRecord): Promise<void> {
+	private async clearRecordState(record: AgentRecord, retainedWorktrees: Set<string>): Promise<void> {
 		await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
 		await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
-		await this.removeWorktreeBestEffort(record);
+		await this.cleanupWorktreeForRecord(record, retainedWorktrees);
 		await this.deleteBranchBestEffort(record);
+	}
+
+	/**
+	 * Whether a worktree directory still holds uncommitted user work. Runs
+	 * `git status --porcelain` against the directory when it is a valid
+	 * worktree of a readable repository; anything that cannot be checked (git
+	 * missing, repository gone) counts as dirty, so the sweep errs on the side
+	 * of keeping user content.
+	 */
+	private async worktreeHasUserChanges(worktreePath: string): Promise<boolean> {
+		try {
+			const { stdout } = await execFileAsync("git", ["-C", worktreePath, "status", "--porcelain"], {
+				encoding: "utf8",
+			});
+			return stdout.trim().length > 0;
+		} catch {
+			return true;
+		}
+	}
+
+	/**
+	 * Teardown-time worktree handling for one agent. The worktree directory is
+	 * created by the agent, but its contents belong to the user and git, so a
+	 * dirty worktree is never destroyed here: the non-forced removal removes
+	 * clean checkouts and retains dirty ones with a stderr notice pointing at
+	 * the path. A retained worktree also keeps its branch checked out, which
+	 * makes branch deletion fail benignly in `deleteBranchBestEffort`, so
+	 * committed work stays recoverable too. The startup sweep reclaims
+	 * leftover directories once they age out of the staleness window.
+	 */
+	private async cleanupWorktreeForRecord(record: AgentRecord, retainedWorktrees?: Set<string>): Promise<void> {
+		if (!record.worktreePath) return;
+		const removeError = await this.worktrees.cleanup(record.worktreePath, record.cwd);
+		if (removeError === undefined) return;
+		retainedWorktrees?.add(record.worktreePath);
+		console.error(
+			`[pi-subagent] retained worktree for agent ${record.agentId} with uncommitted changes: ${record.worktreePath} ` +
+				`(uncommitted changes are yours to keep or discard)`,
+		);
 	}
 
 	/** Terminate children, then delete this session's persisted state. */
@@ -721,7 +804,7 @@ export class AgentManager {
 			this.registry.transcripts.clear(record.agentId);
 			await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
 			await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
-			await this.removeWorktreeBestEffort(record);
+			await this.cleanupWorktreeForRecord(record);
 			await this.deleteBranchBestEffort(record);
 		}
 		await fs.promises.rm(this.registry.registryPath, { force: true });
@@ -739,17 +822,6 @@ export class AgentManager {
 		// Reload so the in-memory records match the now-empty registry; the file
 		// is gone, so load() resets to an empty map and the manager stays usable.
 		await this.registry.load();
-	}
-
-	/**
-	 * Force-remove a retained worktree before branch deletion. Branch deletion
-	 * fails while the branch is checked out in a surviving worktree, so the
-	 * worktree must go first. Teardown must not retain state: the startup sweep
-	 * is the only further chance to reclaim it.
-	 */
-	private async removeWorktreeBestEffort(record: AgentRecord): Promise<void> {
-		if (!record.worktreePath) return;
-		await this.worktrees.cleanupForced(record.worktreePath, record.cwd);
 	}
 
 	private async deleteBranchBestEffort(record: AgentRecord): Promise<void> {

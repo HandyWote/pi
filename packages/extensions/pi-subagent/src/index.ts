@@ -8,6 +8,7 @@ import {
 import { registerAgentsCommand } from "./command.ts";
 import { AgentManager, type AgentManagerOptions, readWorkerModels } from "./manager.ts";
 import { registerAgentPanel, registerNotificationCard } from "./render.ts";
+import { SUPERVISOR_FD_ENV, startSupervisorWatchdog } from "./supervisor-watchdog.ts";
 import { injectCoordinatorGuidance, registerSwarmCommand } from "./swarm.ts";
 import { registerAgentTools } from "./tools.ts";
 import {
@@ -82,7 +83,6 @@ function terminalEventDetails(record: AgentRecord): AgentTerminalEventDetails {
 			cost: record.usage.cost,
 			toolCount: record.toolCount,
 		},
-		transcriptPath: record.transcriptPath,
 		worktreePath: record.worktreePath,
 	};
 }
@@ -104,6 +104,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 		let notificationBatch: TerminalNotification[] = [];
 		let notificationTimer: ReturnType<typeof setTimeout> | undefined;
 		let coordinatorGuidanceInjected = false;
+		let stopSupervisorWatchdog: (() => void) | undefined;
 		const notificationDebounceMs = Math.max(0, options.notificationDebounceMs ?? NOTIFICATION_DEBOUNCE_MS);
 
 		// The coordinator rules belong to the session: a session that starts with
@@ -164,6 +165,47 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			notificationTimer = setTimeout(flushTerminalNotifications, notificationDebounceMs);
 		};
 
+		// Parent-death watchdog wiring. Only child pi processes have
+		// PI_SUBAGENT_SUPERVISOR_FD set (the parent injects it at spawn, pointing
+		// at the read end of the supervisor pipe's fourth stdio slot); sessions
+		// started directly by a user never see it, so behavior there is unchanged.
+		// Graceful shutdown mechanism, chosen after auditing the ExtensionAPI and
+		// the host's signal handling:
+		// - ExtensionAPI itself exposes no abort/exit/shutdown; those live on the
+		//   per-event ExtensionContext (ctx.abort()/ctx.shutdown()). session_start
+		//   has not fired when the factory body runs, so ctx is not available here;
+		//   and at parent death the captured ctx (if any) may already be stale.
+		// - ctx.abort() only interrupts an in-flight turn; it never exits the
+		//   process, so the orphaned child would keep burning tokens.
+		// - SIGTERM (process.kill(process.pid, "SIGTERM")) reaches the host's own
+		//   graceful path: print/json mode's handler runs runtimeHost.dispose()
+		//   which emits `session_shutdown` and flushes the child session before
+		//   exiting; interactive/rpc modes behave equivalently (their
+		//   shutdownHandler defers to agent_settled, after which the queued
+		//   shutdown runs). `session_shutdown` is exactly the hook whose
+		//   semantics match the existing interrupted teardown: this extension's
+		//   handler then SIGTERMs any grandchildren and the child session ends
+		//   durably. No host handler exists only for unknown custom modes; the
+		//   default Node disposition terminates the process, which is still safe
+		//   (entries up to that point are already appended synchronously).
+		// - process.exit() is deliberately NOT used: it skips `session_shutdown`,
+		//   so grandchildren would be left orphaned and the child session would
+		//   lose its final entries.
+		const supervisorFdRaw = process.env[SUPERVISOR_FD_ENV];
+		if (supervisorFdRaw !== undefined && supervisorFdRaw !== "") {
+			const fd = Number(supervisorFdRaw);
+			if (Number.isInteger(fd) && fd >= 0) {
+				stopSupervisorWatchdog = startSupervisorWatchdog(fd, () => {
+					// Drop our end first so a later dispose cannot see spurious EOF.
+					stopSupervisorWatchdog?.();
+					stopSupervisorWatchdog = undefined;
+					// Self-SIGTERM reuses the host's graceful shutdown path
+					// (session_shutdown -> manager teardown -> exit).
+					process.kill(process.pid, "SIGTERM");
+				});
+			}
+		}
+
 		pi.on("session_start", async (_event, ctx) => {
 			currentContext = ctx;
 			const concurrencyFlag = pi.getFlag("subagent-concurrency");
@@ -192,8 +234,13 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			}
 		});
 
-		pi.on("session_shutdown", async () => {
-			await manager?.destroy();
+		pi.on("session_shutdown", async (event) => {
+			stopSupervisorWatchdog?.();
+			stopSupervisorWatchdog = undefined;
+			// A reload replaces the runtime within the same parent session; keep the
+			// durable state so the replacement manager restores the records.
+			if (event.reason === "reload") await manager?.shutdown();
+			else await manager?.destroy();
 			flushTerminalNotifications();
 			manager = undefined;
 			currentContext = undefined;

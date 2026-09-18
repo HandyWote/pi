@@ -43,15 +43,36 @@ export class WorktreeService {
 		return { path: destination, cwd: worktreeCwd, branch };
 	}
 
+	private async resolveRepository(cwd: string): Promise<string> {
+		const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+			encoding: "utf8",
+		});
+		return stdout.trim();
+	}
+
 	async cleanup(worktreePath: string, cwd: string): Promise<string | undefined> {
 		try {
-			const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-				encoding: "utf8",
-			});
-			await execFileAsync("git", ["-C", stdout.trim(), "worktree", "remove", worktreePath], { encoding: "utf8" });
+			const repository = await this.resolveRepository(cwd);
+			await execFileAsync("git", ["-C", repository, "worktree", "remove", worktreePath], { encoding: "utf8" });
 			return undefined;
 		} catch (error: unknown) {
 			return error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	/**
+	 * Best-effort `git worktree prune` resolved from the given directory, used
+	 * after the startup sweep deletes orphaned worktree directories whose git
+	 * metadata may linger. A non-repository cwd or a git failure is ignored: the
+	 * directory removal already happened.
+	 */
+	async pruneOrphaned(cwd: string): Promise<void> {
+		try {
+			const repository = await this.resolveRepository(cwd);
+			if (!repository) return;
+			await execFileAsync("git", ["-C", repository, "worktree", "prune"], { encoding: "utf8" });
+		} catch {
+			// Nothing to prune or git is unavailable.
 		}
 	}
 }

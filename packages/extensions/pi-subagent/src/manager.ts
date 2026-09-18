@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import type { Message } from "@handy_wote/pi-ai";
-import { AgentRegistry } from "./registry.ts";
+import { AgentRegistry, type ParentProcessIdentity } from "./registry.ts";
+import { SUPERVISOR_FD_ENV, SUPERVISOR_STDIO_SLOT } from "./supervisor-watchdog.ts";
 import {
 	AGENT_PROTOCOL_VERSION,
 	type AgentDefinition,
@@ -24,6 +25,8 @@ const MAX_ACTIVITIES = 20;
 const SUBAGENT_COMMAND_ENV = "PI_SUBAGENT_COMMAND";
 const SUBAGENT_PREFIX_ARGS_ENV = "PI_SUBAGENT_PREFIX_ARGS";
 const WORKER_MODELS_FILE = "worker-models.json";
+/** Residue from foreign sessions younger than this is assumed to belong to concurrent live sessions. */
+const STALE_REGISTRY_MS = 7 * 24 * 3600 * 1000;
 const execFileAsync = promisify(execFile);
 
 interface PendingRun {
@@ -157,10 +160,71 @@ function getEnvironmentInvocation(): PiInvocation | undefined {
 	return { command, prefixArgs: parsed };
 }
 
+/**
+ * Map an orphaned entry name back to the agent ID it belongs to. Entries are
+ * named after the agent: `sessions/<agentId>`, `prompts/<agentId>.md`,
+ * `worktrees/<agentId>`, `transcripts/<agentId>.jsonl`.
+ */
+function entryAgentId(entryName: string): string {
+	if (entryName.endsWith(".md") || entryName.endsWith(".jsonl"))
+		return path.basename(entryName, path.extname(entryName));
+	return entryName;
+}
+
+/**
+ * An entry is stale when its mtime is past the window. Concurrent live
+ * sessions stay fresh, so they and the residue they reference survive.
+ */
+async function isStalePath(entryPath: string, now: number): Promise<boolean> {
+	try {
+		const stats = await fs.promises.stat(entryPath);
+		return now - stats.mtimeMs >= STALE_REGISTRY_MS;
+	} catch {
+		// Already gone or unreadable: nothing left to sweep.
+		return false;
+	}
+}
+
 function abortError(): Error {
 	const error = new Error("Subagent start was aborted");
 	error.name = "AbortError";
 	return error;
+}
+
+export interface ChildSpawnOptions {
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+	shell: false;
+	stdio: ["ignore", "pipe", "pipe", "pipe"];
+}
+
+/**
+ * Build the spawn options for a child pi process. Pure aside from
+ * `process.env`, so tests can assert the supervisor wiring without spawning a
+ * real pi.
+ *
+ * The fourth stdio slot is a pipe whose write end the parent keeps open for the
+ * child's lifetime without ever writing to or closing it explicitly (Node closes
+ * it after 'close'). The child gets the fd number via
+ * `PI_SUBAGENT_SUPERVISOR_FD` and watches the read end for EOF: when the parent
+ * dies, the kernel closes its fds and the child sees EOF immediately (see
+ * `supervisor-watchdog.ts`). This is fully event-driven - no timers, no
+ * polling.
+ */
+export function buildChildSpawnOptions(
+	env: NodeJS.ProcessEnv,
+	runCwd: string,
+	supervisorFdEnv: number,
+): ChildSpawnOptions {
+	return {
+		cwd: runCwd,
+		env: {
+			...env,
+			[SUPERVISOR_FD_ENV]: String(supervisorFdEnv),
+		},
+		shell: false,
+		stdio: ["ignore", "pipe", "pipe", "pipe"],
+	};
 }
 
 async function defaultProcessIdentityProbe(pid: number): Promise<string | undefined> {
@@ -311,17 +375,29 @@ export class AgentManager {
 
 	async initialize(): Promise<void> {
 		await this.registry.load();
-		const records = this.registry.list();
-		if (records.length === 0) return;
-		// A leftover registry means the previous parent session crashed. Terminate
-		// any orphan children, then drop all of that session's state instead of
-		// persisting `interrupted` records.
-		for (const record of records) {
-			if (record.status !== "queued" && record.status !== "running") continue;
-			if (record.status === "queued") await this.terminateRecoveredQueuedProcesses(record);
-			else await this.terminateRecoveredProcess(record);
+		// Record this process as the registry's owner so foreign sessions can
+		// fact-check our liveness instead of guessing from file mtimes. Uses the
+		// real system probe (not the injectable one): reading our own start time
+		// cannot fail or hang, and test probes must not block initialization.
+		const parentToken = await defaultProcessIdentityProbe(process.pid);
+		if (parentToken !== undefined) {
+			await this.registry.setParentProcessIdentity({ pid: process.pid, processStartToken: parentToken });
 		}
-		await this.clearState();
+		const records = this.registry.list();
+		// Interrupted records left by a graceful `shutdown()` (e.g. extension reload)
+		// are kept for `/agents` history and resume; only live leftovers mean the
+		// previous parent session crashed. Terminate any orphan children, then
+		// drop all of that session's state instead of resuming it.
+		if (records.some((record) => record.status === "queued" || record.status === "running")) {
+			for (const record of records) {
+				if (record.status !== "queued" && record.status !== "running") continue;
+				if (record.status === "queued") await this.terminateRecoveredQueuedProcesses(record);
+				else await this.terminateRecoveredProcess(record);
+			}
+			await this.clearState();
+			return;
+		}
+		await this.sweepStaleState();
 	}
 
 	list(): AgentRecord[] {
@@ -378,7 +454,6 @@ export class AgentManager {
 			updatedAt: now,
 			childSessionId: agentId,
 			childSessionDir: path.join(this.options.rootDir, "sessions", agentId),
-			transcriptPath: path.join(this.options.rootDir, "transcripts", `${agentId}.jsonl`),
 			model: await this.resolveWorkerModel(definition),
 			usage: emptyUsage(),
 			toolCount: 0,
@@ -480,7 +555,7 @@ export class AgentManager {
 		}
 		return {
 			record,
-			transcript: await this.registry.readTranscript(agentId),
+			transcript: this.registry.readTranscript(agentId),
 			ready: isTerminalStatus(record.status),
 		};
 	}
@@ -501,6 +576,216 @@ export class AgentManager {
 		await Promise.all(active.map((run) => run.completion));
 	}
 
+	/**
+	 * Sweep foreign sessions whose state is past the staleness window. A
+	 * registry is only swept when its owning parent process is verifiably not
+	 * alive (or its identity cannot be checked, e.g. legacy registries without
+	 * a recorded parent process), so concurrent live sessions are never touched
+	 * no matter how long they have been idle. Unreferenced residue files with
+	 * no surviving registry are reclaimed once their mtime ages out of the
+	 * window, which also recovers legacy `transcripts/` directories.
+	 */
+	private async sweepStaleState(): Promise<void> {
+		const now = Date.now();
+		const retainedWorktrees = new Set<string>();
+		await this.sweepStaleRegistries(now, retainedWorktrees);
+		await this.sweepOrphanedEntries(now, retainedWorktrees);
+	}
+
+	/** Sweep foreign registries whose owning parent process is verifiably dead. */
+	private async sweepStaleRegistries(now: number, retainedWorktrees: Set<string>): Promise<void> {
+		let sweptRegistries = 0;
+		for (const entry of await this.listDirectoryEntries("registries")) {
+			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+			const parentSessionId = path.basename(entry.name, ".json");
+			if (parentSessionId === this.registry.parentSessionId) continue;
+			const registryPath = path.join(this.rootDir, "registries", entry.name);
+			if (!(await isStalePath(registryPath, now))) continue;
+			const foreign = new AgentRegistry(this.rootDir, parentSessionId);
+			let records: AgentRecord[] = [];
+			let parentIdentity: ParentProcessIdentity | undefined;
+			try {
+				await foreign.load();
+				records = foreign.list();
+				parentIdentity = foreign.getParentProcessIdentity();
+			} catch {
+				// Corrupt or structurally invalid file: stale residue with nothing
+				// killable; the caller still deletes the file.
+			}
+			// A recorded parent that is still running protects its session no
+			// matter how idle it is; registries without a recorded identity
+			// (legacy) fall back to the mtime-window judgment above.
+			if (await this.recordedParentIsAlive(parentIdentity)) continue;
+			for (const record of records) {
+				if (record.status === "queued" || record.status === "running") {
+					let terminated = false;
+					try {
+						terminated =
+							record.status === "queued"
+								? await this.terminateRecoveredQueuedProcesses(record)
+								: await this.terminateRecoveredProcess(record);
+					} catch {
+						// Unverifiable process identity: leave the process alone and
+						// keep reclaiming the record's files.
+					}
+					if (terminated)
+						console.error(`[pi-subagent] terminated orphaned ${record.status} subagent ${record.agentId}`);
+				}
+				await this.clearRecordState(record, retainedWorktrees);
+			}
+			await fs.promises.rm(registryPath, { force: true });
+			sweptRegistries++;
+		}
+		if (sweptRegistries > 0)
+			console.error(
+				`[pi-subagent] swept ${sweptRegistries} stale ${sweptRegistries === 1 ? "registry" : "registries"} from crashed sessions`,
+			);
+	}
+
+	/**
+	 * Whether a recorded parent-process identity still corresponds to a living
+	 * pi process. Registries written by this extension version record their
+	 * parent's pid plus process start token, so liveness is a fact check: a
+	 * live parent (even an idle one) protects its session from the sweep.
+	 * `undefined` (legacy registries without the recorded identity) yields
+	 * `false`, falling back to the pre-existing mtime-only judgment.
+	 */
+	private async recordedParentIsAlive(identity: ParentProcessIdentity | undefined): Promise<boolean> {
+		if (!identity) return false;
+		if (identity.pid === process.pid) return true;
+		const current = await this.processIdentityProbe(identity.pid);
+		if (current === undefined) {
+			// Unreadable probe: only treat the parent as dead when the pid is gone.
+			return processIsAlive(identity.pid);
+		}
+		return current === identity.processStartToken;
+	}
+
+	/**
+	 * Reclaim orphaned residue under rootDir that no surviving registry (this
+	 * session plus fresh foreign ones) references and whose mtime is past the
+	 * staleness window. Residue of just-swept registries is unreferenced by
+	 * construction, so it is reclaimed here subject to the mtime gate.
+	 */
+	private async sweepOrphanedEntries(now: number, retainedWorktrees: Set<string>): Promise<void> {
+		const referencedAgentIds = new Set<string>();
+		for (const record of this.registry.list()) referencedAgentIds.add(record.agentId);
+		for (const entry of await this.listDirectoryEntries("registries")) {
+			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+			try {
+				const parsed: unknown = JSON.parse(
+					await fs.promises.readFile(path.join(this.rootDir, "registries", entry.name), "utf8"),
+				);
+				if (!isRecord(parsed) || !Array.isArray(parsed.records)) continue;
+				for (const value of parsed.records) {
+					if (isRecord(value) && typeof value.agentId === "string") referencedAgentIds.add(value.agentId);
+				}
+			} catch {
+				// Corrupt or unreadable registry: nothing referenceable. Stale ones
+				// were already deleted above, so anything left here is fresh and its
+				// residue is protected by the mtime gate below.
+			}
+		}
+		let removedEntries = 0;
+		let prunedWorktrees = false;
+		for (const directory of ["sessions", "worktrees", "prompts", "transcripts"]) {
+			for (const entry of await this.listDirectoryEntries(directory)) {
+				if (referencedAgentIds.has(entryAgentId(entry.name))) continue;
+				const entryPath = path.join(this.rootDir, directory, entry.name);
+				if (!(await isStalePath(entryPath, now))) continue;
+				// The entry is unreferenced by any registry, but a worktree may
+				// still hold uncommitted user work even after the staleness window:
+				// dirty worktrees are never destroyed, only reported. Clean ones
+				// (and every other directory) are reclaimed.
+				if (directory === "worktrees" && (await this.worktreeHasUserChanges(entryPath))) {
+					if (!retainedWorktrees.has(entryPath)) {
+						retainedWorktrees.add(entryPath);
+						console.error(
+							`[pi-subagent] retained unclaimed worktree with uncommitted changes: ${entryPath} (uncommitted changes are yours to keep or discard)`,
+						);
+					}
+					continue;
+				}
+				await fs.promises.rm(entryPath, { recursive: true, force: true });
+				removedEntries++;
+				if (directory === "worktrees") prunedWorktrees = true;
+			}
+		}
+		if (prunedWorktrees) await this.worktrees.pruneOrphaned(this.options.defaultCwd);
+		for (const entry of await this.listDirectoryEntries("registries")) {
+			if (!entry.name.endsWith(".tmp")) continue;
+			const entryPath = path.join(this.rootDir, "registries", entry.name);
+			if (!(await isStalePath(entryPath, now))) continue;
+			await fs.promises.rm(entryPath, { force: true });
+			removedEntries++;
+		}
+		if (removedEntries > 0)
+			console.error(
+				`[pi-subagent] swept ${removedEntries} orphaned state ${removedEntries === 1 ? "entry" : "entries"}`,
+			);
+	}
+
+	/** List a subdirectory of rootDir; missing or unreadable directories yield nothing. */
+	private async listDirectoryEntries(directory: string): Promise<fs.Dirent[]> {
+		try {
+			return await fs.promises.readdir(path.join(this.rootDir, directory), { withFileTypes: true });
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Per-record equivalent of clearState for a swept foreign record: remove
+	 * the child session directory, prompt file, worktree, and branch. The
+	 * transcript is deliberately untouched here; the orphan sweep reclaims
+	 * transcript files once no registry references them.
+	 */
+	private async clearRecordState(record: AgentRecord, retainedWorktrees: Set<string>): Promise<void> {
+		await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
+		await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
+		await this.cleanupWorktreeForRecord(record, retainedWorktrees);
+		await this.deleteBranchBestEffort(record);
+	}
+
+	/**
+	 * Whether a worktree directory still holds uncommitted user work. Runs
+	 * `git status --porcelain` against the directory when it is a valid
+	 * worktree of a readable repository; anything that cannot be checked (git
+	 * missing, repository gone) counts as dirty, so the sweep errs on the side
+	 * of keeping user content.
+	 */
+	private async worktreeHasUserChanges(worktreePath: string): Promise<boolean> {
+		try {
+			const { stdout } = await execFileAsync("git", ["-C", worktreePath, "status", "--porcelain"], {
+				encoding: "utf8",
+			});
+			return stdout.trim().length > 0;
+		} catch {
+			return true;
+		}
+	}
+
+	/**
+	 * Teardown-time worktree handling for one agent. The worktree directory is
+	 * created by the agent, but its contents belong to the user and git, so a
+	 * dirty worktree is never destroyed here: the non-forced removal removes
+	 * clean checkouts and retains dirty ones with a stderr notice pointing at
+	 * the path. A retained worktree also keeps its branch checked out, which
+	 * makes branch deletion fail benignly in `deleteBranchBestEffort`, so
+	 * committed work stays recoverable too. The startup sweep reclaims
+	 * leftover directories once they age out of the staleness window.
+	 */
+	private async cleanupWorktreeForRecord(record: AgentRecord, retainedWorktrees?: Set<string>): Promise<void> {
+		if (!record.worktreePath) return;
+		const removeError = await this.worktrees.cleanup(record.worktreePath, record.cwd);
+		if (removeError === undefined) return;
+		retainedWorktrees?.add(record.worktreePath);
+		console.error(
+			`[pi-subagent] retained worktree for agent ${record.agentId} with uncommitted changes: ${record.worktreePath} ` +
+				`(uncommitted changes are yours to keep or discard)`,
+		);
+	}
+
 	/** Terminate children, then delete this session's persisted state. */
 	async destroy(): Promise<void> {
 		await this.shutdown();
@@ -515,9 +800,11 @@ export class AgentManager {
 	private async clearState(): Promise<void> {
 		const records = this.registry.list();
 		for (const record of records) {
-			await fs.promises.rm(record.transcriptPath, { force: true });
+			// Transcripts are process-local memory owned by the buffer; drop them here.
+			this.registry.transcripts.clear(record.agentId);
 			await fs.promises.rm(record.childSessionDir, { recursive: true, force: true });
 			await fs.promises.rm(path.join(this.rootDir, "prompts", `${record.agentId}.md`), { force: true });
+			await this.cleanupWorktreeForRecord(record);
 			await this.deleteBranchBestEffort(record);
 		}
 		await fs.promises.rm(this.registry.registryPath, { force: true });
@@ -525,7 +812,7 @@ export class AgentManager {
 		// it survives shutdown so the pool does not reset on every exit.
 		// Remove now-empty session directories. rmdir only succeeds when a directory
 		// is empty, so parallel sessions sharing the root keep their own state.
-		for (const directory of ["transcripts", "sessions", "prompts", "registries", "worktrees", ""]) {
+		for (const directory of ["sessions", "prompts", "registries", "worktrees", ""]) {
 			try {
 				await fs.promises.rmdir(path.join(this.rootDir, directory));
 			} catch {
@@ -630,24 +917,29 @@ export class AgentManager {
 		if (record.definition.tools?.length) args.push("--tools", record.definition.tools.join(","));
 		if (record.definition.systemPrompt) args.push("--append-system-prompt", promptPath);
 		args.push(`Task: ${pending.prompt}`);
-		const child = spawn(this.invocation.command, args, {
-			cwd: runCwd,
-			env: {
-				...process.env,
-				PI_AGENT_CONTEXT: JSON.stringify({
-					version: AGENT_PROTOCOL_VERSION,
-					agentId: record.agentId,
-					runId: record.runId,
-					parentSessionId: record.parentSessionId,
-					metadata: record.metadata,
-				}),
-			},
-			shell: false,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
+		const childEnv: NodeJS.ProcessEnv = {
+			...process.env,
+			PI_AGENT_CONTEXT: JSON.stringify({
+				version: AGENT_PROTOCOL_VERSION,
+				agentId: record.agentId,
+				runId: record.runId,
+				parentSessionId: record.parentSessionId,
+				metadata: record.metadata,
+			}),
+		};
+		const child = spawn(
+			this.invocation.command,
+			args,
+			buildChildSpawnOptions(childEnv, runCwd, SUPERVISOR_STDIO_SLOT),
+		);
 		const agentId = record.agentId;
 		const active = this.active.get(agentId);
 		if (active) active.process = child;
+		const childStdout = child.stdout;
+		const childStderr = child.stderr;
+		if (!childStdout || !childStderr) throw new Error("Child stdio pipes are unavailable");
+		const supervisorWriteEnd = child.stdio[SUPERVISOR_STDIO_SLOT];
+		if (!supervisorWriteEnd) throw new Error("Supervisor pipe write end is unavailable");
 		let stdoutBuffer = "";
 		let stderrBuffer = "";
 		let processing = Promise.resolve();
@@ -655,7 +947,7 @@ export class AgentManager {
 		const settledPromise = new Promise<void>((resolve) => {
 			resolveSettled = resolve;
 		});
-		child.stdout.on("data", (chunk: Buffer) => {
+		childStdout.on("data", (chunk: Buffer) => {
 			stdoutBuffer += chunk.toString("utf8");
 			const lines = stdoutBuffer.split("\n");
 			stdoutBuffer = lines.pop() ?? "";
@@ -665,18 +957,23 @@ export class AgentManager {
 				});
 			}
 		});
-		const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", resolve));
-		child.stderr.on("data", (chunk: Buffer) => {
+		const stdoutEnded = new Promise<void>((resolve) => childStdout.once("end", resolve));
+		childStderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			stderrBuffer += text;
-			processing = processing.then(async () => {
-				await this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
+			processing = processing.then(() => {
+				this.registry.appendTranscript(agentId, { type: "stderr", text, timestamp: Date.now() });
 			});
 		});
-		const stderrEnded = new Promise<void>((resolve) => child.stderr.once("end", resolve));
+		const stderrEnded = new Promise<void>((resolve) => childStderr.once("end", resolve));
 		const exitPromise = new Promise<
 			{ ok: true; code: number | null; signal: NodeJS.Signals | null } | { ok: false; error: Error }
 		>((resolve) => {
+			// Destroy the supervisor pipe's write end once the child is gone; the
+			// read end died with it, so holding the fd would leak it until this
+			// process exits. Normal terminate/stop/shutdown paths kill the child
+			// first and flow through the same 'close'.
+			child.once("close", () => supervisorWriteEnd.destroy());
 			child.once("close", (code, signal) => resolve({ ok: true, code, signal }));
 			child.once("error", (error) => resolve({ ok: false, error }));
 		});
@@ -740,7 +1037,7 @@ export class AgentManager {
 		} catch {
 			event = { type: "stdout", text: line, timestamp: Date.now() };
 		}
-		await this.registry.appendTranscript(agentId, event);
+		this.registry.appendTranscript(agentId, event);
 		if (!isRecord(event)) return false;
 		if (event.type === "agent_settled") return true;
 		if (event.type !== "message_end" && event.type !== "tool_result_end") return false;
@@ -887,34 +1184,36 @@ export class AgentManager {
 		return { record, completion, detachAbort: removeAbortListener };
 	}
 
-	private async terminateRecoveredProcess(record: AgentRecord): Promise<void> {
-		if (record.pid === undefined || record.processStartToken === undefined) return;
+	private async terminateRecoveredProcess(record: AgentRecord): Promise<boolean> {
+		if (record.pid === undefined || record.processStartToken === undefined) return false;
 		const identity = await this.processIdentityProbe(record.pid);
 		if (identity === undefined) {
 			if (processIsAlive(record.pid))
 				throw new Error(`Cannot verify recovered agent process ${record.pid}; refusing unsafe recovery`);
-			return;
+			return false;
 		}
-		if (identity !== record.processStartToken) return;
+		if (identity !== record.processStartToken) return false;
 		try {
 			process.kill(record.pid, "SIGTERM");
 		} catch (error: unknown) {
-			if (isRecord(error) && error.code === "ESRCH") return;
+			if (isRecord(error) && error.code === "ESRCH") return false;
 			throw error;
 		}
-		if (await this.waitForRecoveredExit(record.pid, record.processStartToken, this.killGraceMs)) return;
+		if (await this.waitForRecoveredExit(record.pid, record.processStartToken, this.killGraceMs)) return true;
 		try {
 			process.kill(record.pid, "SIGKILL");
 		} catch (error: unknown) {
-			if (isRecord(error) && error.code === "ESRCH") return;
+			if (isRecord(error) && error.code === "ESRCH") return false;
 			throw error;
 		}
 		if (!(await this.waitForRecoveredExit(record.pid, record.processStartToken, this.killGraceMs))) {
 			throw new Error(`Unable to terminate recovered agent process ${record.pid}`);
 		}
+		return true;
 	}
 
-	private async terminateRecoveredQueuedProcesses(record: AgentRecord): Promise<void> {
+	private async terminateRecoveredQueuedProcesses(record: AgentRecord): Promise<boolean> {
+		let terminated = false;
 		for (const pid of await this.sessionProcessProbe(record.childSessionId)) {
 			const identity = await this.processIdentityProbe(pid);
 			if (!(await this.sessionProcessMatches(record.childSessionId, pid))) continue;
@@ -924,8 +1223,14 @@ export class AgentManager {
 				if (isRecord(error) && error.code === "ESRCH") continue;
 				throw error;
 			}
-			if (await this.waitForRecoveredSessionExit(pid, record.childSessionId, identity, this.killGraceMs)) continue;
-			if (!(await this.sessionProcessMatches(record.childSessionId, pid))) continue;
+			if (await this.waitForRecoveredSessionExit(pid, record.childSessionId, identity, this.killGraceMs)) {
+				terminated = true;
+				continue;
+			}
+			if (!(await this.sessionProcessMatches(record.childSessionId, pid))) {
+				terminated = true;
+				continue;
+			}
 			if (identity !== undefined) {
 				const currentIdentity = await this.processIdentityProbe(pid);
 				if (currentIdentity !== undefined && currentIdentity !== identity) continue;
@@ -939,7 +1244,9 @@ export class AgentManager {
 			if (!(await this.waitForRecoveredSessionExit(pid, record.childSessionId, identity, this.killGraceMs))) {
 				throw new Error(`Unable to terminate recovered queued agent process ${pid}`);
 			}
+			terminated = true;
 		}
+		return terminated;
 	}
 
 	private async sessionProcessMatches(sessionId: string, pid: number): Promise<boolean> {

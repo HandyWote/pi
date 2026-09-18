@@ -24,7 +24,6 @@ interface NotificationEntry {
 	task?: string;
 	result?: string;
 	usage?: { input: number; output: number; toolCount: number };
-	transcriptPath?: string;
 }
 
 export interface AgentDefinitionSummary {
@@ -179,7 +178,6 @@ function normalizeDetailsEntry(value: unknown): NotificationEntry | undefined {
 	const definition = typeof value.definition === "string" ? value.definition : undefined;
 	const task = typeof value.task === "string" ? value.task : undefined;
 	const result = typeof value.result === "string" ? value.result : undefined;
-	const transcriptPath = typeof value.transcriptPath === "string" ? value.transcriptPath : undefined;
 	let usage: NotificationEntry["usage"];
 	if (isObject(value.usage)) {
 		const input = typeof value.usage.input === "number" ? value.usage.input : 0;
@@ -187,7 +185,7 @@ function normalizeDetailsEntry(value: unknown): NotificationEntry | undefined {
 		const toolCount = typeof value.usage.toolCount === "number" ? value.usage.toolCount : 0;
 		usage = { input, output, toolCount };
 	}
-	return { agentId, definition, status, task, result, transcriptPath, usage };
+	return { agentId, definition, status, task, result, usage };
 }
 
 const BATCH_ENTRY_PATTERN =
@@ -248,10 +246,6 @@ function parseNotificationContent(content: string): NotificationEntry[] {
 				.find((line) => line.trim().startsWith("Recorded result: "))
 				?.trim()
 				.slice("Recorded result: ".length),
-			transcriptPath: lines
-				.find((line) => line.trim().startsWith("Output: "))
-				?.trim()
-				.slice("Output: ".length),
 			usage: parseLegacyUsage(lines.find((line) => line.trim().startsWith("Usage: "))),
 		},
 	];
@@ -284,7 +278,6 @@ function notificationCardLines(entry: NotificationEntry, theme: Theme, expanded:
 	const meta: string[] = [];
 	if (entry.usage)
 		meta.push(`${entry.usage.toolCount} tools`, `${formatTokens(entry.usage.input + entry.usage.output)} tokens`);
-	if (entry.transcriptPath) meta.push(entry.transcriptPath);
 	if (meta.length > 0) lines.push(theme.fg("dim", meta.join(" · ")));
 	if (expanded && entry.result?.trim()) {
 		lines.push(theme.fg("muted", "Result:"));

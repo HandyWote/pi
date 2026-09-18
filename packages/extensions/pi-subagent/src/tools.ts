@@ -77,7 +77,6 @@ function outputText(record: AgentRecord, transcript: string, ready: boolean): st
 		`Agent ${record.agentId}: ${record.status}`,
 		`Type: ${record.definition.name}`,
 		`Task: ${record.task}`,
-		`Output file: ${record.transcriptPath}`,
 	];
 	if (!ready) {
 		lines.push("Result: not_ready");
@@ -195,12 +194,7 @@ export function registerAgentTools(pi: ExtensionAPI, getManager: () => AgentMana
 						for (const start of starts) start.detachAbort();
 						const records = starts.map((start) => start.record);
 						return textResult(
-							records
-								.map(
-									(record) =>
-										`Launched ${record.definition.name} as ${record.agentId}; output: ${record.transcriptPath}`,
-								)
-								.join("\n"),
+							records.map((record) => `Launched ${record.definition.name} as ${record.agentId}`).join("\n"),
 							{ operation: "start", records },
 						);
 					}

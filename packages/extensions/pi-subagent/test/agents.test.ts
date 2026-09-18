@@ -31,7 +31,6 @@ function notificationRecord(overrides: Partial<AgentRecord> = {}): AgentRecord {
 		updatedAt: "2026-08-20T00:00:00.000Z",
 		childSessionId: "child-1",
 		childSessionDir: "/tmp/child-1",
-		transcriptPath: "/tmp/child-1/transcript.md",
 		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
 		toolCount: 0,
 		lastOutput: "",

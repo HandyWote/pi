@@ -1,22 +1,11 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { summarizeToolArguments, summarizeToolResult, TranscriptCache } from "../src/transcript-view.ts";
-
-const tempRoots: string[] = [];
-
-function temporaryDirectory(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-transcript-"));
-	tempRoots.push(root);
-	return root;
-}
-
-function writeTranscript(root: string, lines: string[]): string {
-	const filePath = path.join(root, "transcript.jsonl");
-	fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
-	return filePath;
-}
+import { describe, expect, it } from "vitest";
+import { TranscriptBuffer } from "../src/transcript-buffer.ts";
+import {
+	summarizeToolArguments,
+	summarizeToolResult,
+	TranscriptCache,
+	type TranscriptItem,
+} from "../src/transcript-view.ts";
 
 function assistantEvent(content: unknown, timestamp = 1000): string {
 	return JSON.stringify({
@@ -31,16 +20,6 @@ function toolResultEvent(content: unknown, isError = false, timestamp = 1000): s
 		message: { role: "toolResult", content, isError, timestamp },
 	});
 }
-
-function record(transcriptPath: string): { transcriptPath: string } {
-	return { transcriptPath };
-}
-
-afterEach(() => {
-	for (const root of tempRoots.splice(0)) {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
-});
 
 describe("summarizeToolArguments", () => {
 	it("summarizes bash by its first command line and flattens multi-line commands", () => {
@@ -102,10 +81,11 @@ describe("summarizeToolResult", () => {
 });
 
 describe("TranscriptCache", () => {
-	it("parses assistant text, tool calls, and tool results into transcript items", async () => {
-		const root = temporaryDirectory();
-		const filePath = writeTranscript(root, [
-			assistantEvent([{ type: "text", text: "Hello there" }], 111),
+	it("parses assistant text, tool calls, and tool results into transcript items", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "Hello there" }], 111));
+		buffer.append(
+			"agent-1",
 			assistantEvent(
 				[
 					{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "npm test" } },
@@ -113,12 +93,11 @@ describe("TranscriptCache", () => {
 				],
 				222,
 			),
-			toolResultEvent([{ type: "text", text: "All tests passed" }], false, 333),
-		]);
-		const cache = new TranscriptCache();
-		const items = await cache.getItems(record(filePath));
+		);
+		buffer.append("agent-1", toolResultEvent([{ type: "text", text: "All tests passed" }], false, 333));
+		const cache = new TranscriptCache(buffer);
 
-		expect(items).toEqual([
+		expect(cache.getItems("agent-1")).toEqual([
 			{ kind: "text", text: "Hello there", timestamp: 111 },
 			{ kind: "toolCall", name: "bash", summary: "npm test", argsJson: '{"command":"npm test"}', timestamp: 222 },
 			{ kind: "text", text: "Running tests", timestamp: 222 },
@@ -126,9 +105,10 @@ describe("TranscriptCache", () => {
 		]);
 	});
 
-	it("parses tool_result_end events and marks errors", async () => {
-		const root = temporaryDirectory();
-		const filePath = writeTranscript(root, [
+	it("parses tool_result_end events and marks errors", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append(
+			"agent-1",
 			JSON.stringify({
 				type: "tool_result_end",
 				message: {
@@ -138,132 +118,105 @@ describe("TranscriptCache", () => {
 					timestamp: 55,
 				},
 			}),
+		);
+		const cache = new TranscriptCache(buffer);
+		expect(cache.getItems("agent-1")).toEqual([
+			{ kind: "toolResult", summary: "Command failed", isError: true, timestamp: 55 },
 		]);
-		const cache = new TranscriptCache();
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "toolResult", summary: "Command failed", isError: true, timestamp: 55 }]);
 	});
 
-	it("ignores noise lines: stderr, stdout, header, agent_settled, malformed JSON", async () => {
-		const root = temporaryDirectory();
-		const filePath = writeTranscript(root, [
-			JSON.stringify({ type: "session", id: "s1" }),
-			JSON.stringify({ type: "stderr", text: "warning noise", timestamp: 1 }),
-			JSON.stringify({ type: "stdout", text: "log noise", timestamp: 2 }),
-			JSON.stringify({ type: "agent_settled" }),
-			"this is not json",
-			assistantEvent([{ type: "text", text: "real" }], 3),
-		]);
-		const cache = new TranscriptCache();
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "text", text: "real", timestamp: 3 }]);
+	it("ignores noise lines: stderr, stdout, header, agent_settled, malformed JSON", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append("agent-1", JSON.stringify({ type: "session", id: "s1" }));
+		buffer.append("agent-1", JSON.stringify({ type: "stderr", text: "warning noise", timestamp: 1 }));
+		buffer.append("agent-1", JSON.stringify({ type: "stdout", text: "log noise", timestamp: 2 }));
+		buffer.append("agent-1", JSON.stringify({ type: "agent_settled" }));
+		buffer.append("agent-1", "this is not json");
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "real" }], 3));
+		const cache = new TranscriptCache(buffer);
+
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "real", timestamp: 3 }]);
 	});
 
-	it("ignores non-assistant message_end events (user/custom roles)", async () => {
-		const root = temporaryDirectory();
-		const filePath = writeTranscript(root, [
+	it("ignores non-assistant message_end events (user/custom roles)", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append(
+			"agent-1",
 			JSON.stringify({ type: "message_end", message: { role: "user", content: "a prompt", timestamp: 1 } }),
+		);
+		buffer.append(
+			"agent-1",
 			JSON.stringify({ type: "message_end", message: { role: "custom", content: "noise", timestamp: 2 } }),
-			assistantEvent([{ type: "text", text: "kept" }], 3),
-		]);
-		const cache = new TranscriptCache();
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "text", text: "kept", timestamp: 3 }]);
+		);
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "kept" }], 3));
+		const cache = new TranscriptCache(buffer);
+
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "kept", timestamp: 3 }]);
 	});
 
-	it("appends incrementally: only newly completed lines are parsed", async () => {
-		const root = temporaryDirectory();
-		const filePath = path.join(root, "transcript.jsonl");
-		const cache = new TranscriptCache();
+	it("parses incrementally as lines are appended", () => {
+		const buffer = new TranscriptBuffer();
+		const cache = new TranscriptCache(buffer);
 
-		fs.writeFileSync(filePath, `${assistantEvent([{ type: "text", text: "first" }], 10)}\n`, "utf8");
-		await touch(filePath);
-		expect(await cache.getItems(record(filePath))).toEqual([{ kind: "text", text: "first", timestamp: 10 }]);
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "first" }], 10));
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "first", timestamp: 10 }]);
 
-		// Simulate an interrupted line append: text split across writes.
-		fs.appendFileSync(filePath, `${assistantEvent([{ type: "text", text: "split" }], 20).slice(0, 30)}`, "utf8");
-		await touch(filePath);
-		expect(await cache.getItems(record(filePath))).toEqual([{ kind: "text", text: "first", timestamp: 10 }]);
-
-		fs.appendFileSync(filePath, `${assistantEvent([{ type: "text", text: "split" }], 20).slice(30)}\n`, "utf8");
-		await touch(filePath);
-		expect(await cache.getItems(record(filePath))).toEqual([
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "second" }], 20));
+		expect(cache.getItems("agent-1")).toEqual([
 			{ kind: "text", text: "first", timestamp: 10 },
-			{ kind: "text", text: "split", timestamp: 20 },
+			{ kind: "text", text: "second", timestamp: 20 },
 		]);
 	});
 
-	it("keeps a partial trailing line in the buffer across calls", async () => {
-		const root = temporaryDirectory();
-		const filePath = path.join(root, "transcript.jsonl");
-		const cache = new TranscriptCache();
-
-		fs.writeFileSync(filePath, `${assistantEvent([{ type: "text", text: "A" }], 1)}\n{`, "utf8");
-		await touch(filePath);
-		await cache.getItems(record(filePath));
-		// mtime and size unchanged: served from cache without touching the file.
-		expect(await cache.getItems(record(filePath))).toEqual([{ kind: "text", text: "A", timestamp: 1 }]);
-
-		fs.appendFileSync(filePath, '"rest"\n}', "utf8");
-		await touch(filePath);
-		await cache.getItems(record(filePath));
-		// The second append never completed a newline, so nothing new is parsed.
-		expect(await cache.getItems(record(filePath))).toEqual([{ kind: "text", text: "A", timestamp: 1 }]);
-
-		fs.appendFileSync(filePath, '\n{"type":"agent_settled"}\n', "utf8");
-		await touch(filePath);
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "text", text: "A", timestamp: 1 }]);
+	it("serves a stable snapshot when no new lines arrived", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "A" }], 1));
+		const cache = new TranscriptCache(buffer);
+		const first = cache.getItems("agent-1");
+		expect(first).toEqual([{ kind: "text", text: "A", timestamp: 1 }]);
+		expect(cache.getItems("agent-1")).toBe(first);
 	});
 
-	it("keeps multi-byte UTF-8 characters split across appends intact", async () => {
-		const root = temporaryDirectory();
-		const filePath = path.join(root, "transcript.jsonl");
-		const cache = new TranscriptCache();
-		const line = assistantEvent([{ type: "text", text: "héllo ✓ world" }], 7);
-		const bytes = Buffer.from(line, "utf8");
-		// Split one byte into the 3-byte UTF-8 encoding of "✓" so the partial
-		// character spans two separate appends.
-		const checkmarkOffset = bytes.indexOf(Buffer.from("✓", "utf8"));
-		const split = checkmarkOffset + 1;
-		fs.writeFileSync(filePath, bytes.subarray(0, split));
-		await touch(filePath);
-		await cache.getItems(record(filePath));
+	it("restarts from the full buffer when the cursor points at evicted lines", () => {
+		const buffer = new TranscriptBuffer();
+		const cache = new TranscriptCache(buffer);
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "old" }], 1));
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "old", timestamp: 1 }]);
 
-		fs.appendFileSync(filePath, bytes.subarray(split));
-		fs.appendFileSync(filePath, "\n", "utf8");
-		await touch(filePath);
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "text", text: "héllo ✓ world", timestamp: 7 }]);
+		// One huge line pushes every earlier line out of the 200KB buffer.
+		const huge = assistantEvent([{ type: "text", text: `new ${"x".repeat(210_000)}` }], 2);
+		buffer.append("agent-1", huge);
+		const items = cache.getItems("agent-1");
+		expect(items).toHaveLength(1);
+		expect(items[0].kind).toBe("text");
+		// The snapshot was rebuilt from the remaining buffer, not appended to.
+		expect((items[0] as Extract<TranscriptItem, { kind: "text" }>).text.startsWith("new ")).toBe(true);
+		expect(cache.getItems("agent-1")).toEqual(items);
 	});
 
-	it("restarts from the top when the file is truncated or replaced", async () => {
-		const root = temporaryDirectory();
-		const filePath = path.join(root, "transcript.jsonl");
-		const cache = new TranscriptCache();
+	it("keeps per-agent state isolated", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "one" }], 1));
+		buffer.append("agent-2", assistantEvent([{ type: "text", text: "two" }], 2));
+		const cache = new TranscriptCache(buffer);
 
-		fs.writeFileSync(filePath, `${assistantEvent([{ type: "text", text: "old" }], 1)}\n`, "utf8");
-		await touch(filePath);
-		await cache.getItems(record(filePath));
-
-		// Rewrite with a completely different, shorter transcript. The size
-		// shrinks, which forces the cache to restart from the top regardless of
-		// mtime granularity (a same-size rewrite can land on the same mtime ms).
-		fs.writeFileSync(filePath, `${assistantEvent([{ type: "text", text: "nw" }], 2)}\n`);
-		await touch(filePath);
-		const items = await cache.getItems(record(filePath));
-		expect(items).toEqual([{ kind: "text", text: "nw", timestamp: 2 }]);
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "one", timestamp: 1 }]);
+		expect(cache.getItems("agent-2")).toEqual([{ kind: "text", text: "two", timestamp: 2 }]);
 	});
 
-	it("returns an empty list for a missing transcript", async () => {
-		const root = temporaryDirectory();
-		const cache = new TranscriptCache();
-		expect(await cache.getItems(record(path.join(root, "missing.jsonl")))).toEqual([]);
+	it("returns an empty list for unknown agents", () => {
+		const cache = new TranscriptCache(new TranscriptBuffer());
+		expect(cache.getItems("missing")).toEqual([]);
+	});
+
+	it("drops cached state on clear()", () => {
+		const buffer = new TranscriptBuffer();
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "A" }], 1));
+		const cache = new TranscriptCache(buffer);
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "A", timestamp: 1 }]);
+
+		buffer.clear("agent-1");
+		buffer.append("agent-1", assistantEvent([{ type: "text", text: "B" }], 2));
+		expect(cache.getItems("agent-1")).toEqual([{ kind: "text", text: "B", timestamp: 2 }]);
 	});
 });
-
-async function touch(filePath: string): Promise<void> {
-	const stat = await fs.promises.stat(filePath);
-	const mtime = new Date(stat.mtimeMs + 1000);
-	await fs.promises.utimes(filePath, mtime, mtime);
-}

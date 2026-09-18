@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `transcriptPath` from `AgentRecord` and `AgentTerminalEventDetails`: subagent transcripts are no longer written to disk and now live in a bounded in-memory buffer (200KB per agent, oldest lines evicted first). Legacy persisted records that still carry the field load successfully and are migrated on the next save.
+
+### Added
+
+- Subagent children now watch a supervisor pipe for parent death: the parent spawns each child with an extra stdio pipe and injects `PI_SUBAGENT_SUPERVISOR_FD`; when the parent crashes, the child sees EOF and shuts down gracefully (session persisted, grandchildren terminated) within milliseconds instead of burning tokens as an orphan. Fully event-driven, no polling; behavior is unchanged when the env var is absent.
+
+- On startup, the subagent manager now sweeps foreign session state past a 7-day staleness window: stale crashed-session registries are deleted after terminating their still-verifiable orphaned children and reclaiming session directories, prompts, worktrees, and branches, and unreferenced stale entries under `sessions/`, `prompts/`, `worktrees/`, `transcripts/`, and stale `registries/*.tmp` files are removed (largest win: legacy transcript directories). Fresh state from concurrent live sessions is never touched.
+
+### Changed
+
+- Registries now record the owning pi process (pid plus process start token) and the startup sweep uses it as a fact check: a foreign session whose recorded parent process is still alive is never swept, no matter how long it has been idle. Registries written by older versions (without the recorded identity) keep the previous mtime-only judgment.
+
+- Dirty worktrees are never force-removed anymore: at agent teardown and in the startup sweep, a worktree with uncommitted changes is retained with a stderr notice pointing at its path instead of being destroyed. Clean worktrees are removed as before; the branch of a retained worktree stays alive because the worktree still holds it checked out. Worktree contents belong to the user and git, so the decision to keep or discard them is never made by the agent.
+
 ## [0.4.3] - 2026-08-28
 
 ### Added

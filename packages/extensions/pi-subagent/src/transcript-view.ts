@@ -1,22 +1,19 @@
-import * as fs from "node:fs";
-import type { AgentRecord } from "./types.ts";
+import type { TranscriptBuffer, TranscriptWindow } from "./transcript-buffer.ts";
 
 /**
  * Incremental JSONL transcript parsing for the subagent detail view.
  *
- * The child process streams agent events to `<rootDir>/transcripts/<agentId>.jsonl`
- * (one JSON event per line). Only `message_end` (assistant and toolResult roles)
- * and `tool_result_end` events carry renderable content; every other line
- * (`stderr`, `stdout`, session header, `agent_settled`, malformed JSON, ...) is
- * ignored as noise.
+ * The manager streams agent events into the registry's `TranscriptBuffer`
+ * (one complete JSON event per line). Only `message_end` (assistant and
+ * toolResult roles) and `tool_result_end` events carry renderable content;
+ * every other line (`stderr`, `stdout`, session header, `agent_settled`,
+ * malformed JSON, ...) is ignored as noise.
  */
 
 /** Maximum visible width of a rendered tool-call summary line. */
 const MAX_ARG_SUMMARY = 80;
 /** Maximum visible width of a rendered tool-result summary line. */
 const MAX_RESULT_SUMMARY = 100;
-/** Upper bound on cached agents (oldest evicted first). */
-const MAX_CACHED_AGENTS = 64;
 
 export interface TranscriptTextItem {
 	kind: "text";
@@ -46,12 +43,12 @@ export interface ToolResultSummary {
 	isError: boolean;
 }
 
+/** Cursor of an incremental parse: the newest line sequence already parsed. */
 interface TranscriptCacheEntry {
 	items: TranscriptItem[];
-	/** Raw bytes of the trailing incomplete line (before the final newline). */
-	pending: Buffer;
-	size: number;
-	mtimeMs: number;
+	fromSeq: number;
+	/** Buffer generation at parse time; a mismatch forces a full re-parse. */
+	generation: number;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -198,72 +195,64 @@ function parseLine(line: string): TranscriptItem[] {
 }
 
 /**
- * Per-agent incremental transcript cache keyed by (path, size, mtime). Each
- * `getItems` call re-reads only the bytes appended since the last call and
- * parses only newly completed lines, carrying the trailing incomplete line as
- * raw bytes so multi-byte UTF-8 characters split across appends stay intact.
- * Returned item lists are append-only snapshots; callers must not mutate them.
+ * Per-agent incremental transcript cache over the registry's bounded
+ * `TranscriptBuffer`. Each `getItems` call parses only the lines appended
+ * since the last call (tracked by the buffer's monotonic per-line sequence).
+ * When the cursor points at already evicted lines, or the buffer dropped an
+ * agent's whole history, the cache restarts from the full remaining buffer so
+ * the view stays consistent with what the buffer still holds. Returned item
+ * lists are append-only snapshots; callers must not mutate them.
  */
 export class TranscriptCache {
+	private readonly buffer: TranscriptBuffer;
 	private readonly entries = new Map<string, TranscriptCacheEntry>();
+	/** Bumped whenever the buffer drops an agent's entire history. */
+	private generation = 0;
+
+	constructor(buffer: TranscriptBuffer) {
+		this.buffer = buffer;
+		buffer.onClear = () => {
+			this.generation += 1;
+		};
+	}
 
 	/** Drop all cached entries (e.g. when the parent session state is cleared). */
 	clear(): void {
 		this.entries.clear();
 	}
 
-	async getItems(record: Pick<AgentRecord, "transcriptPath">): Promise<TranscriptItem[]> {
-		const filePath = record.transcriptPath;
-		let stat: fs.Stats;
-		try {
-			stat = await fs.promises.stat(filePath);
-		} catch (error: unknown) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				this.entries.delete(filePath);
-				return [];
-			}
-			throw error;
-		}
-		const cached = this.entries.get(filePath);
-		if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return cached.items;
-		// A shorter file means it was replaced or truncated, and a same-size file
-		// whose mtime changed was rewritten in place; both restart from the top.
-		const reset =
-			!cached || stat.size < cached.size || (stat.size === cached.size && stat.mtimeMs !== cached.mtimeMs);
-		let data: Buffer;
-		if (reset) {
-			data = await fs.promises.readFile(filePath);
+	clearAgent(agentId: string): void {
+		this.entries.delete(agentId);
+	}
+
+	getItems(agentId: string): TranscriptItem[] {
+		const cached = this.entries.get(agentId);
+		const stale = !cached || cached.generation !== this.generation;
+		let window: TranscriptWindow;
+		if (!stale) {
+			window = this.buffer.getLinesSince(agentId, cached.fromSeq);
 		} else {
-			data = Buffer.allocUnsafe(stat.size - cached.size);
-			const fd = await fs.promises.open(filePath, "r");
-			try {
-				await fd.read(data, 0, data.length, cached.size);
-			} finally {
-				await fd.close();
-			}
+			// First read: take the full remaining buffer. lastSeq 0 means the cache
+			// accepts everything still buffered, mirroring a fresh file read.
+			const tail = this.buffer.read(agentId);
+			window = {
+				lines: tail ? tail.split("\n").filter((line) => line.trim()) : [],
+				lastSeq: this.buffer.getLinesSince(agentId, 0).lastSeq,
+				evicted: false,
+			};
 		}
-		const raw = reset ? data : Buffer.concat([cached.pending, data]);
-		const newline = raw.lastIndexOf(0x0a);
+		const parsed: TranscriptItem[] = [];
+		for (const line of window.lines) {
+			const found = parseLine(line);
+			if (found.length > 0) parsed.push(...found);
+		}
 		let items: TranscriptItem[];
-		let pending: Buffer;
-		if (newline < 0) {
-			items = reset ? [] : cached.items;
-			pending = raw;
+		if (!stale && !window.evicted) {
+			items = window.lines.length === 0 ? cached.items : cached.items.concat(parsed);
 		} else {
-			const complete = raw.subarray(0, newline).toString("utf8");
-			const parsed: TranscriptItem[] = [];
-			for (const line of complete.split("\n")) {
-				const found = parseLine(line);
-				if (found.length > 0) parsed.push(...found);
-			}
-			items = (reset ? [] : cached.items).concat(parsed);
-			pending = raw.subarray(newline + 1);
+			items = parsed;
 		}
-		this.entries.set(filePath, { items, pending, size: stat.size, mtimeMs: stat.mtimeMs });
-		if (this.entries.size > MAX_CACHED_AGENTS) {
-			const oldest = this.entries.keys().next().value;
-			if (oldest !== undefined) this.entries.delete(oldest);
-		}
+		this.entries.set(agentId, { items, fromSeq: window.lastSeq, generation: this.generation });
 		return items;
 	}
 }

@@ -187,7 +187,9 @@ describe("pi-subagent extension", () => {
 
 		await harness.session.reload();
 		expect(managers).toHaveLength(2);
-		expect(managers[1]!.list()).toEqual([]);
+		// A graceful reload keeps terminal history (and child sessions) so `/agents`
+		// and resume keep working in the same parent session.
+		expect(managers[1]!.get(agentId)).toMatchObject({ status: "completed" });
 		expect(notify.mock.calls.filter((call) => String(call[0]).startsWith("worker completed:")).length).toBe(2);
 	});
 
@@ -409,7 +411,7 @@ describe("pi-subagent extension", () => {
 				worktreePath: undefined,
 				cleanupError: undefined,
 			});
-			expect(await manager!.registry.readTranscript(record.agentId)).toContain(
+			expect(manager!.registry.readTranscript(record.agentId)).toContain(
 				path.join(extraRoots[0]!, "worktrees", record.agentId, "packages", "worker"),
 			);
 		}

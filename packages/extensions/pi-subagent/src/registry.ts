@@ -1,11 +1,24 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { TranscriptBuffer } from "./transcript-buffer.ts";
 import type { AgentActivity, AgentDefinition, AgentRecord, AgentStatus, AgentUsage } from "./types.ts";
 
 interface RegistryFile {
 	version: 2;
 	parentSessionId: string;
+	/**
+	 * Process identity of the parent pi process that owns this registry, used
+	 * by the startup sweep of foreign registries: a live parent means the
+	 * session (and its residue) belongs to a concurrent session and must not
+	 * be swept, regardless of the mtime staleness window. Optional so legacy
+	 * registries without the field still load; the sweep falls back to the
+	 * mtime window for them.
+	 */
+	parentProcess?: {
+		pid: number;
+		processStartToken: string;
+	};
 	records: AgentRecord[];
 }
 
@@ -97,6 +110,32 @@ async function atomicCommit(filePath: string, data: string): Promise<void> {
 	}
 }
 
+/** Normalize legacy persisted records: strip retired fields such as `transcriptPath`. */
+function stripLegacyFields(record: Record<string, unknown>): Record<string, unknown> {
+	const { transcriptPath: _legacyTranscriptPath, ...rest } = record;
+	return rest;
+}
+
+/** Identity of the parent process that owns a registry, used for liveness checks during sweeping. */
+export interface ParentProcessIdentity {
+	pid: number;
+	processStartToken: string;
+}
+
+/**
+ * Read the optional `parentProcess` block from a loaded registry file.
+ * Malformed or absent blocks yield `undefined`, so legacy registries still
+ * load and sweeping falls back to the mtime window for them.
+ */
+function readParentProcessIdentity(value: unknown): ParentProcessIdentity | undefined {
+	if (!isObject(value)) return undefined;
+	const pid = value.pid;
+	const token = value.processStartToken;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
+	if (typeof token !== "string" || !token) return undefined;
+	return { pid, processStartToken: token };
+}
+
 export class AgentRegistry {
 	private records = new Map<string, AgentRecord>();
 	private operationQueue: Promise<void> = Promise.resolve();
@@ -104,6 +143,9 @@ export class AgentRegistry {
 	readonly parentSessionId: string;
 	readonly rootDir: string;
 	readonly registryPath: string;
+	readonly transcripts = new TranscriptBuffer();
+	/** Parent process identity read from the last `load()`; `undefined` for legacy registries. */
+	private parentProcessIdentity: ParentProcessIdentity | undefined;
 
 	constructor(rootDir: string, parentSessionId: string, committer: RegistryCommitter = atomicCommit) {
 		if (!isIdentifier(parentSessionId)) throw new Error(`Invalid parent session ID: ${parentSessionId}`);
@@ -135,10 +177,13 @@ export class AgentRegistry {
 			if (!isObject(parsed) || parsed.version !== 2 || parsed.parentSessionId !== this.parentSessionId) {
 				throw new Error(`Invalid subagent registry: ${this.registryPath}`);
 			}
+			this.parentProcessIdentity = readParentProcessIdentity(parsed.parentProcess);
 			if (!Array.isArray(parsed.records)) throw new Error(`Invalid subagent records: ${this.registryPath}`);
 			const restored = new Map<string, AgentRecord>();
 			for (const value of parsed.records) {
-				const record = this.validateRecord(value);
+				// Legacy v2 records may still carry a `transcriptPath`; ignore it instead
+				// of rejecting the whole registry during the upgrade window.
+				const record = this.validateRecord(stripLegacyFields(value));
 				if (restored.has(record.agentId)) throw new Error(`Duplicate agent ID in registry: ${record.agentId}`);
 				restored.set(record.agentId, structuredClone(record));
 			}
@@ -183,29 +228,14 @@ export class AgentRegistry {
 		});
 	}
 
-	appendTranscript(agentId: string, event: unknown): Promise<void> {
-		return this.enqueue(async () => {
-			if (!this.records.has(agentId)) throw new Error(`Unknown agent: ${agentId}`);
-			const transcriptPath = this.transcriptPath(agentId);
-			await fs.promises.mkdir(path.dirname(transcriptPath), { recursive: true });
-			await fs.promises.appendFile(transcriptPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
-		});
+	/** Append one complete event line to an agent's bounded in-memory transcript. */
+	appendTranscript(agentId: string, event: unknown): void {
+		this.transcripts.append(agentId, JSON.stringify(event));
 	}
 
-	readTranscript(agentId: string, maxBytes = 200 * 1024): Promise<string> {
-		return this.enqueue(async () => {
-			if (!this.records.has(agentId)) throw new Error(`Unknown agent: ${agentId}`);
-			try {
-				const data = await fs.promises.readFile(this.transcriptPath(agentId));
-				const start = Math.max(0, data.length - maxBytes);
-				if (start === 0) return data.toString("utf8");
-				const newline = data.indexOf(0x0a, start);
-				return newline < 0 ? "" : data.subarray(newline + 1).toString("utf8");
-			} catch (error: unknown) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-				throw error;
-			}
-		});
+	/** Tail window of complete transcript lines (old trailing-window semantics). */
+	readTranscript(agentId: string, maxBytes = 200 * 1024): string {
+		return this.transcripts.read(agentId, maxBytes);
 	}
 
 	private validateRecord(value: unknown): AgentRecord {
@@ -233,11 +263,8 @@ export class AgentRegistry {
 		if (value.childSessionId !== value.agentId)
 			throw new Error(`Invalid child session ID for agent ${value.agentId}`);
 		const expectedSessionDir = path.join(this.rootDir, "sessions", value.agentId);
-		const expectedTranscript = this.transcriptPath(value.agentId);
 		if (path.resolve(String(value.childSessionDir)) !== expectedSessionDir)
 			throw new Error(`Invalid session path for agent ${value.agentId}`);
-		if (path.resolve(String(value.transcriptPath)) !== expectedTranscript)
-			throw new Error(`Invalid transcript path for agent ${value.agentId}`);
 		if (
 			value.childSessionPath !== undefined &&
 			(typeof value.childSessionPath !== "string" || !isContained(expectedSessionDir, value.childSessionPath))
@@ -282,15 +309,29 @@ export class AgentRegistry {
 		return value as unknown as AgentRecord;
 	}
 
-	private transcriptPath(agentId: string): string {
-		if (!isIdentifier(agentId)) throw new Error(`Invalid agent ID: ${agentId}`);
-		return path.join(this.rootDir, "transcripts", `${agentId}.jsonl`);
+	/** Liveness-checkable identity of this registry's parent process, if it has been set. */
+	getParentProcessIdentity(): ParentProcessIdentity | undefined {
+		return this.parentProcessIdentity ? structuredClone(this.parentProcessIdentity) : undefined;
+	}
+
+	/**
+	 * Record the parent process identity once per registry lifetime, persisting
+	 * it immediately (even for an empty registry) so foreign sessions can
+	 * fact-check our liveness from the moment this session exists.
+	 */
+	setParentProcessIdentity(identity: ParentProcessIdentity): Promise<void> {
+		return this.enqueue(async () => {
+			if (this.parentProcessIdentity) return;
+			this.parentProcessIdentity = structuredClone(identity);
+			await this.flush(this.records);
+		});
 	}
 
 	private async flush(records: Map<string, AgentRecord>): Promise<void> {
 		const data: RegistryFile = {
 			version: 2,
 			parentSessionId: this.parentSessionId,
+			...(this.parentProcessIdentity ? { parentProcess: this.parentProcessIdentity } : {}),
 			records: [...records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
 		};
 		await this.committer(this.registryPath, `${JSON.stringify(data, null, 2)}\n`);

@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as net from "node:net";
 
 /**
@@ -43,7 +44,19 @@ export const SUPERVISOR_STDIO_SLOT = 3;
 export function startSupervisorWatchdog(fd: number, onParentDeath: () => void): () => void {
 	let disposed = false;
 	let fired = false;
-	const socket = new net.Socket({ fd, readable: true, writable: false });
+	// A wrapper command that closes the supervisor fd (or a reused fd number) must not
+	// break child startup: fail soft by skipping the watchdog instead of throwing.
+	try {
+		fs.fstatSync(fd);
+	} catch {
+		return () => {};
+	}
+	let socket: net.Socket;
+	try {
+		socket = new net.Socket({ fd, readable: true, writable: false });
+	} catch {
+		return () => {};
+	}
 	const trigger = () => {
 		if (disposed || fired) return;
 		fired = true;

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-18
+
 ### Breaking Changes
 
 - Removed `transcriptPath` from `AgentRecord` and `AgentTerminalEventDetails`: subagent transcripts are no longer written to disk and now live in a bounded in-memory buffer (200KB per agent, oldest lines evicted first). Legacy persisted records that still carry the field load successfully and are migrated on the next save.

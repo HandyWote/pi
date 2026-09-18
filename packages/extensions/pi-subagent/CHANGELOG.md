@@ -18,6 +18,12 @@
 
 - Dirty worktrees are never force-removed anymore: at agent teardown and in the startup sweep, a worktree with uncommitted changes is retained with a stderr notice pointing at its path instead of being destroyed. Clean worktrees are removed as before; the branch of a retained worktree stays alive because the worktree still holds it checked out. Worktree contents belong to the user and git, so the decision to keep or discard them is never made by the agent.
 
+### Fixed
+
+- Fixed extension load failure at child startup when a `PI_SUBAGENT_COMMAND` wrapper closes the supervisor fd: `net.Socket` threw `Unsupported fd type: UNKNOWN`, aborting the whole child instead of just skipping the watchdog. The watchdog now arms defensively (fd probed with `fstatSync`, socket construction guarded) and disarms silently when the fd is unusable; the startup sweep remains the orphan backstop in that case.
+
+## [0.4.3] - 2026-08-28
+
 ## [0.4.3] - 2026-08-28
 
 ### Added

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### New Features
+
+- Subagent children now detect a crashed parent through a supervisor pipe and shut down within milliseconds; startup sweeps terminate leftover orphan children and reclaim their state (pi-subagent).
+- Subagent startup now reclaims stale foreign session state past a 7-day window, including legacy on-disk transcript directories, while never touching state from concurrent live sessions (pi-subagent).
+
 ## [0.86.0] - 2026-09-01
 
 ### New Features

@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-profile",
+	"name": "@handy_wote/pi-profile",
 	"version": "0.0.2",
 	"description": "Profile management extension for pi: gateway profiles, discovery, API routing, and model pools",
 	"type": "module",

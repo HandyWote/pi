@@ -5,7 +5,7 @@ Manage gateway profiles from pi and compile them into the official `models.json`
 Install:
 
 ```bash
-pi install npm:@earendil-works/pi-profile
+pi install npm:@handy_wote/pi-profile
 ```
 
 Open `/profile` to create a profile, save its API key in pi official `auth.json`, discover models, choose enabled models, and edit model capabilities. The extension uses pi native API names and configuration fields.

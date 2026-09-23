@@ -1,35 +1,47 @@
 {
 	"name": "@earendil-works/pi-profile",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Profile management extension for pi: gateway profiles, discovery, API routing, and model pools",
 	"type": "module",
 	"keywords": [
+		"pi-package",
 		"pi",
 		"pi-extension",
 		"profile",
-		"gateway",
-		"model"
+		"gateway"
 	],
 	"pi": {
 		"extensions": [
-			"./src/index.ts"
+			"./dist/index.js"
 		]
 	},
-	"main": "./src/index.ts",
-	"types": "./src/index.ts",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
-			"types": "./src/index.ts",
-			"import": "./src/index.ts"
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
 		}
 	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
 	"scripts": {
-		"check": "tsgo --noEmit -p tsconfig.json",
-		"test": "vitest --run"
+		"clean": "node -e \"import('node:fs/promises').then(fs=>fs.rm('dist',{recursive:true,force:true}))\"",
+		"build": "tsgo -p tsconfig.build.json",
+		"check": "tsgo --noEmit -p tsconfig.build.json",
+		"test": "node scripts/run-vitest.mjs"
 	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {},
 	"devDependencies": {
 		"@earendil-works/pi-ai": "0.86.1",
-		"@types/node": "24.12.4"
+		"@types/node": "24.12.4",
+		"vitest": "4.1.9"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",

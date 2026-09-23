@@ -1,4 +1,4 @@
-import type { RegistryApi } from "@earendil-works/pi-ai";
+import type { RegistryApi } from "./profile-api-types.ts";
 
 /** The authentication header family used by a protocol route. */
 export type ProfileAuthStyle = "openai" | "anthropic";

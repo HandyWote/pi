@@ -19,13 +19,13 @@
  * modules; it never reaches into the coding-agent internals.
  */
 
-import type { RegistryApi } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { EntityListItem } from "@handy_wote/pi-tui";
 import { hasStoredApiKey, saveApiKey } from "../auth-json.ts";
 import type { CompileDiagnostic } from "../compiler.ts";
 import { enrichWithModelsDev, mergeProfileModels } from "../model-metadata.ts";
 import { getProfileApiLabel } from "../profile-api-resolution.ts";
+import type { RegistryApi } from "../profile-api-types.ts";
 import { discoverProfile, type ProfileDiscoveryCandidate, verifyProfileRoute } from "../profile-discovery.ts";
 import {
 	buildManualProtocolRoute,

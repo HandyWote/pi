@@ -1,12 +1,6 @@
 /** Profile declaration types: the user-facing gateway management language. */
-import type {
-	ModelCost,
-	RegistryApi,
-	RegistryApiOverlays,
-	RegistryDisplayGroup,
-	ThinkingLevelMap,
-} from "@earendil-works/pi-ai";
-
+import type { ModelCost, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { RegistryApi, RegistryApiOverlays, RegistryDisplayGroup } from "./profile-api-types.ts";
 export type ProfileProtocol = "openai" | "anthropic";
 
 export type ProfileApiPreference = "auto" | RegistryApi;

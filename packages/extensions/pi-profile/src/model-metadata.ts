@@ -1,5 +1,6 @@
-import type { ModelCost, RegistryDisplayGroup } from "@earendil-works/pi-ai";
+import type { ModelCost } from "@earendil-works/pi-ai";
 import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
+import type { RegistryDisplayGroup } from "./profile-api-types.ts";
 import type { DiscoveredProfileModel } from "./profile-discovery.ts";
 import {
 	DEFAULT_CONTEXT_WINDOW,

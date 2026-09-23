@@ -6,8 +6,8 @@
  * into the interactive flows.
  */
 
-import type { RegistryApi } from "@earendil-works/pi-ai";
 import { getProfileApiLabel, PROFILE_API_SERIALIZERS, resolveProfileModelApi } from "../profile-api-resolution.ts";
+import type { RegistryApi } from "../profile-api-types.ts";
 import type { Profile, ProfileApiPreference, UserModel } from "../profiles-types.ts";
 
 export interface ProfileGroupSummary {

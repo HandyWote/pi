@@ -1,4 +1,4 @@
-import type { RegistryApi } from "@earendil-works/pi-ai";
+import type { RegistryApi } from "./profile-api-types.ts";
 import type { Profile, ProfileApiPreference, UserModel } from "./profiles-types.ts";
 
 export const PROFILE_API_SERIALIZERS = [

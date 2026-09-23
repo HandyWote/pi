@@ -1,6 +1,6 @@
-import type { RegistryApi } from "@earendil-works/pi-ai";
 import { readApiKey } from "./auth-json.ts";
 import { getOpenRouterThinkingLevelMap, type OpenRouterReasoningMetadata } from "./openrouter-reasoning-options.ts";
+import type { RegistryApi } from "./profile-api-types.ts";
 import { buildProtocolRoutes, type ProfileAuthStyle, type ProfileProtocolRoute } from "./profile-endpoints.ts";
 import type { Profile } from "./profiles-types.ts";
 export interface DiscoveredProfileModel {

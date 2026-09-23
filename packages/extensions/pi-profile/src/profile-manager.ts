@@ -39,9 +39,7 @@ export function toCompilerProfileInput(profile: Profile): CompilerProfileInput {
 		baseUrl: profile.baseUrl,
 		headers: profile.headers,
 		// Preserve the stored auth.json association verbatim. auth.json
-		// credentials are keyed by provider ID, so a mismatch with the compiled
-		// provider ID is a real configuration error; the compiler reports it via
-		// checkAuthAssociation instead of silently rewriting the reference.
+		// credentials are keyed by provider ID, so a mismatch with the compiled provider ID is a real configuration error.
 		authProviderId: profile.authReference?.authProviderId,
 		models: profile.models.map((model) => ({
 			id: model.id,

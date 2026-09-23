@@ -18,7 +18,7 @@
  *   That standard suffix is compiled as the provider endpoint. Any other
  *   route URL must be the same gateway endpoint or it is skipped.
  * - Routing preferences and profile-only state stay out of models.json.
- * - No plaintext API keys: auth references are produced by ./auth.ts.
+ * - No plaintext API keys: credentials stay in the official auth.json store.
  * - Write side is atomic (temp file + rename) so a crash never leaves a
  *   truncated models.json.
  *
@@ -31,9 +31,6 @@
  * passes profile state in and receives the compiled document (and optionally
  * persists it via writeModelsJson).
  */
-
-import type { AuthReference } from "./auth.ts";
-import { checkAuthAssociation, modelsJsonApiKey } from "./auth.ts";
 
 /** API types this compiler can emit into models.json. */
 export const COMPILABLE_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
@@ -54,11 +51,6 @@ export interface CompilerProfileInput {
 	 * `apiKey` and the official runtime resolves the credential from auth.json.
 	 */
 	authProviderId?: string;
-	/**
-	 * Explicit key reference (`$VAR`, `!cmd`) when auth.json is not used.
-	 * Plaintext keys are rejected by the compiler.
-	 */
-	authReference?: AuthReference;
 	/** Models declared for this profile; only enabled+available ones compile. */
 	models: CompilerModelInput[];
 }
@@ -381,7 +373,13 @@ export function compileProfiles(
 			});
 			continue;
 		}
-		diagnostics.push(...checkAuthAssociation(profile));
+		if (profile.authProviderId !== undefined && profile.authProviderId !== profile.id) {
+			diagnostics.push({
+				severity: "error",
+				profileId: profile.id,
+				message: `authProviderId "${profile.authProviderId}" does not match compiled provider id "${profile.id}"; the auth.json credential will not resolve`,
+			});
+		}
 
 		const models: CompiledModelEntry[] = [];
 		const seenModelIds = new Set<string>();
@@ -500,7 +498,6 @@ export function compileProfiles(
 			name: profile.name?.trim() || profile.id,
 			baseUrl: compiledBaseUrl ?? profile.baseUrl,
 			...(profile.headers && Object.keys(profile.headers).length ? { headers: profile.headers } : {}),
-			apiKey: modelsJsonApiKey(profile),
 			models,
 		};
 	}

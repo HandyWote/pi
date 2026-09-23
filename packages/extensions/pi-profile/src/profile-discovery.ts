@@ -155,13 +155,6 @@ function authHeaders(apiKey: string, style: ProfileAuthStyle): Record<string, st
 	return { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
 }
 
-/**
- * Transitional credential resolution: the profile carries an auth reference
- * instead of a plaintext key. Until the official auth store is wired in,
- * discovery reads the key from the environment variable named by
- * `PI_PROFILE_AUTH_<PROFILE_ID>` or falls back to an empty string.
- * TODO(upstream-migration): replace with official auth.json lookup.
- */
 function resolveAuthApiKey(profile: Profile): string {
 	return readApiKey(profile.authReference.authProviderId) ?? "";
 }

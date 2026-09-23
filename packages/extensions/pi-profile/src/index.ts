@@ -6,8 +6,6 @@ import { ProfilesStore } from "./profiles-store.ts";
 
 export const PI_PROFILE_EXTENSION_NAME = "pi-profile";
 
-// TODO(upstream-migration): interactive editors, discovery refresh, canonical
-// ID confirmation, and auth-reference wiring land in later passes.
 export default function piProfile(pi: ExtensionAPI): void {
 	const store = new ProfilesStore();
 	registerProfileCommand(pi, store);

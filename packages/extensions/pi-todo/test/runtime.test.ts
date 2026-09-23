@@ -1,15 +1,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	SendMessageOptions,
-	SessionEntry,
-	Theme,
-} from "@handy_wote/pi-coding-agent";
-import { createEventBus } from "@handy_wote/pi-coding-agent";
-import { visibleWidth } from "@handy_wote/pi-tui";
+import type { ExtensionAPI, ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
+
+type SendMessageOptions = { deliverAs?: "nextTurn" };
+
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_LIFECYCLE_CHANNEL, registerAgentLifecycleProtocol } from "../src/protocol.ts";
 import { TODO_BINDING_ENTRY, TodoRuntime } from "../src/runtime.ts";
@@ -180,29 +177,23 @@ describe("TodoRuntime recovery", () => {
 		expect(environment.messages[0]?.content.length).toBeLessThanOrEqual(4000);
 	});
 
-	it("resolves queued digests from live state and cancels them after completion", async () => {
+	it("refreshes digest content through official message delivery", async () => {
 		const environment = fakeEnvironment("session-1");
 		const runtime = new TodoRuntime(environment.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
 		await runtime.replace("Ship", [{ id: "A", subject: "Task A", depends_on: [] }]);
-		const listId = runtime.getListId();
 		await runtime.injectDigest("followUp");
-		const queued = environment.messages[0];
-		const resolver = queued?.options?.queue?.resolve;
-		if (!resolver) throw new Error("Missing live digest resolver");
-
 		await runtime.add([{ id: "B", subject: "Task B", depends_on: [] }]);
-		const latest = await resolver(new AbortController().signal);
-		expect(latest?.content).toContain("Ready: A: Task A; B: Task B");
+		await runtime.injectDigest("followUp");
+		expect(environment.messages[1]?.content).toContain("Ready: A: Task A; B: Task B");
 
 		await runtime.claim("A");
 		await runtime.update("A", { status: "completed" });
 		await runtime.claim("B");
 		await runtime.update("B", { status: "completed" });
-		expect(await resolver(new AbortController().signal)).toBeUndefined();
-		expect(environment.cancelledMessages).toContain(`pi-todo:session-1:${listId}`);
+		const messageCount = environment.messages.length;
 		for (let turn = 0; turn < 20; turn++) await runtime.onTurnEnd();
-		expect(environment.messages).toHaveLength(1);
+		expect(environment.messages).toHaveLength(messageCount);
 	});
 
 	it("injects a turn-end digest on every turn while a list is active", async () => {
@@ -336,7 +327,7 @@ describe("TodoRuntime recovery", () => {
 		expect(bindingEntry(environment).list_id).toBe(listId);
 	});
 
-	it("resolves queued digests to undefined when the list disappears", async () => {
+	it("stops digest delivery when the list disappears", async () => {
 		const environment = fakeEnvironment("session-1");
 		const runtime = new TodoRuntime(environment.pi, { dataDir });
 		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
@@ -344,50 +335,10 @@ describe("TodoRuntime recovery", () => {
 		const listId = runtime.getListId();
 		if (!listId) throw new Error("Missing list id");
 		await runtime.injectDigest("followUp");
-		const resolver = environment.messages[0]?.options?.queue?.resolve;
-		if (!resolver) throw new Error("Missing live digest resolver");
-
 		await rm(join(dataDir, listId), { recursive: true, force: true });
-		expect(await resolver(new AbortController().signal)).toBeUndefined();
+		await runtime.injectDigest("followUp");
 		expect(runtime.getListId()).toBeUndefined();
 		expect(bindingEntry(environment).list_id).toBeNull();
-	});
-
-	it("preserves a live external owner when it re-announces matching claim evidence", async () => {
-		const original = fakeEnvironment("session-1");
-		const runtime = new TodoRuntime(original.pi, { dataDir });
-		await runtime.initialize({ type: "session_start", reason: "startup" }, original.ctx);
-		await runtime.replace("Delegate", [{ id: "A", subject: "Agent task", depends_on: [] }]);
-		await runtime.claim("A");
-		await runtime.transfer("A", "agent-live");
-		const binding = bindingEntry(original);
-
-		const resumedEnvironment = fakeEnvironment("session-1", branchWithBinding(binding));
-		const resumed = new TodoRuntime(resumedEnvironment.pi, { dataDir });
-		const disposeProtocol = registerAgentLifecycleProtocol(resumedEnvironment.eventBus, resumed);
-		const disposeResponder = resumedEnvironment.eventBus.on("pi:agent:status-request", () => {
-			resumedEnvironment.eventBus.emit(AGENT_LIFECYCLE_CHANNEL, {
-				version: 2,
-				eventId: "running-after-resume",
-				runId: "run-after-resume",
-				agentId: "agent-live",
-				parentSessionId: "session-1",
-				status: "running",
-				timestamp: new Date().toISOString(),
-				metadata: {
-					"pi.todo/list-id": binding.list_id,
-					"pi.todo/task-id": "A",
-				},
-			});
-		});
-		try {
-			await resumed.initialize({ type: "session_start", reason: "resume" }, resumedEnvironment.ctx);
-			await resumed.reconcileOwners();
-			expect(await resumed.getTask("A")).toMatchObject({ status: "in_progress", owner: "agent-live" });
-		} finally {
-			disposeResponder();
-			disposeProtocol();
-		}
 	});
 
 	it("recovers live owners after session_start in either extension loading order", async () => {

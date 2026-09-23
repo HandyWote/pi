@@ -4,7 +4,7 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 	getAgentDir,
-} from "@handy_wote/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { registerAgentsCommand } from "./command.ts";
 import { AgentManager, type AgentManagerOptions, readWorkerModels } from "./manager.ts";
 import { registerAgentPanel, registerNotificationCard } from "./render.ts";
@@ -146,7 +146,7 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 								? terminalEventDetails(batch[0]!.record)
 								: batch.map((entry) => terminalEventDetails(entry.record)),
 					},
-					{ triggerTurn: true, deliverAs: "event" },
+					{ triggerTurn: true, deliverAs: "nextTurn" },
 				);
 			} catch {
 				// Notifications are advisory; batching failures must not break agent completion.
@@ -215,6 +215,10 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 				parentSessionId: ctx.sessionManager.getSessionId(),
 				defaultCwd: ctx.cwd,
 				concurrency: Number.isFinite(concurrency) ? concurrency : 4,
+				// Spawn-time worker pool validation: a pool reference may only
+				// launch a child while it still resolves in the global registry.
+				availableModels: () =>
+					new Set(currentContext?.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`)),
 				onLifecycle: (event) => {
 					pi.events.emit(AGENT_PROTOCOL_CHANNEL, event);
 					updateStatus();
@@ -227,7 +231,8 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 				manager = next;
 				updateStatus();
 				const pool = await readWorkerModels(manager.rootDir);
-				if (pool.length > 0) ensureCoordinatorGuidance();
+				const available = managerOptions.availableModels?.() ?? new Set<string>();
+				if (pool.some((ref) => available.has(`${ref.provider}/${ref.id}`))) ensureCoordinatorGuidance();
 			} catch (error: unknown) {
 				manager = undefined;
 				ctx.ui.notify(`Cannot restore subagents: ${error instanceof Error ? error.message : error}`, "error");

@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionStartEvent } from "@handy_wote/pi-coding-agent";
-import { getAgentDir } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FileTodoStore, TODO_LIST_NOT_FOUND, TodoPersistenceError } from "./store.ts";
 import type { TodoBindingEntry, TodoDefinition, TodoListDocument, TodoListView } from "./types.ts";
 import { updateTodoWidget } from "./widget.ts";
@@ -293,19 +293,7 @@ export class TodoRuntime {
 		}
 		this.pi.sendMessage(
 			{ customType: TODO_DIGEST_MESSAGE, content, display: false },
-			{
-				triggerTurn: false,
-				deliverAs,
-				queue: {
-					key: this.digestQueueKey(listId),
-					resolve: async (signal) => {
-						if (signal.aborted || this.binding?.list_id !== listId) return undefined;
-						const latest = await this.digest();
-						if (!latest || signal.aborted || this.binding?.list_id !== listId) return undefined;
-						return { customType: TODO_DIGEST_MESSAGE, content: latest, display: false };
-					},
-				},
-			},
+			{ triggerTurn: false, deliverAs },
 		);
 	}
 
@@ -320,8 +308,8 @@ export class TodoRuntime {
 		await this.injectDigest("nextTurn");
 	}
 
-	cancelDigest(listId = this.binding?.list_id): void {
-		if (listId) this.pi.cancelMessage(this.digestQueueKey(listId));
+	cancelDigest(_listId = this.binding?.list_id): void {
+		// Official Pi has no retractable message queue; future digests stop when inactive.
 	}
 
 	async refresh(): Promise<void> {
@@ -404,10 +392,6 @@ export class TodoRuntime {
 	private requireListId(): string {
 		if (!this.binding?.list_id) throw new Error("No todo list is active");
 		return this.binding.list_id;
-	}
-
-	private digestQueueKey(listId: string): string {
-		return `pi-todo:${this.context?.sessionManager.getSessionId() ?? "unknown"}:${listId}`;
 	}
 
 	private async waitForOwnerEvidence(): Promise<void> {

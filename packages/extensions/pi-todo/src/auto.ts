@@ -5,7 +5,7 @@ import type {
 	ExtensionContext,
 	SessionEntry,
 	SessionMessageEntry,
-} from "@handy_wote/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { buildTodoPlanMessageContent } from "./plan-message.ts";
 import type { TodoRuntime } from "./runtime.ts";
 

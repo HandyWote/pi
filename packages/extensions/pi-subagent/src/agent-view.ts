@@ -1,8 +1,6 @@
-import { type ExtensionCommandContext, getMarkdownTheme, type Theme } from "@handy_wote/pi-coding-agent";
+import { type ExtensionCommandContext, getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
-	EntityList,
-	type EntityListTheme,
 	type Focusable,
 	type Keybindings,
 	type KeybindingsManager,
@@ -10,7 +8,8 @@ import {
 	type MarkdownTheme,
 	type TUI,
 	truncateToWidth,
-} from "@handy_wote/pi-tui";
+} from "@earendil-works/pi-tui";
+import { EntityList, type EntityListTheme } from "./entity-list.ts";
 import type { AgentManager } from "./manager.ts";
 import { formatAgentRow, formatDuration } from "./render.ts";
 import { TranscriptCache, type TranscriptItem } from "./transcript-view.ts";
@@ -245,12 +244,12 @@ export class AgentViewComponent implements Component, Focusable {
 			return;
 		}
 		const kb = this.keybindings;
-		if (kb.matches(data, "tui.entity.delete")) {
+		if (kb.matches(data, "tui.entity.delete" as keyof Keybindings)) {
 			const record = this.selectedRecord();
 			if (record && isActiveStatus(record.status)) void this.stopRecord(record);
 			return;
 		}
-		if (kb.matches(data, "app.agent.resume")) {
+		if (kb.matches(data, "app.agent.resume" as keyof Keybindings)) {
 			const record = this.selectedRecord();
 			if (record && isTerminalStatus(record.status)) this.resumeRecord(record);
 			return;
@@ -260,27 +259,30 @@ export class AgentViewComponent implements Component, Focusable {
 
 	private handleDetailInput(data: string): void {
 		const kb = this.keybindings;
-		if (kb.matches(data, "tui.entity.cancel") || kb.matches(data, "tui.entity.activate")) {
+		if (
+			kb.matches(data, "tui.entity.cancel" as keyof Keybindings) ||
+			kb.matches(data, "tui.entity.activate" as keyof Keybindings)
+		) {
 			this.closeDetail();
 			return;
 		}
-		if (kb.matches(data, "tui.entity.delete")) {
+		if (kb.matches(data, "tui.entity.delete" as keyof Keybindings)) {
 			const record = this.detailRecord();
 			if (record && isActiveStatus(record.status)) void this.stopRecord(record);
 			return;
 		}
-		if (kb.matches(data, "app.agent.resume")) {
+		if (kb.matches(data, "app.agent.resume" as keyof Keybindings)) {
 			const record = this.detailRecord();
 			if (record && isTerminalStatus(record.status)) this.resumeRecord(record);
 			return;
 		}
 		// Scroll: up/down (and j/k) by line, pageUp/pageDown by page, G/g jump to
 		// end/start. Scrolling up pauses tail-follow; G re-enables it.
-		if (kb.matches(data, "tui.entity.up") || data === "j") {
+		if (kb.matches(data, "tui.entity.up" as keyof Keybindings) || data === "j") {
 			this.scrollBy(-1);
 			return;
 		}
-		if (kb.matches(data, "tui.entity.down") || data === "k") {
+		if (kb.matches(data, "tui.entity.down" as keyof Keybindings) || data === "k") {
 			this.scrollBy(1);
 			return;
 		}
@@ -495,26 +497,29 @@ export class AgentViewComponent implements Component, Focusable {
 	private listFooter(): string {
 		const record = this.selectedRecord();
 		const hints = [
-			`${keyHint(this.keybindings, "tui.entity.up", "")}/${keyHint(this.keybindings, "tui.entity.down", "")} navigate`,
-			keyHint(this.keybindings, "tui.entity.search", "search"),
-			keyHint(this.keybindings, "tui.entity.activate", "detail"),
+			`${keyHint(this.keybindings, "tui.entity.up" as keyof Keybindings, "")}/${keyHint(this.keybindings, "tui.entity.down" as keyof Keybindings, "")} navigate`,
+			keyHint(this.keybindings, "tui.entity.search" as keyof Keybindings, "search"),
+			keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "detail"),
 		];
-		if (record && isActiveStatus(record.status)) hints.push(keyHint(this.keybindings, "tui.entity.delete", "stop"));
+		if (record && isActiveStatus(record.status))
+			hints.push(keyHint(this.keybindings, "tui.entity.delete" as keyof Keybindings, "stop"));
 		if (record && isTerminalStatus(record.status))
-			hints.push(keyHint(this.keybindings, "app.agent.resume", "resume"));
-		hints.push(keyHint(this.keybindings, "tui.entity.cancel", "close"));
+			hints.push(keyHint(this.keybindings, "app.agent.resume" as keyof Keybindings, "resume"));
+		hints.push(keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "close"));
 		return hints.join(" · ");
 	}
 
 	private detailFooter(record: AgentRecord): string {
 		const hints = [
-			`${keyHint(this.keybindings, "tui.entity.up", "")}/${keyHint(this.keybindings, "tui.entity.down", "")} scroll`,
+			`${keyHint(this.keybindings, "tui.entity.up" as keyof Keybindings, "")}/${keyHint(this.keybindings, "tui.entity.down" as keyof Keybindings, "")} scroll`,
 			`${keyHint(this.keybindings, "tui.select.pageUp", "")}/${keyHint(this.keybindings, "tui.select.pageDown", "")} page`,
 			"G follow",
 		];
-		if (isActiveStatus(record.status)) hints.push(keyHint(this.keybindings, "tui.entity.delete", "stop"));
-		if (isTerminalStatus(record.status)) hints.push(keyHint(this.keybindings, "app.agent.resume", "resume"));
-		hints.push(keyHint(this.keybindings, "tui.entity.cancel", "back"));
+		if (isActiveStatus(record.status))
+			hints.push(keyHint(this.keybindings, "tui.entity.delete" as keyof Keybindings, "stop"));
+		if (isTerminalStatus(record.status))
+			hints.push(keyHint(this.keybindings, "app.agent.resume" as keyof Keybindings, "resume"));
+		hints.push(keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "back"));
 		return hints.join(" · ");
 	}
 }

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { EventBus } from "@handy_wote/pi-coding-agent";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness, getMessageText, type Harness } from "../../../coding-agent/test/suite/harness.ts";
 import piTodo from "../../pi-todo/src/index.ts";
@@ -106,6 +106,7 @@ async function createCombinedHarness(taskIds: readonly string[]) {
 			},
 			{
 				name: "pi-subagent",
+				// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 				factory: createPiSubagent({
 					createManager: (options) => {
 						const manager = new AgentManager({
@@ -374,6 +375,7 @@ describe("pi-todo and pi-subagent integration", () => {
 			extensionFactories: [
 				{
 					name: "pi-subagent",
+					// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 					factory: createPiSubagent({
 						createManager: (options) => {
 							manager = new AgentManager({

@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ToolResultMessage } from "@handy_wote/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@handy_wote/pi-ai";
 import type { FauxProviderRegistration } from "@handy_wote/pi-ai/compat";
 import { registerFauxProvider } from "@handy_wote/pi-ai/compat";
-import type { Component, TUI } from "@handy_wote/pi-tui";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHarness, getMessageText } from "../../../coding-agent/test/suite/harness.ts";
 import piTodo from "../src/index.ts";

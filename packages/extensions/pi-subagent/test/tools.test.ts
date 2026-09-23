@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ToolDefinition } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { registerAgentTools } from "../src/tools.ts";
 

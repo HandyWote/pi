@@ -47,6 +47,7 @@ describe("pi-subagent extension", () => {
 				return manager;
 			},
 		});
+		// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 		const harness = await createHarness({ extensionFactories: [{ name: "pi-subagent", factory: extension }] });
 		harnesses.push(harness);
 		stateRoot = path.join(harness.tempDir, "subagent-state");
@@ -200,6 +201,7 @@ describe("pi-subagent extension", () => {
 			extensionFactories: [
 				{
 					name: "pi-subagent",
+					// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 					factory: createPiSubagent({
 						notificationDebounceMs: 200,
 						createManager: (options) => {
@@ -262,6 +264,7 @@ describe("pi-subagent extension", () => {
 			extensionFactories: [
 				{
 					name: "pi-subagent",
+					// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 					factory: createPiSubagent({
 						createManager: (options) => {
 							manager = new AgentManager({
@@ -342,6 +345,7 @@ describe("pi-subagent extension", () => {
 			extensionFactories: [
 				{
 					name: "pi-subagent",
+					// @ts-expect-error The test harness uses local coding-agent types while the extension targets the official package.
 					factory: createPiSubagent({
 						createManager: (options) => {
 							manager = new AgentManager({

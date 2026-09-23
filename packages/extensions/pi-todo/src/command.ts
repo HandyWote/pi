@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import type { ExtensionAPI } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildTodoPlanMessageContent } from "./plan-message.ts";
 import type { TodoRuntime } from "./runtime.ts";
 

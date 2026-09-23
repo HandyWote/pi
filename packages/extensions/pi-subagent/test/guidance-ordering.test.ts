@@ -1,6 +1,6 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentTool } from "@handy_wote/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@handy_wote/pi-ai";
-import type { ExtensionAPI } from "@handy_wote/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { convertToLlm } from "../../../coding-agent/src/core/messages.ts";
@@ -41,7 +41,7 @@ describe("swarm coordinator guidance injection ordering", () => {
 			tools: [slowTool],
 			extensionFactories: [
 				(p) => {
-					pi = p;
+					pi = p as unknown as ExtensionAPI;
 				},
 			],
 		});

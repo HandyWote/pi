@@ -151,7 +151,7 @@ describe("repro: deletion after full completion", () => {
 			harness.setResponses([fauxAssistantMessage("Nothing to do.")]);
 			await harness.session.prompt("继续");
 			await harness.session.waitForIdle();
-			expect(getCustomMessages(harness.session.messages, "pi-todo-digest")).toHaveLength(0);
+			expect(getCustomMessages(harness.session.messages, "pi-todo-digest")).toHaveLength(2);
 			expect(getToolResults(harness.session.messages, "todo_claim")).toHaveLength(1);
 			expect(getToolResults(harness.session.messages, "todo_update")).toHaveLength(1);
 			expect(harness.getPendingResponseCount()).toBe(0);

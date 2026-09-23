@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "./types.ts";
 
 type ProjectApprovalContext = Pick<ExtensionContext, "isProjectTrusted">;

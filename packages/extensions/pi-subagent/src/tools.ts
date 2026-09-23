@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@handy_wote/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { discoverAgents, loadAgentPrompt } from "./agents.ts";
 import { approveProjectAgents } from "./approval.ts";

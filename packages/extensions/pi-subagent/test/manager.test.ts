@@ -512,6 +512,46 @@ describe("AgentManager", () => {
 		expect(fs.existsSync(getWorkerModelsPath(stateRoot))).toBe(true);
 	});
 
+	it("skips stale worker pool entries and uses the first available one", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		await writeWorkerModels(stateRoot, [
+			{ provider: "gone-provider", id: "gone-model" },
+			{ provider: "live-provider", id: "live-model" },
+		]);
+		const manager = createManager(root, {
+			availableModels: () => new Set(["live-provider/live-model"]),
+		});
+		await manager.initialize();
+
+		const poolDefinition = { ...definition, model: undefined };
+		const started = await manager.start(poolDefinition, { task: "inspect", mode: "foreground" });
+		await started.completion;
+
+		expect(started.record.model).toBe("live-provider/live-model");
+		await manager.destroy();
+	});
+
+	it("falls back to the main-session model when every pool entry is stale", async () => {
+		const root = temporaryDirectory();
+		const stateRoot = path.join(root, "state");
+		await writeWorkerModels(stateRoot, [{ provider: "gone-provider", id: "gone-model" }]);
+		const manager = createManager(root, {
+			availableModels: () => new Set(["live-provider/live-model"]),
+		});
+		await manager.initialize();
+
+		const poolDefinition = { ...definition, model: undefined };
+		const started = await manager.start(poolDefinition, { task: "inspect", mode: "foreground" });
+		await started.completion;
+
+		// No --model argument: the child inherits the main-session model.
+		expect(started.record.model).toBeUndefined();
+		// The stale snapshot is left untouched; /swarm owns pool rewrites.
+		expect(fs.existsSync(getWorkerModelsPath(stateRoot))).toBe(true);
+		await manager.destroy();
+	});
+
 	it("removes the worktree branch on destroy", async () => {
 		const root = temporaryDirectory();
 		const repositoryPath = path.join(root, "repository");

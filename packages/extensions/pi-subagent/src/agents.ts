@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@handy_wote/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { getBuiltInAgents } from "./built-in-agents.ts";
 import type {
 	AgentDefinition,

@@ -1,6 +1,6 @@
-import type { ExtensionContext, ExtensionWidgetOptions, Theme } from "@handy_wote/pi-coding-agent";
-import type { Component } from "@handy_wote/pi-tui";
-import { truncateToWidth } from "@handy_wote/pi-tui";
+import type { ExtensionContext, ExtensionWidgetOptions, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TodoListView, TodoTask } from "./types.ts";
 
 const BAR_WIDTH = 10;

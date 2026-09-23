@@ -4,8 +4,8 @@ import type {
 	MessageRenderer,
 	Theme,
 	ToolRenderResultOptions,
-} from "@handy_wote/pi-coding-agent";
-import { Box, type Component, Spacer, Text, truncateToWidth } from "@handy_wote/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Box, type Component, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentManager } from "./manager.ts";
 import type { AgentRecord, AgentSource, AgentStatus, AgentTerminalStatus } from "./types.ts";
 

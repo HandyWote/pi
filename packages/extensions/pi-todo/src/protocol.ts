@@ -1,4 +1,4 @@
-import type { EventBus } from "@handy_wote/pi-coding-agent";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
 import type { TodoRuntime } from "./runtime.ts";
 import { TodoValidationError } from "./scheduler.ts";
 import type { AgentLifecycleEvent, TodoAgentMetadata } from "./types.ts";

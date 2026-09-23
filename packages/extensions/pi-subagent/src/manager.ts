@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import type { Message } from "@handy_wote/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { AgentRegistry, type ParentProcessIdentity } from "./registry.ts";
 import { SUPERVISOR_FD_ENV, SUPERVISOR_STDIO_SLOT } from "./supervisor-watchdog.ts";
 import {
@@ -114,6 +114,8 @@ export interface AgentManagerOptions {
 	killGraceMs?: number;
 	processIdentityProbe?: (pid: number) => Promise<string | undefined>;
 	sessionProcessProbe?: (sessionId: string) => Promise<number[]>;
+	/** Returns the currently available `provider/id` model references (global registry). */
+	availableModels?: () => ReadonlySet<string>;
 	onLifecycle?: (event: AgentLifecycleEvent) => void;
 	onTerminal?: (record: AgentRecord, event: AgentLifecycleEvent) => void;
 }
@@ -842,17 +844,26 @@ export class AgentManager {
 	/**
 	 * Resolve the model for a worker at spawn time (single source):
 	 * 1. explicit `model` in the agent definition (user-declared intent, used as-is),
-	 * 2. the /swarm pool, first resolvable entry in priority order,
+	 * 2. the /swarm pool, first entry still resolvable in the current model registry, in priority order,
 	 * 3. undefined — no `--model`, the child inherits the main-session model.
-	 * Pool entries carry concrete `{provider, id}` references snapshotted by
-	 * /swarm, so they are passed to the child directly; structurally invalid
-	 * entries are skipped by readWorkerModels.
+	 * Pool references snapshoted by /swarm are re-validated at spawn time
+	 * against the live registry (availableModels): deleted, disabled, or
+	 * otherwise unavailable entries never start a child. When every pool
+	 * entry is stale the child still runs, falling back to the main-session
+	 * model; the stale snapshot itself is left untouched (/swarm rewrites it).
 	 */
 	private async resolveWorkerModel(definition: AgentDefinition): Promise<string | undefined> {
 		if (definition.model) return definition.model;
 		const pool = await readWorkerModels(this.options.rootDir);
-		const first = pool[0];
-		if (!first) return undefined;
+		const available = this.options.availableModels?.();
+		const first = available ? pool.find((ref) => available.has(`${ref.provider}/${ref.id}`)) : pool[0];
+		if (!first) {
+			if (pool.length > 0)
+				console.error(
+					`[pi-subagent] worker pool unusable (${pool.map((ref) => `${ref.provider}/${ref.id}`).join(", ")} no longer available); falling back to the main-session model`,
+				);
+			return undefined;
+		}
 		return `${first.provider}/${first.id}`;
 	}
 

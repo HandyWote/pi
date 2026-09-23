@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { openAgentView } from "./agent-view.ts";
 import { discoverAgents } from "./agents.ts";
 import { approveProjectAgents } from "./approval.ts";

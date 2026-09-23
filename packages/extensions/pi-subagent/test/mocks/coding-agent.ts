@@ -28,4 +28,4 @@ export function getMarkdownTheme(): MarkdownTheme {
 	};
 }
 
-export type MarkdownTheme = import("@handy_wote/pi-tui").MarkdownTheme;
+export type MarkdownTheme = import("@earendil-works/pi-tui").MarkdownTheme;

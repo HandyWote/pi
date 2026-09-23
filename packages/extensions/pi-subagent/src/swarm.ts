@@ -1,15 +1,13 @@
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
-	EntityList,
-	type EntityListItem,
-	type EntityListTheme,
 	type Focusable,
 	type Keybindings,
 	type KeybindingsManager,
 	Spacer,
 	Text,
-} from "@handy_wote/pi-tui";
+} from "@earendil-works/pi-tui";
+import { EntityList, type EntityListItem, type EntityListTheme } from "./entity-list.ts";
 import { type AgentManager, readWorkerModels, type WorkerModelRef, writeWorkerModels } from "./manager.ts";
 
 const MAX_POOL_DISPLAY = 10;
@@ -144,7 +142,7 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			new Text(
 				options.theme.fg(
 					"muted",
-					`Pool snapshot; ${reorderHint} reorders, ${keyHint(this.keybindings, "tui.entity.activate", "[ Save pool ]")} saves, ${keyHint(this.keybindings, "tui.entity.cancel", "cancels")}. Order is priority.`,
+					`Pool snapshot; ${reorderHint} reorders, ${keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "[ Save pool ]")} saves, ${keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "cancels")}. Order is priority.`,
 				),
 				1,
 				0,
@@ -198,12 +196,12 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 
 	private getFooterText(): string {
 		const hints = [
-			keyHint(this.keybindings, "tui.entity.toggle", "toggle"),
-			keyHint(this.keybindings, "tui.entity.search", "search"),
+			keyHint(this.keybindings, "tui.entity.toggle" as keyof Keybindings, "toggle"),
+			keyHint(this.keybindings, "tui.entity.search" as keyof Keybindings, "search"),
 			keyHint(this.keybindings, "app.models.enableAll", "all"),
 			keyHint(this.keybindings, "app.models.clearAll", "clear"),
 			`${keyHint(this.keybindings, "app.models.reorderUp", "")}/${keyHint(this.keybindings, "app.models.reorderDown", "")} reorder`,
-			keyHint(this.keybindings, "tui.entity.activate", "save"),
+			keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "save"),
 			`${this.selected.length}/${this.candidates.length} selected`,
 		];
 		return hints.join(" · ");
@@ -352,13 +350,13 @@ async function selectWorkerPool(
 }
 
 /**
- * Candidate models for the pool: the session's scoped models when a scope
- * exists, otherwise all available Runtime models. A scope is a convenience
- * source, not a prerequisite.
+ * Candidate models for the pool: all currently available models from the
+ * global registry, regardless of any session model scope. Per the migration
+ * decision, the pool may draw from every usable model, not only the session's
+ * scoped subset.
  */
 function workerModelCandidates(ctx: ExtensionCommandContext): WorkerModelRef[] {
-	const models =
-		ctx.scopedModels.length > 0 ? ctx.scopedModels.map((entry) => entry.model) : ctx.modelRegistry.getAvailable();
+	const models = ctx.modelRegistry.getAvailable();
 	const refs: WorkerModelRef[] = [];
 	const seen = new Set<string>();
 	for (const model of models) {
@@ -391,6 +389,38 @@ export function registerSwarmCommand(
 	getManager: () => AgentManager | undefined,
 	onFirstPoolSave?: () => void,
 ): void {
+	/** Models currently resolvable in the global registry, by `provider/id`. */
+	function availableReferences(ctx: ExtensionCommandContext): Set<string> {
+		return new Set(ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`));
+	}
+
+	/**
+	 * Drop pool entries that no longer resolve in the global registry (deleted,
+	 * disabled, or unauthenticated at spawn/open time). Returns the filtered
+	 * pool plus whether anything was dropped, so callers can surface one clear
+	 * notice instead of failing spawns with stale references.
+	 */
+	async function prunePool(
+		ctx: ExtensionCommandContext,
+		rootDir: string,
+	): Promise<{ pool: WorkerModelRef[]; dropped: WorkerModelRef[] }> {
+		const existing = await readWorkerModels(rootDir);
+		if (existing.length === 0) return { pool: existing, dropped: [] };
+		const available = availableReferences(ctx);
+		const pool = existing.filter((ref) => available.has(referenceOf(ref)));
+		const dropped = existing.filter((ref) => !available.has(referenceOf(ref)));
+		if (dropped.length > 0) {
+			await writeWorkerModels(rootDir, pool);
+			ctx.ui.notify(
+				`Dropped stale worker pool entr${dropped.length === 1 ? "y" : "ies"}: ${dropped
+					.map(referenceOf)
+					.join(", ")}`,
+				"warning",
+			);
+		}
+		return { pool, dropped };
+	}
+
 	pi.registerCommand("swarm", {
 		description: "Configure the worker model pool and coordinator behavior",
 		handler: async (_args, ctx) => {
@@ -399,7 +429,7 @@ export function registerSwarmCommand(
 				ctx.ui.notify("Subagent registry is unavailable", "error");
 				return;
 			}
-			const existing = await readWorkerModels(manager.rootDir);
+			const existing = (await prunePool(ctx, manager.rootDir)).pool;
 			if (existing.length > 0) {
 				ctx.ui.notify(formatPoolSummary(existing), "info");
 				if (!ctx.hasUI) return;

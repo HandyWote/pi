@@ -1,0 +1,50 @@
+{
+	"name": "@earendil-works/pi-profile",
+	"version": "0.0.1",
+	"description": "Profile management extension for pi: gateway profiles, discovery, API routing, and model pools",
+	"type": "module",
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"profile",
+		"gateway",
+		"model"
+	],
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		}
+	},
+	"scripts": {
+		"check": "tsgo --noEmit -p tsconfig.json",
+		"test": "vitest --run"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "0.86.1",
+		"@types/node": "24.12.4"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@handy_wote/pi-tui": "*"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"author": "HandyWote",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/HandyWote/pi.git",
+		"directory": "packages/extensions/pi-profile"
+	}
+}

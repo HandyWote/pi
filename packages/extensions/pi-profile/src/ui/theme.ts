@@ -8,7 +8,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { EntityListTheme } from "@handy_wote/pi-tui";
+import type { EntityListTheme } from "./entity-list.ts";
 
 /** Map the app `Theme` onto the pi-tui `EntityListTheme` contract. */
 export function createEntityListTheme(theme: Theme): EntityListTheme {

@@ -13,7 +13,8 @@
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, keyText } from "@earendil-works/pi-coding-agent";
-import { Container, EntityList, type EntityListItem, type EntityListOptions, Spacer, Text } from "@handy_wote/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { EntityList, type EntityListItem, type EntityListOptions } from "./entity-list.ts";
 import { createEntityListTheme } from "./theme.ts";
 
 export type EntityListDialogAction = "activate" | "toggle" | "delete";

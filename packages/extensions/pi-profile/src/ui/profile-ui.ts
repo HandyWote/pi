@@ -20,7 +20,6 @@
  */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { EntityListItem } from "@handy_wote/pi-tui";
 import { hasStoredApiKey, saveApiKey } from "../auth-json.ts";
 import type { CompileDiagnostic } from "../compiler.ts";
 import { enrichWithModelsDev, mergeProfileModels } from "../model-metadata.ts";
@@ -41,6 +40,7 @@ import {
 	type ProfileApiPreference,
 	type UserModel,
 } from "../profiles-types.ts";
+import type { EntityListItem } from "./entity-list.ts";
 import { showEntityListDialog } from "./entity-list-dialog.ts";
 import {
 	buildApiPreferenceChoices,

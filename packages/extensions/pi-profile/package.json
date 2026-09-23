@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-profile",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Profile management extension for pi: gateway profiles, discovery, API routing, and model pools",
 	"type": "module",
 	"keywords": [
@@ -46,8 +46,7 @@
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",
 		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"@handy_wote/pi-tui": "*"
+		"@earendil-works/pi-tui": "*"
 	},
 	"engines": {
 		"node": ">=22.19.0"

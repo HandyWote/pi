@@ -5,9 +5,9 @@
  * without changing anything.
  */
 
-import type { ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
-import type { EntityListItem, EntityListTheme } from "@handy_wote/pi-tui";
-import { EntityList } from "@handy_wote/pi-tui";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { EntityListItem, EntityListTheme } from "./entity-list.ts";
+import { EntityList } from "./entity-list.ts";
 import { ruleValueToString } from "./rules/index.ts";
 import type { PermissionRuleStore } from "./rules/store.ts";
 import type { PermissionMode, SessionState } from "./state.ts";

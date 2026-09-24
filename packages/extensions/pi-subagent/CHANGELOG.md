@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-24
+
+### Fixed
+
+- Fixed worker pool controls and model labels for official Pi.
+
 ## [0.4.5] - 2026-09-23
 
 ## [0.4.4] - 2026-09-18

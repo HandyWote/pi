@@ -11,7 +11,7 @@
  * the model as the tool error) carries fix guidance.
  */
 
-import type { ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import type { Asker } from "./asker.ts";
 import { HeadlessAsker } from "./askers/headless.ts";
 import { TuiAsker } from "./askers/tui.ts";

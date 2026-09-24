@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-permissions",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Security gate for pi: permission modes, rules, bash analysis, and an AI classifier (Claude Code-style)",
 	"type": "module",
 	"keywords": [
@@ -43,13 +43,13 @@
 		"web-tree-sitter": "0.26.11"
 	},
 	"devDependencies": {
-		"@handy_wote/pi-ai": "^0.84.1",
+		"@earendil-works/pi-ai": "0.86.1",
 		"vitest": "4.1.9"
 	},
 	"peerDependencies": {
-		"@handy_wote/pi-agent-core": "*",
-		"@handy_wote/pi-coding-agent": "*",
-		"@handy_wote/pi-tui": "*"
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
 	},
 	"engines": {
 		"node": ">=22.19.0"

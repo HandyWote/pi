@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createPiPermissions } from "../src/index.ts";
 

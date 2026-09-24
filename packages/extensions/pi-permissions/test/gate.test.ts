@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { ExtensionContext, ToolCallEvent } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { BashParseResult } from "../src/bash-analysis/index.ts";
 import { parseBashCommand } from "../src/bash-analysis/index.ts";

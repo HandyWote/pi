@@ -1,11 +1,5 @@
-import type { Keybindings } from "@earendil-works/pi-tui";
-import { fuzzyFilter } from "@earendil-works/pi-tui";
-
-type KeybindingName = keyof Keybindings;
-const entityKey = (key: string) => key as KeybindingName;
-
 import type { Component, Focusable } from "@earendil-works/pi-tui";
-import { getKeybindings, Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { fuzzyFilter, getKeybindings, Input, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export interface EntityListItem {
 	id: string;
@@ -197,7 +191,7 @@ export class EntityList implements Component, Focusable {
 			lines.push(theme.scrollInfo(`  (${this.selectedIndex + 1}/${this.filteredItems.length})`));
 		}
 		if (this.confirmingDeleteId) {
-			const deleteKeys = getKeybindings().getKeys(entityKey("tui.entity.delete")).join("/");
+			const deleteKeys = ["x"].join("/");
 			lines.push(theme.deletePending(`  Press ${deleteKeys} again to confirm delete; any other key cancels`));
 		}
 		return lines;
@@ -207,7 +201,7 @@ export class EntityList implements Component, Focusable {
 		const kb = getKeybindings();
 
 		if (this.searching) {
-			if (kb.matches(data, entityKey("tui.entity.searchExit"))) {
+			if (matchesKey(data, "escape")) {
 				this.searching = false;
 				this.searchInput.focused = false;
 				this.searchInput.setValue("");
@@ -251,11 +245,11 @@ export class EntityList implements Component, Focusable {
 			return true;
 		}
 
-		if (this.confirmingDeleteId && !kb.matches(data, entityKey("tui.entity.delete"))) {
+		if (this.confirmingDeleteId && !matchesKey(data, "x")) {
 			this.setConfirmingDelete(undefined);
 		}
 
-		if (this.options.searchable && kb.matches(data, entityKey("tui.entity.search"))) {
+		if (this.options.searchable && matchesKey(data, "/")) {
 			this.searching = true;
 			this.searchInput.focused = this._focused;
 			return true;
@@ -281,14 +275,14 @@ export class EntityList implements Component, Focusable {
 			if (selected) this.onActivate?.(selected);
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.toggle"))) {
+		if (matchesKey(data, "space")) {
 			const selected = this.getSelectedItem();
 			if (selected && (selected.toggleable === true || selected.toggled !== undefined)) {
 				this.onToggle?.(selected);
 			}
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.delete"))) {
+		if (matchesKey(data, "x")) {
 			this.requestDeleteSelected();
 			return true;
 		}

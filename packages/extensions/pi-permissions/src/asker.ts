@@ -10,7 +10,7 @@
  * over an RPC channel) without touching the decision engine.
  */
 
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** What the user can choose when asked for approval. */
 export type AskChoice = "allowOnce" | "allowSession" | "alwaysAllow" | "alwaysDeny" | "deny" | "cancel";

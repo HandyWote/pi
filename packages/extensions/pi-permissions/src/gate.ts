@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PermissionAsk } from "./asker.ts";
 import { type BashParseResult, checkSemantics } from "./bash-analysis/index.ts";
 import { checkRedline, type RedlineCheckInput } from "./redline.ts";

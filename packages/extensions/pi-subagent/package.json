@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-subagent",
-	"version": "0.4.5",
+	"version": "0.4.6",
 	"description": "Persistent foreground and background subagents for pi",
 	"type": "module",
 	"keywords": [

@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionCommandContext, Theme } from "@handy_wote/pi-coding-agent";
-import type { EntityListItem } from "@handy_wote/pi-tui";
-import { EntityList } from "@handy_wote/pi-tui";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EntityListItem } from "../src/entity-list.ts";
+import { EntityList } from "../src/entity-list.ts";
 import { buildModePickerItems, MODE_DESCRIPTIONS, permissionsSummary, showModePicker } from "../src/mode-picker.ts";
 import { PermissionRuleStore } from "../src/rules/index.ts";
 import type { DenialTracking, PermissionMode, SessionState } from "../src/state.ts";

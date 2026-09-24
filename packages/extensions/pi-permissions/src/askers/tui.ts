@@ -5,7 +5,7 @@
  * Claude Code's permission prompt (allow once / session / always / deny).
  */
 
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Asker, AskOutcome, PermissionAsk } from "../asker.ts";
 
 const OPTIONS = ["Allow once", "Allow this session", "Always allow", "Always deny", "Deny", "Cancel"] as const;

@@ -142,7 +142,7 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 			new Text(
 				options.theme.fg(
 					"muted",
-					`Pool snapshot; ${reorderHint} reorders, ${keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "[ Save pool ]")} saves, ${keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "cancels")}. Order is priority.`,
+					`Pool snapshot; ${reorderHint} reorders, ${"Enter [ Save pool ]"} saves, ${"Escape cancels"}. Order is priority.`,
 				),
 				1,
 				0,
@@ -185,8 +185,8 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 		return [
 			...sorted.map((ref) => ({
 				id: referenceOf(ref),
-				label: referenceOf(ref),
-				description: ref.label,
+				label: ref.label ?? ref.id,
+				description: referenceOf(ref),
 				toggled: selectedIds.has(referenceOf(ref)),
 				toggleable: true,
 			})),
@@ -196,12 +196,12 @@ class WorkerPoolSelectorComponent extends Container implements Focusable {
 
 	private getFooterText(): string {
 		const hints = [
-			keyHint(this.keybindings, "tui.entity.toggle" as keyof Keybindings, "toggle"),
-			keyHint(this.keybindings, "tui.entity.search" as keyof Keybindings, "search"),
+			"Space toggle",
+			"/ search",
 			keyHint(this.keybindings, "app.models.enableAll", "all"),
 			keyHint(this.keybindings, "app.models.clearAll", "clear"),
 			`${keyHint(this.keybindings, "app.models.reorderUp", "")}/${keyHint(this.keybindings, "app.models.reorderDown", "")} reorder`,
-			keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "save"),
+			"Enter save",
 			`${this.selected.length}/${this.candidates.length} selected`,
 		];
 		return hints.join(" · ");

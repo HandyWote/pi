@@ -7,7 +7,7 @@
  * fail-closed rejection.
  */
 
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Asker, AskOutcome, PermissionAsk } from "../asker.ts";
 
 export class HeadlessAsker implements Asker {

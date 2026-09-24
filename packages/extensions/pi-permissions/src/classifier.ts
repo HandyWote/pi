@@ -10,7 +10,7 @@
  * undefined (no decision) so the gate falls back to asking the user.
  */
 
-import type { ExtensionContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ToolCallInfo } from "./tool-input.ts";
 
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -80,7 +80,7 @@ export function createClassifier(
 		};
 
 		try {
-			const response = await withTimeout(
+			const response = (await withTimeout(
 				fetchImpl(`${baseUrl}/v1/messages`, {
 					method: "POST",
 					headers,
@@ -88,7 +88,7 @@ export function createClassifier(
 					signal: ctx.signal,
 				}),
 				timeoutMs,
-			);
+			)) as { ok: boolean; status: number; json: () => Promise<unknown> };
 
 			if (!response.ok) {
 				return { block: true, reason: `Classifier unavailable: HTTP ${response.status}` };

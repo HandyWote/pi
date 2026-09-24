@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-09-24
+
+### Fixed
+
+- Fixed official Pi list controls for model toggles, search, deletion, and cancellation.
+
+## [0.0.6] - 2026-09-24
+
+### Fixed
+
+- Fixed space-key model toggling in the official Pi UI.
+
 ## [0.0.5] - 2026-09-24
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
 	"name": "@handy_wote/pi-profile",
-	"version": "0.0.5",
+	"version": "0.0.7",
 	"description": "Profile management extension for pi: gateway profiles, discovery, API routing, and model pools",
 	"type": "module",
 	"keywords": [

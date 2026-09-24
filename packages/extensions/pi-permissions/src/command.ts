@@ -15,7 +15,7 @@
  * `Bash(rm -rf *)`).
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { permissionsSummary, showModePicker } from "./mode-picker.ts";
 import { parseRuleString, ruleValueToString } from "./rules/index.ts";
 import type { PermissionRuleStore } from "./rules/store.ts";

@@ -6,6 +6,7 @@ import {
 	type KeybindingsManager,
 	Markdown,
 	type MarkdownTheme,
+	matchesKey,
 	type TUI,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -143,7 +144,7 @@ interface ComponentOptions extends AgentViewOptions {
  * on a timer while the layer is open. Running agents auto-follow the tail;
  * scrolling up pauses the follow and `G` re-enables it.
  *
- * Operations: `x` (`tui.entity.delete`) stops queued/running agents; `r`
+ * Operations: `x` stops queued/running agents; `r`
  * (`app.agent.resume`) resumes terminal agents, closing the view first so the
  * host approval/input dialogs replace the editor cleanly; Esc returns to the
  * list from detail and closes the view from the list.
@@ -244,7 +245,7 @@ export class AgentViewComponent implements Component, Focusable {
 			return;
 		}
 		const kb = this.keybindings;
-		if (kb.matches(data, "tui.entity.delete" as keyof Keybindings)) {
+		if (matchesKey(data, "x")) {
 			const record = this.selectedRecord();
 			if (record && isActiveStatus(record.status)) void this.stopRecord(record);
 			return;
@@ -259,14 +260,11 @@ export class AgentViewComponent implements Component, Focusable {
 
 	private handleDetailInput(data: string): void {
 		const kb = this.keybindings;
-		if (
-			kb.matches(data, "tui.entity.cancel" as keyof Keybindings) ||
-			kb.matches(data, "tui.entity.activate" as keyof Keybindings)
-		) {
+		if (matchesKey(data, "escape") || matchesKey(data, "enter")) {
 			this.closeDetail();
 			return;
 		}
-		if (kb.matches(data, "tui.entity.delete" as keyof Keybindings)) {
+		if (matchesKey(data, "x")) {
 			const record = this.detailRecord();
 			if (record && isActiveStatus(record.status)) void this.stopRecord(record);
 			return;
@@ -278,11 +276,11 @@ export class AgentViewComponent implements Component, Focusable {
 		}
 		// Scroll: up/down (and j/k) by line, pageUp/pageDown by page, G/g jump to
 		// end/start. Scrolling up pauses tail-follow; G re-enables it.
-		if (kb.matches(data, "tui.entity.up" as keyof Keybindings) || data === "j") {
+		if (matchesKey(data, "up") || data === "j") {
 			this.scrollBy(-1);
 			return;
 		}
-		if (kb.matches(data, "tui.entity.down" as keyof Keybindings) || data === "k") {
+		if (matchesKey(data, "down") || data === "k") {
 			this.scrollBy(1);
 			return;
 		}
@@ -496,30 +494,24 @@ export class AgentViewComponent implements Component, Focusable {
 
 	private listFooter(): string {
 		const record = this.selectedRecord();
-		const hints = [
-			`${keyHint(this.keybindings, "tui.entity.up" as keyof Keybindings, "")}/${keyHint(this.keybindings, "tui.entity.down" as keyof Keybindings, "")} navigate`,
-			keyHint(this.keybindings, "tui.entity.search" as keyof Keybindings, "search"),
-			keyHint(this.keybindings, "tui.entity.activate" as keyof Keybindings, "detail"),
-		];
-		if (record && isActiveStatus(record.status))
-			hints.push(keyHint(this.keybindings, "tui.entity.delete" as keyof Keybindings, "stop"));
+		const hints = [`Up/Down navigate`, "/ search", "Enter detail"];
+		if (record && isActiveStatus(record.status)) hints.push("x stop");
 		if (record && isTerminalStatus(record.status))
 			hints.push(keyHint(this.keybindings, "app.agent.resume" as keyof Keybindings, "resume"));
-		hints.push(keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "close"));
+		hints.push("Escape close");
 		return hints.join(" · ");
 	}
 
 	private detailFooter(record: AgentRecord): string {
 		const hints = [
-			`${keyHint(this.keybindings, "tui.entity.up" as keyof Keybindings, "")}/${keyHint(this.keybindings, "tui.entity.down" as keyof Keybindings, "")} scroll`,
+			`Up/Down scroll`,
 			`${keyHint(this.keybindings, "tui.select.pageUp", "")}/${keyHint(this.keybindings, "tui.select.pageDown", "")} page`,
 			"G follow",
 		];
-		if (isActiveStatus(record.status))
-			hints.push(keyHint(this.keybindings, "tui.entity.delete" as keyof Keybindings, "stop"));
+		if (isActiveStatus(record.status)) hints.push("x stop");
 		if (isTerminalStatus(record.status))
 			hints.push(keyHint(this.keybindings, "app.agent.resume" as keyof Keybindings, "resume"));
-		hints.push(keyHint(this.keybindings, "tui.entity.cancel" as keyof Keybindings, "back"));
+		hints.push("Escape back");
 		return hints.join(" · ");
 	}
 }

@@ -3,7 +3,7 @@
  * the bash command (if any) and the file paths the call touches.
  */
 
-import type { ToolCallEvent } from "@handy_wote/pi-coding-agent";
+import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 
 export interface ToolCallInfo {
 	toolName: string;

@@ -1,4 +1,4 @@
-import type { ExtensionContext, ModelRegistry } from "@handy_wote/pi-coding-agent";
+import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { createClassifier } from "../src/classifier.ts";
 import type { ToolCallInfo } from "../src/tool-input.ts";

@@ -10,7 +10,7 @@
  * and warnings can be surfaced through the UI.
  */
 
-import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@handy_wote/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import type { PermissionRuleStore } from "./rules/store.ts";
 import type { PermissionMode, SessionState } from "./state.ts";
 

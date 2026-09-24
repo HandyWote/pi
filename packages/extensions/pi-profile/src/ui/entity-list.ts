@@ -215,7 +215,7 @@ export class EntityList implements Component, Focusable {
 				this.onSearchChange?.("");
 				return true;
 			}
-			if (kb.matches(data, entityKey("tui.entity.cancel"))) {
+			if (kb.matches(data, "tui.select.cancel")) {
 				this.onCancel?.();
 				return true;
 			}
@@ -235,7 +235,7 @@ export class EntityList implements Component, Focusable {
 				this.moveSelection(this.options.maxVisible ?? 10);
 				return true;
 			}
-			if (kb.matches(data, entityKey("tui.entity.activate"))) {
+			if (kb.matches(data, "tui.select.confirm")) {
 				const selected = this.getSelectedItem();
 				if (selected) this.onActivate?.(selected);
 				return true;
@@ -260,11 +260,11 @@ export class EntityList implements Component, Focusable {
 			this.searchInput.focused = this._focused;
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.up"))) {
+		if (kb.matches(data, "tui.select.up")) {
 			this.moveSelection(-1);
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.down"))) {
+		if (kb.matches(data, "tui.select.down")) {
 			this.moveSelection(1);
 			return true;
 		}
@@ -276,7 +276,7 @@ export class EntityList implements Component, Focusable {
 			this.moveSelection(this.options.maxVisible ?? 10);
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.activate"))) {
+		if (kb.matches(data, "tui.select.confirm")) {
 			const selected = this.getSelectedItem();
 			if (selected) this.onActivate?.(selected);
 			return true;
@@ -292,7 +292,7 @@ export class EntityList implements Component, Focusable {
 			this.requestDeleteSelected();
 			return true;
 		}
-		if (kb.matches(data, entityKey("tui.entity.cancel"))) {
+		if (kb.matches(data, "tui.select.cancel")) {
 			this.onCancel?.();
 			return true;
 		}

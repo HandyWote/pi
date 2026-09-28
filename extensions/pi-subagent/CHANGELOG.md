@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed background subagent completion notifications waiting for the next user prompt instead of waking the parent agent.
+
 ## [0.4.6] - 2026-09-24
 
 ### Fixed

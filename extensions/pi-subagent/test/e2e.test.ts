@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHarness, getMessageText, type Harness } from "../../../test/harness.ts";
+import { createHarness, getAssistantTexts, getMessageText, type Harness } from "../../../test/harness.ts";
 import { createPiSubagent } from "../src/index.ts";
 import { AgentManager } from "../src/manager.ts";
 import type { AgentToolDetails } from "../src/render.ts";
@@ -68,7 +68,6 @@ describe("pi-subagent extension", () => {
 		const baseUI = harness.session.extensionRunner.getUIContext();
 		const ui = { ...baseUI, confirm, notify, select };
 		await harness.session.bindExtensions({ uiContext: ui, mode: "tui" });
-		const sendMessage = vi.spyOn(harness.session, "sendCustomMessage");
 
 		expect(harness.session.getAllTools().map((tool) => tool.name)).toEqual(
 			expect.arrayContaining(["agent_start", "agent_list", "agent_output", "agent_stop", "agent_resume"]),
@@ -114,14 +113,6 @@ describe("pi-subagent extension", () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		expect(confirm).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledOnce();
-		await vi.waitFor(() =>
-			expect(sendMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ customType: "pi-subagent-notification" }),
-				expect.objectContaining({ deliverAs: "nextTurn" }),
-			),
-		);
-		// nextTurn notifications enter history with the next explicit prompt.
-		await harness.session.prompt("Check the completed subagent.");
 		await vi.waitFor(
 			() => {
 				const notification = harness.session.messages.find(
@@ -133,6 +124,7 @@ describe("pi-subagent extension", () => {
 			},
 			{ timeout: 5000, interval: 10 },
 		);
+		expect(getAssistantTexts(harness)).toContain("notification handled");
 		expect(managers[0]!.get(agentId)).toMatchObject({ status: "completed" });
 		const listTool = harness.session.state.tools.find((tool) => tool.name === "agent_list");
 		const resumeTool = harness.session.state.tools.find((tool) => tool.name === "agent_resume");
@@ -236,7 +228,6 @@ describe("pi-subagent extension", () => {
 		);
 		await harness.session.bindExtensions({});
 		harness.setResponses([fauxAssistantMessage("merged notification handled")]);
-		const sendMessage = vi.spyOn(harness.session, "sendCustomMessage");
 		const startTool = harness.session.state.tools.find((tool) => tool.name === "agent_start");
 		if (!startTool) throw new Error("agent_start was not active");
 		const launched = await startTool.execute("batch", {
@@ -251,13 +242,6 @@ describe("pi-subagent extension", () => {
 		expect(launched.content[0]).toMatchObject({ text: expect.stringContaining("Launched") });
 		const records = (launched.details as AgentToolDetails).records;
 		for (const record of records) await waitForTerminal(manager!, record.agentId);
-		await vi.waitFor(() =>
-			expect(sendMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ customType: "pi-subagent-notification" }),
-				expect.objectContaining({ deliverAs: "nextTurn" }),
-			),
-		);
-		await harness.session.prompt("Check the completed subagents.");
 		await vi.waitFor(
 			() => {
 				const notifications = harness.session.messages.filter(
@@ -270,6 +254,28 @@ describe("pi-subagent extension", () => {
 			},
 			{ timeout: 5000, interval: 10 },
 		);
+		expect(getAssistantTexts(harness)).toContain("merged notification handled");
+
+		harness.appendResponses([fauxAssistantMessage("separated notification handled")]);
+		const separated = await startTool.execute("separated", {
+			agent: "worker",
+			task: "delay:20 separated",
+			mode: "background",
+			scope: "user",
+		});
+		const separatedRecord = (separated.details as AgentToolDetails).records[0]!;
+		await waitForTerminal(manager!, separatedRecord.agentId);
+		await vi.waitFor(
+			() => {
+				const notifications = harness.session.messages.filter(
+					(message) => message.role === "custom" && message.customType === "pi-subagent-notification",
+				);
+				expect(notifications).toHaveLength(2);
+				expect(getMessageText(notifications[1])).toContain("delay:20 separated");
+			},
+			{ timeout: 5000, interval: 10 },
+		);
+		expect(getAssistantTexts(harness)).toContain("separated notification handled");
 	});
 
 	it("propagates the wrapped tool AbortSignal to a stubborn child", async () => {

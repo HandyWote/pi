@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { registerAgentsCommand } from "./command.ts";
 import { AgentManager, type AgentManagerOptions, readWorkerModels } from "./manager.ts";
+import { createNotificationDispatcher } from "./notification-dispatcher.ts";
 import { registerAgentPanel, registerNotificationCard } from "./render.ts";
 import { SUPERVISOR_FD_ENV, startSupervisorWatchdog } from "./supervisor-watchdog.ts";
 import { injectCoordinatorGuidance, registerSwarmCommand } from "./swarm.ts";
@@ -99,6 +100,7 @@ export interface PiSubagentExtensionOptions {
 
 export function createPiSubagent(options: PiSubagentExtensionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
+		const notificationDispatcher = createNotificationDispatcher(pi);
 		let manager: AgentManager | undefined;
 		let currentContext: ExtensionContext | undefined;
 		let notificationBatch: TerminalNotification[] = [];
@@ -136,18 +138,15 @@ export function createPiSubagent(options: PiSubagentExtensionOptions = {}): Exte
 			notificationBatch = [];
 			if (batch.length === 0 || !currentContext) return;
 			try {
-				pi.sendMessage(
-					{
-						customType: "pi-subagent-notification",
-						content: terminalNotificationContent(batch.map((entry) => entry.record)),
-						display: true,
-						details:
-							batch.length === 1
-								? terminalEventDetails(batch[0]!.record)
-								: batch.map((entry) => terminalEventDetails(entry.record)),
-					},
-					{ triggerTurn: true, deliverAs: "nextTurn" },
-				);
+				notificationDispatcher.dispatch({
+					customType: "pi-subagent-notification",
+					content: terminalNotificationContent(batch.map((entry) => entry.record)),
+					display: true,
+					details:
+						batch.length === 1
+							? terminalEventDetails(batch[0]!.record)
+							: batch.map((entry) => terminalEventDetails(entry.record)),
+				});
 			} catch {
 				// Notifications are advisory; batching failures must not break agent completion.
 			}

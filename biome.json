@@ -25,18 +25,14 @@
 	},
 	"files": {
 		"includes": [
-			"packages/*/src/**/*.ts",
-			"packages/*/test/**/*.ts",
-			"packages/storage/*/src/**/*.ts",
-			"packages/storage/*/test/**/*.ts",
-			"packages/extensions/*/src/**/*.ts",
-			"packages/extensions/*/test/**/*.ts",
-			"packages/coding-agent/examples/**/*.ts",
+			"test/**/*.ts",
+			"extensions/*/*.ts",
+			"extensions/*/src/**/*.ts",
+			"extensions/*/test/**/*.ts",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
 			"!**/models.generated.ts",
 			"!**/*.models.ts",
-			"!packages/mom/data/**/*",
 			"!!**/.artifacts",
 			"!!**/node_modules"
 		]

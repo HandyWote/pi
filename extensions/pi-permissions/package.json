@@ -1,0 +1,64 @@
+{
+	"name": "@handy_wote/pi-permissions",
+	"version": "0.1.1",
+	"description": "Security gate for pi: permission modes, rules, bash analysis, and an AI classifier (Claude Code-style)",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-extension",
+		"permissions",
+		"security",
+		"gate"
+	],
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "node -e \"import('node:fs/promises').then(fs=>fs.rm('dist',{recursive:true,force:true}))\"",
+		"build": "tsgo -p tsconfig.build.json",
+		"check": "tsgo --noEmit -p tsconfig.build.json",
+		"test": "vitest --run"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"tree-sitter-bash": "0.25.1",
+		"web-tree-sitter": "0.26.11"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "0.86.1",
+		"vitest": "4.1.9"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"author": "HandyWote",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/HandyWote/pi.git",
+		"directory": "extensions/pi-permissions"
+	}
+}

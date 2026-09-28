@@ -1,13 +1,12 @@
 {
-	"extends": "./tsconfig.base.json",
+	"extends": "../../tsconfig.base.json",
 	"compilerOptions": {
 		"noEmit": true,
 		"module": "NodeNext",
 		"moduleResolution": "NodeNext"
 	},
 	"include": [
-		"extensions/*/src/**/*",
-		"extensions/*/test/**/*",
-		"test/**/*.ts"
+		"src/**/*",
+		"test/**/*"
 	]
 }

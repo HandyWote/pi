@@ -53,11 +53,11 @@ function parseArguments() {
 }
 
 function changedPackages(base, head) {
-	const diff = run("git", ["diff", "--name-only", base, head, "--", "packages/extensions"], { capture: true });
+	const diff = run("git", ["diff", "--name-only", base, head, "--", "extensions"], { capture: true });
 	const changedManifests = new Set(
 		diff.stdout
 			.split("\n")
-			.filter((path) => /^packages\/extensions\/[^/]+\/package\.json$/.test(path)),
+			.filter((path) => /^extensions\/[^/]+\/package\.json$/.test(path)),
 	);
 
 	return loadExtensionPackages().filter((pkg) => {

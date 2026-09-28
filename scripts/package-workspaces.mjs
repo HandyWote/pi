@@ -2,9 +2,9 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const SKIPPED_DIRECTORIES = new Set(["dist", "node_modules"]);
-const EXTENSIONS_ROOT = join("packages", "extensions");
+const EXTENSIONS_ROOT = "extensions";
 
-export function findPackageDirectories(root = "packages") {
+export function findPackageDirectories(root = EXTENSIONS_ROOT) {
 	const packageDirectories = [];
 
 	function visit(directory) {
@@ -26,9 +26,4 @@ export function findPackageDirectories(root = "packages") {
 
 export function findExtensionPackageDirectories() {
 	return findPackageDirectories(EXTENSIONS_ROOT);
-}
-
-export function findLockstepPackageDirectories() {
-	const extensionDirectories = new Set(findExtensionPackageDirectories());
-	return findPackageDirectories().filter((directory) => !extensionDirectories.has(directory));
 }

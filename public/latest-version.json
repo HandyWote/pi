@@ -1,5 +1,0 @@
-{
-	"version": "0.86.1",
-	"packageName": "@handy_wote/pi-coding-agent",
-	"note": "Subagent children now detect a crashed parent through a supervisor pipe and shut down within milliseconds; startup sweeps terminate leftover orphan children and reclaim their state (pi-subagent)."
-}

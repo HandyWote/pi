@@ -1,13 +1,13 @@
 # Extension Releases
 
-Packages under `packages/extensions/*` are optional pi packages. They remain npm workspaces for local development and CI compatibility checks, but they do not participate in the core package lockstep version or the core `vX.Y.Z` release.
+This repository develops and publishes the independently versioned Pi extensions under `extensions/*`. Pi itself is consumed from published `@earendil-works` packages.
 
 ## Package Contract
 
 Every publishable extension must:
 
 - use a directory slug matching the final segment of its npm package name;
-- use a stable `x.y.z` version independent of the core packages;
+- use a stable `x.y.z` version independent of other extensions;
 - declare at least one `pi.extensions` entry;
 - provide `build`, `check`, and `test` scripts;
 - include its build output and documentation in the packed package.
@@ -32,7 +32,7 @@ The command updates each selected manifest and CHANGELOG, then refreshes `packag
 
 On a push to `main`, `.github/workflows/publish-extensions.yml` compares changed extension manifests with the previous commit. A package is selected only when its `version` changed.
 
-The workflow builds the core dependencies once, then builds, checks, tests, and dry-run packs every selected extension. It publishes each unpublished version with npm provenance, then creates one lightweight tag for that successfully published package:
+The workflow installs published Pi dependencies, then builds, checks, tests, and dry-run packs every selected extension. It publishes each unpublished version with npm provenance, then creates one lightweight tag for that successfully published package:
 
 ```text
 pi-todo@0.1.1

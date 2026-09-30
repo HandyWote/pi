@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-30
+
+### Fixed
+
+- Declared `typebox` as a host-provided peer dependency (with a pinned dev dependency for local builds) instead of a regular dependency, so the extension reuses the host module instance instead of installing a duplicate copy.
+
 ## [0.4.7] - 2026-09-28
 
 ### Fixed

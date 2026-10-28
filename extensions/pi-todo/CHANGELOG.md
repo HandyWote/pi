@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-28
+
 ### Changed
 
 - Redesigned the todo widget and `/todo list` output: removed the progress bar, switched status markers to ASCII checkboxes (`[*]` in progress, `[ ]` pending/blocked, `[x]` completed), listed completed tasks inline, and struck through completed subjects.

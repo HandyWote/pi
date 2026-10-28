@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerTodoAutoTrigger } from "./auto.ts";
+import { registerTodoReconciler } from "./auto.ts";
 import { registerTodoCommand } from "./command.ts";
 import { registerAgentLifecycleProtocol } from "./protocol.ts";
 import { TodoRuntime, type TodoRuntimeOptions } from "./runtime.ts";
@@ -10,7 +10,7 @@ export default function piTodo(pi: ExtensionAPI, options: TodoRuntimeOptions = {
 
 	registerTodoCommand(pi, runtime);
 	registerTodoTools(pi, runtime);
-	registerTodoAutoTrigger(pi, runtime);
+	registerTodoReconciler(pi, runtime);
 	const disposeProtocol = registerAgentLifecycleProtocol(pi.events, runtime);
 
 	pi.on("session_start", async (event, ctx) => {

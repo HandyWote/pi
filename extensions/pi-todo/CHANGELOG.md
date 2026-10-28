@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the todo widget and `/todo list` output: removed the progress bar, switched status markers to ASCII checkboxes (`[*]` in progress, `[ ]` pending/blocked, `[x]` completed), listed completed tasks inline, and struck through completed subjects.
+
+### Removed
+
+- Removed keyword-based auto-creation and continuation triggers: saying execution-intent phrases such as `继续`, `go ahead`, or `按计划执行` no longer creates a list or injects a continuation digest. Lists are created only through the `/todo` command or by the model calling `write_todo`/`todo_create` directly.
+
 ## [0.4.6] - 2026-09-30
 
 ### Fixed

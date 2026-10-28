@@ -13,6 +13,12 @@ import { TODO_BINDING_ENTRY, TodoRuntime } from "../src/runtime.ts";
 import type { TodoBindingEntry } from "../src/types.ts";
 import { renderTodoLines } from "../src/widget.ts";
 
+const fakeTheme = {
+	fg: (_slot: string, text: string) => text,
+	bold: (text: string) => text,
+	strikethrough: (text: string) => text,
+} as unknown as Theme;
+
 interface FakeEnvironment {
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
@@ -700,11 +706,26 @@ describe("TodoRuntime recovery", () => {
 		await runtime.claim("A", "owner-with-a-long-name");
 		const view = await runtime.view();
 		if (!view) throw new Error("Missing view");
-		const theme = { fg: (_slot: string, text: string) => text, bold: (text: string) => text } as Theme;
-		const lines = renderTodoLines(view, theme, 24);
-		expect(lines.some((line) => line.includes("Active (1)"))).toBe(true);
-		expect(lines.some((line) => line.includes("Actively"))).toBe(true);
-		expect(lines.some((line) => line.includes("Blocked (1)"))).toBe(true);
+		const lines = renderTodoLines(view, fakeTheme, 24);
+		expect(lines.some((line) => line.includes("[*] A Actively"))).toBe(true);
+		expect(lines.some((line) => line.includes("[ ] B"))).toBe(true);
 		expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
+	});
+
+	it("renders completed tasks as checked-off strikethrough lines", async () => {
+		const environment = fakeEnvironment("session-2");
+		const runtime = new TodoRuntime(environment.pi, { dataDir });
+		await runtime.initialize({ type: "session_start", reason: "startup" }, environment.ctx);
+		await runtime.replace("UI", [
+			{ id: "A", subject: "Done work", depends_on: [] },
+			{ id: "B", subject: "Pending work", depends_on: ["A"] },
+		]);
+		await runtime.claim("A");
+		await runtime.update("A", { status: "completed" });
+		const view = await runtime.view();
+		if (!view) throw new Error("Missing view");
+		const struck = renderTodoLines(view, fakeTheme, 40).join("\n");
+		expect(struck).toContain("[x] A Done work");
+		expect(struck).toContain("[ ] B Pending work");
 	});
 });

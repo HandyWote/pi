@@ -60,6 +60,7 @@ describe("pi-todo standalone end-to-end", () => {
 		const theme = {
 			fg: (_slot: string, text: string) => text,
 			bold: (text: string) => text,
+			strikethrough: (text: string) => text,
 		};
 		const uiContext = {
 			setWidget(key: string, content: unknown) {
@@ -133,8 +134,10 @@ describe("pi-todo standalone end-to-end", () => {
 			expect(harness.getPendingResponseCount()).toBe(0);
 
 			await harness.session.prompt("/todo list");
-			expect(notifications.at(-1)).toContain("[completed] A: Implement auth");
-			expect(notifications.at(-1)).toContain("[pending] C: Integrate");
+			const listMessage = notifications.at(-1) ?? "";
+			const plain = listMessage.replace(/\u001b\[\d+m/g, "");
+			expect(plain).toContain("[x] A: Implement auth");
+			expect(plain).toContain("[ ] C: Integrate");
 
 			await harness.session.reload({
 				beforeSessionStart() {
@@ -168,14 +171,10 @@ describe("pi-todo standalone end-to-end", () => {
 
 			await harness.session.prompt("继续");
 			await harness.session.waitForIdle();
-			const continuation = getCustomMessages(harness.session.messages, "pi-todo-continuation").at(-1);
-			expect(getMessageText(continuation)).toContain("[PI TODO ACTIVE]");
-			expect(getMessageText(continuation)).toContain("Snapshot: list ");
-			expect(getMessageText(continuation)).toContain("Ready: C: Integrate");
-			expect(harness.session.messages.some((message) => getMessageText(message).includes("active todo state"))).toBe(
-				true,
-			);
-			expect(widgetFrames.some((frame) => frame.join("\n").includes("Ready (1)"))).toBe(true);
+			// Keyword prompts no longer trigger continuation injection; only the
+			// periodic turn-end digest (pi-todo-digest) may appear.
+			expect(getCustomMessages(harness.session.messages, "pi-todo-continuation")).toHaveLength(0);
+			expect(widgetFrames.some((frame) => frame.join("\n").includes("[ ] C Integrate"))).toBe(true);
 			expect(harness.getPendingResponseCount()).toBe(0);
 		} finally {
 			reloadedFaux?.unregister();
@@ -183,7 +182,7 @@ describe("pi-todo standalone end-to-end", () => {
 		}
 	}, 15_000);
 
-	it("proactively creates a todo only after confirmed execution intent", async () => {
+	it("never creates a todo from execution-intent keywords", async () => {
 		const harness = await createHarness({
 			extensionFactories: [(pi) => piTodo(pi as unknown as TodoExtensionAPI, { dataDir })],
 		});
@@ -197,9 +196,10 @@ describe("pi-todo standalone end-to-end", () => {
 			expect(getCustomMessages(harness.session.messages, "pi-todo-plan")).toHaveLength(0);
 			await harness.session.prompt("go ahead");
 			await harness.session.waitForIdle();
-			expect(getMessageText(getCustomMessages(harness.session.messages, "pi-todo-plan")[0])).toContain(
-				"Source: recent context",
-			);
+			await harness.session.prompt("继续");
+			await harness.session.waitForIdle();
+			expect(getCustomMessages(harness.session.messages, "pi-todo-plan")).toHaveLength(0);
+			expect(getCustomMessages(harness.session.messages, "pi-todo-continuation")).toHaveLength(0);
 		} finally {
 			harness.cleanup();
 		}

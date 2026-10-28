@@ -3,7 +3,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TodoListView, TodoTask } from "./types.ts";
 
-const BAR_WIDTH = 10;
+const MAX_LINES = 10;
 const WIDGET_KEY = "pi-todo";
 const WIDGET_OPTIONS = { placement: "aboveStatus" } as unknown as ExtensionWidgetOptions;
 
@@ -25,21 +25,20 @@ export class TodoWidget implements Component {
 
 export function renderTodoLines(view: TodoListView, theme: Theme, width: number): string[] {
 	const { summary } = view;
-	const filled = summary.total === 0 ? 0 : Math.round((summary.completed / summary.total) * BAR_WIDTH);
-	const bar = theme.fg("success", "█".repeat(filled)) + theme.fg("dim", "░".repeat(BAR_WIDTH - filled));
-	const lines = [truncateToWidth(`${theme.bold("pi-todo")} [${bar}] ${summary.completed}/${summary.total}`, width)];
-	appendSection(
-		lines,
-		"Active",
-		view.list.tasks.filter((task) => task.status === "in_progress"),
-		theme,
-		width,
-	);
-	appendSection(lines, "Ready", view.ready, theme, width);
-	appendSection(lines, "Blocked", view.blocked, theme, width);
-	const hidden = summary.total - summary.in_progress - summary.ready - summary.blocked;
-	if (hidden > 0) lines.push(truncateToWidth(theme.fg("dim", ` Completed ${hidden}`), width));
-	return lines.slice(0, 10);
+	const lines = [truncateToWidth(`${theme.bold("pi-todo")} ${summary.completed}/${summary.total}`, width)];
+	const active = view.list.tasks.filter((task) => task.status === "in_progress");
+	const completed = view.list.tasks.filter((task) => task.status === "completed");
+	const taskLines = [
+		...active.map((task) => formatTaskLine(theme, task, "[*]", width, { active: true })),
+		...view.ready.map((task) => formatTaskLine(theme, task, "[ ]", width, {})),
+		...view.blocked.map((task) => formatTaskLine(theme, task, "[ ]", width, { blocked: true })),
+		...completed.map((task) => formatTaskLine(theme, task, "[x]", width, { done: true })),
+	];
+	const budget = MAX_LINES - 1;
+	const overflow = taskLines.length > budget ? taskLines.length - budget : 0;
+	for (const line of taskLines.slice(0, budget)) lines.push(line);
+	if (overflow > 0) lines.push(truncateToWidth(theme.fg("dim", ` ... ${overflow} more`), width));
+	return lines;
 }
 
 export function updateTodoWidget(ctx: ExtensionContext, view: TodoListView | undefined): void {
@@ -50,16 +49,18 @@ export function updateTodoWidget(ctx: ExtensionContext, view: TodoListView | und
 	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new TodoWidget(view, theme), WIDGET_OPTIONS);
 }
 
-function appendSection(lines: string[], label: string, tasks: readonly TodoTask[], theme: Theme, width: number): void {
-	if (tasks.length === 0) return;
-	lines.push(truncateToWidth(theme.fg("dim", ` ${label} (${tasks.length})`), width));
-	for (const task of tasks.slice(0, 3)) {
-		const owner = task.owner ? ` @${task.owner}` : "";
-		const dependencies = label === "Blocked" ? ` <- ${task.depends_on.join(",")}` : "";
-		const symbol = label === "Active" ? "◐" : label === "Blocked" ? "⊘" : "○";
-		const subject = label === "Active" ? (task.active_form ?? task.subject) : task.subject;
-		lines.push(
-			truncateToWidth(`  ${symbol} ${theme.fg("accent", task.id)} ${subject}${owner}${dependencies}`, width),
-		);
-	}
+interface TaskLineOptions {
+	active?: boolean;
+	blocked?: boolean;
+	done?: boolean;
+}
+
+function formatTaskLine(theme: Theme, task: TodoTask, check: string, width: number, options: TaskLineOptions): string {
+	const symbol = theme.fg(options.done ? "success" : options.active ? "accent" : "dim", check);
+	const id = theme.fg(options.done ? "muted" : "accent", task.id);
+	const subject = options.active ? (task.active_form ?? task.subject) : task.subject;
+	const text = options.done ? theme.strikethrough(theme.fg("dim", subject)) : subject;
+	const owner = options.active && task.owner ? ` ${theme.fg("dim", `@${task.owner}`)}` : "";
+	const dependencies = options.blocked ? ` ${theme.fg("dim", `<- ${task.depends_on.join(",")}`)}` : "";
+	return truncateToWidth(`${symbol} ${id} ${text}${owner}${dependencies}`, width);
 }

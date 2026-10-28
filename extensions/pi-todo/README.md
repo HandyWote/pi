@@ -33,7 +33,7 @@ Manage the active list:
 /todo clear
 ```
 
-`delete` and `clear` require confirmation. The model may also create a todo automatically after the user confirms execution of a multi-step plan. Active state is injected again when the user says `继续` or `continue`.
+`delete` and `clear` require confirmation. The model may also create or update a todo on its own by calling the todo tools directly. Todo lists are never created from prompt keywords: use `/todo <plan>` (or `/todo import <markdown>`), or ask the model to call `write_todo`/`todo_create`.
 
 ## Task Model
 

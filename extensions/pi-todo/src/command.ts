@@ -3,6 +3,10 @@ import { extname, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildTodoPlanMessageContent } from "./plan-message.ts";
 import type { TodoRuntime } from "./runtime.ts";
+import type { TodoListView, TodoTask } from "./types.ts";
+
+const STRIKE = "\u001b[9m";
+const STRIKE_OFF = "\u001b[29m";
 
 export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): void {
 	pi.registerCommand("todo", {
@@ -12,7 +16,11 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): voi
 			const input = args.trim();
 			if (!input || input === "list") {
 				const view = await runtime.view();
-				ctx.ui.notify(view ? formatTodoList(view) : "No todo list is active", "info");
+				if (!view) {
+					ctx.ui.notify("No todo list is active", "info");
+					return;
+				}
+				ctx.ui.notify(formatTodoList(view, ctx.mode === "tui"), "info");
 				return;
 			}
 
@@ -58,16 +66,21 @@ export function registerTodoCommand(pi: ExtensionAPI, runtime: TodoRuntime): voi
 	});
 }
 
-function formatTodoList(view: NonNullable<Awaited<ReturnType<TodoRuntime["view"]>>>): string {
-	const summary = `${view.summary.completed}/${view.summary.total} completed, ${view.summary.in_progress} active, ${view.summary.ready} ready, ${view.summary.blocked} blocked`;
-	const visible = view.list.tasks.slice(0, 20).map((task) => {
+function formatTodoList(view: TodoListView, ansi: boolean): string {
+	const summary = view.summary;
+	const summaryText = `${summary.completed}/${summary.total} completed, ${summary.in_progress} active, ${summary.ready} ready, ${summary.blocked} blocked`;
+	const format = (task: TodoTask): string => {
+		const check = task.status === "completed" ? "[x]" : task.status === "in_progress" ? "[*]" : "[ ]";
 		const owner = task.owner ? ` @${task.owner}` : "";
 		const dependencies = task.depends_on.length ? ` <- ${task.depends_on.join(",")}` : "";
-		return `[${task.status}] ${task.id}: ${truncate(task.subject, 300)}${owner}${dependencies}`;
-	});
+		const subject = truncate(task.subject, 300);
+		const text = task.status === "completed" && ansi ? `${STRIKE}${subject}${STRIKE_OFF}` : subject;
+		return `${check} ${task.id}: ${text}${owner}${dependencies}`;
+	};
+	const visible = view.list.tasks.slice(0, 20).map(format);
 	if (view.list.tasks.length > visible.length)
 		visible.push(`... ${view.list.tasks.length - visible.length} more tasks`);
-	return `${summary}\n${visible.join("\n")}`;
+	return `${summaryText}\n${visible.join("\n")}`;
 }
 
 function truncate(value: string, limit: number): string {
